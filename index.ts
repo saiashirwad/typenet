@@ -57,7 +57,7 @@ declare class TN<
     {
       device: "gpu"
       requires_grad: Params["requires_grad"]
-      dtype: "float32"
+      dtype: Params["dtype"]
     }
   >
 
@@ -66,7 +66,18 @@ declare class TN<
     {
       device: "cpu"
       requires_grad: Params["requires_grad"]
-      dtype: "float32"
+      dtype: Params["dtype"]
+    }
+  >
+
+  dtype<const D extends DType>(
+    dtype: D
+  ): TN<
+    Shape,
+    {
+      device: Params["device"]
+      requires_grad: Params["requires_grad"]
+      dtype: D
     }
   >
 
@@ -74,8 +85,8 @@ declare class TN<
     Shape,
     {
       device: Params["device"]
+      dtype: Params["dtype"]
       requires_grad: true
-      dtype: "float32"
     }
   >
 
@@ -83,16 +94,11 @@ declare class TN<
     Shape,
     {
       device: Params["device"]
+      dtype: Params["dtype"]
       requires_grad: false
-      dtype: "float32"
     }
   >
 }
 
 const asdf = TN.ones([1, 2])
 const zeros = TN.zeros([2, 1, 5])
-
-const lol = TN.tensor([
-  [1, 2, 3, 5],
-  [3, 4, 5, 5]
-]).gpu()
