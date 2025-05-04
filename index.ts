@@ -1,13 +1,38 @@
 import type { Numbers, Call } from "hotscript"
+import type { Mul } from "hotscript/dist/internals/numbers/impl/multiply"
 
-type Clean<T> = { [K in keyof T]: T } & unknown
+type Clean<T> = {
+  [K in keyof T]: T[K]
+} & unknown
 
 namespace Math {
   export type Add<
     A extends number,
     B extends number
   > = Call<Numbers.Add<A, B>>
+
+  export type Mul<
+    A extends number,
+    B extends number
+  > = Call<Numbers.Mul<A, B>>
+
+  export type MulTuple<
+    A extends number[],
+    acc extends number = 1
+  > =
+    A["length"] extends 0 ? acc
+    : A extends (
+      [infer X extends number, ...infer Xs extends number[]]
+    ) ?
+      MulTuple<Xs, Mul<acc, X>>
+    : never
 }
+
+type Merge<A, B> = Clean<
+  {
+    [K in keyof A as K extends keyof B ? never : K]: A[K]
+  } & B
+>
 
 type DType = "int32" | "int64" | "float32" | "float64"
 type ShapeType = any[]
@@ -17,7 +42,30 @@ type TensorParams = {
   requires_grad: boolean
   device: DeviceType
   dtype: DType
+  dims?: string[]
 }
+
+declare class Err<const message extends string> {}
+
+type ViewShape<
+  Shape extends number[],
+  acc extends string = "["
+> =
+  Shape["length"] extends 0 ? `${acc}]`
+  : Shape extends (
+    [infer X extends number, ...infer Xs extends number[]]
+  ) ?
+    ViewShape<
+      Xs,
+      `${acc}${acc extends "[" ? "" : ", "}${X}`
+    >
+  : never
+
+type dd = ViewShape<[1, 2, 3]>
+
+type ValidView<Shape extends any[], View extends number[]> =
+  Math.MulTuple<Shape> extends Math.MulTuple<View> ? unknown
+  : Err<`Cannot convert tensor of shape ${ViewShape<Shape>} to ${ViewShape<View>}`>
 
 type TensorToShape<
   T extends any[],
@@ -52,53 +100,32 @@ declare class TN<
     tensor: TensorValue
   ): TN<TensorToShape<TensorValue>>
 
-  gpu(): TN<
-    Shape,
-    {
-      device: "gpu"
-      requires_grad: Params["requires_grad"]
-      dtype: Params["dtype"]
-    }
-  >
+  gpu(): TN<Shape, Merge<Params, { device: "gpu" }>>
 
-  cpu(): TN<
-    Shape,
-    {
-      device: "cpu"
-      requires_grad: Params["requires_grad"]
-      dtype: Params["dtype"]
-    }
-  >
+  cpu(): TN<Shape, Merge<Params, { device: "cpu" }>>
 
   dtype<const D extends DType>(
     dtype: D
-  ): TN<
-    Shape,
-    {
-      device: Params["device"]
-      requires_grad: Params["requires_grad"]
-      dtype: D
-    }
-  >
+  ): TN<Shape, Merge<Params, { dtype: D }>>
 
   requires_grad(): TN<
     Shape,
-    {
-      device: Params["device"]
-      dtype: Params["dtype"]
-      requires_grad: true
-    }
+    Merge<Params, { requires_grad: true }>
   >
 
   no_grad(): TN<
     Shape,
-    {
-      device: Params["device"]
-      dtype: Params["dtype"]
-      requires_grad: false
-    }
+    Merge<Params, { requires_grad: false }>
   >
+
+  view<const View extends number[]>(
+    view: View & ValidView<Shape, View>
+  ): View & ValidView<Shape, View>
+
+  dims<const Dims extends string[]>(): TN<Shape>
 }
 
 const asdf = TN.ones([1, 2])
 const zeros = TN.zeros([2, 1, 5])
+
+const haha = TN.ones([4, 4]).view([8, 3])
