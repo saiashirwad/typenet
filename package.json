@@ -1,0 +1,25 @@
+{
+	"name": "typenet",
+	"module": "index.ts",
+	"type": "module",
+	"private": true,
+	"devDependencies": {
+		"@types/bun": "latest",
+		"prettier": "^3.5.3"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	},
+	"prettier": {
+		"printWidth": 60,
+		"useTabs": false,
+		"semi": false,
+		"trailingComma": "none",
+		"experimentalTernaries": true,
+		"experimentalOperatorPosition": "end",
+		"arrowParens": "avoid"
+	},
+	"dependencies": {
+		"hotscript": "^1.0.13"
+	}
+}
