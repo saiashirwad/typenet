@@ -1,5 +1,4 @@
 import type { Numbers, Call } from "hotscript"
-import type { Mul } from "hotscript/dist/internals/numbers/impl/multiply"
 
 type Clean<T> = {
   [K in keyof T]: T[K]
@@ -61,8 +60,6 @@ type ViewShape<
     >
   : never
 
-type dd = ViewShape<[1, 2, 3]>
-
 type ValidView<Shape extends any[], View extends number[]> =
   Math.MulTuple<Shape> extends Math.MulTuple<View> ? unknown
   : `Cannot convert tensor of shape ${ViewShape<Shape>} to ${ViewShape<View>}`
@@ -75,6 +72,27 @@ type TensorToShape<
     TensorToShape<T[0], [...Shape, T["length"]]>
   : T[0] extends number ? [...Shape, T["length"]]
   : never
+
+// type SqueezeShape<Shape extends any[]> = {
+//   [K in keyof Shape as K extends `${number}` ?
+//     Shape[K] extends 1 ?
+//       never
+//     : K
+//   : never]: Shape[K]
+// }
+
+type SqueezeShape<
+  Shape extends any[],
+  Acc extends any[] = []
+> =
+  Shape["length"] extends 0 ? Acc
+  : Shape extends [infer X, ...infer Xs] ?
+    X extends 1 ?
+      SqueezeShape<Xs, Acc>
+    : SqueezeShape<Xs, [...Acc, X]>
+  : never
+
+type sdf = SqueezeShape<[2, 1, 2, 3]>
 
 declare class TN<
   const Shape extends ShapeType,
@@ -121,9 +139,11 @@ declare class TN<
   view<const View extends number[]>(
     view: View & ValidView<Shape, View>
   ): TN<View, Params>
+
+  squeeze(): TN<SqueezeShape<Shape>, Params>
 }
 
-const asdf = TN.ones([1, 2])
+const asdf = TN.ones([1, 2]).squeeze()
 const zeros = TN.zeros([2, 1, 5])
 
 const haha = TN.ones([4, 4]).view([2, 2, 2, 2])
