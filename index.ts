@@ -9,12 +9,14 @@ namespace Math {
   > = Call<Numbers.Add<A, B>>
 }
 
+type DType = "int32" | "int64" | "float32" | "float64"
 type ShapeType = any[]
 type DeviceType = "cpu" | "gpu"
 
 type TensorParams = {
   requires_grad: boolean
   device: DeviceType
+  dtype: DType
 }
 
 type TensorToShape<
@@ -31,6 +33,7 @@ declare class TN<
   const Params extends TensorParams = {
     requires_grad: false
     device: "cpu"
+    dtype: "float32"
   }
 > {
   static ones<const Shape extends ShapeType>(
@@ -54,6 +57,7 @@ declare class TN<
     {
       device: "gpu"
       requires_grad: Params["requires_grad"]
+      dtype: "float32"
     }
   >
 
@@ -62,17 +66,26 @@ declare class TN<
     {
       device: "cpu"
       requires_grad: Params["requires_grad"]
+      dtype: "float32"
     }
   >
 
   requires_grad(): TN<
     Shape,
-    { device: Params["device"]; requires_grad: true }
+    {
+      device: Params["device"]
+      requires_grad: true
+      dtype: "float32"
+    }
   >
 
   no_grad(): TN<
     Shape,
-    { device: Params["device"]; requires_grad: false }
+    {
+      device: Params["device"]
+      requires_grad: false
+      dtype: "float32"
+    }
   >
 }
 
