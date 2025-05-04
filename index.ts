@@ -65,7 +65,7 @@ type dd = ViewShape<[1, 2, 3]>
 
 type ValidView<Shape extends any[], View extends number[]> =
   Math.MulTuple<Shape> extends Math.MulTuple<View> ? unknown
-  : Err<`Cannot convert tensor of shape ${ViewShape<Shape>} to ${ViewShape<View>}`>
+  : `Cannot convert tensor of shape ${ViewShape<Shape>} to ${ViewShape<View>}`
 
 type TensorToShape<
   T extends any[],
@@ -120,12 +120,10 @@ declare class TN<
 
   view<const View extends number[]>(
     view: View & ValidView<Shape, View>
-  ): View & ValidView<Shape, View>
-
-  dims<const Dims extends string[]>(): TN<Shape>
+  ): TN<View, Params>
 }
 
 const asdf = TN.ones([1, 2])
 const zeros = TN.zeros([2, 1, 5])
 
-const haha = TN.ones([4, 4]).view([8, 3])
+const haha = TN.ones([4, 4]).view([2, 2, 2, 2])
