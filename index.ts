@@ -1,5 +1,11 @@
 import type { Numbers, Call } from "hotscript"
 
+export const zeroWidthSpace = " "
+type ZeroWidthSpace = typeof zeroWidthSpace
+
+export type ErrorMessage<message extends string = string> =
+  `${message}${ZeroWidthSpace}`
+
 type Clean<T> = {
   [K in keyof T]: T[K]
 } & unknown
@@ -33,7 +39,7 @@ type Merge<A, B> = Clean<
   } & B
 >
 
-type DType = "int32" | "int64" | "float32" | "float64"
+type DType = "float32" | "float64"
 type ShapeType = any[]
 type DeviceType = "cpu" | "gpu"
 
@@ -44,7 +50,11 @@ type TensorParams = {
   dims?: string[]
 }
 
-declare class Err<const message extends string> {}
+type DefaultParams = {
+  requires_grad: false
+  device: "cpu"
+  dtype: "float32"
+}
 
 type ViewShape<
   Shape extends number[],
@@ -73,14 +83,6 @@ type TensorToShape<
   : T[0] extends number ? [...Shape, T["length"]]
   : never
 
-// type SqueezeShape<Shape extends any[]> = {
-//   [K in keyof Shape as K extends `${number}` ?
-//     Shape[K] extends 1 ?
-//       never
-//     : K
-//   : never]: Shape[K]
-// }
-
 type SqueezeShape<
   Shape extends any[],
   Acc extends any[] = []
@@ -92,58 +94,70 @@ type SqueezeShape<
     : SqueezeShape<Xs, [...Acc, X]>
   : never
 
-type sdf = SqueezeShape<[2, 1, 2, 3]>
-
-declare class TN<
+declare class TypedTensor<
   const Shape extends ShapeType,
-  const Params extends TensorParams = {
-    requires_grad: false
-    device: "cpu"
-    dtype: "float32"
-  }
+  const Params extends TensorParams = Clean<DefaultParams>
 > {
   static ones<const Shape extends ShapeType>(
     shape: Shape
-  ): TN<Shape>
+  ): TypedTensor<Shape>
 
   static zeros<const Shape extends ShapeType>(
     shape: Shape
-  ): TN<Shape>
+  ): TypedTensor<Shape>
 
   static randn<const Shape extends ShapeType>(
     shape: Shape
-  ): TN<Shape>
+  ): TypedTensor<Shape>
 
   static tensor<const TensorValue extends any[]>(
     tensor: TensorValue
-  ): TN<TensorToShape<TensorValue>>
+  ): TypedTensor<TensorToShape<TensorValue>>
 
-  gpu(): TN<Shape, Merge<Params, { device: "gpu" }>>
+  gpu(): TypedTensor<
+    Shape,
+    Merge<Params, { device: "gpu" }>
+  >
 
-  cpu(): TN<Shape, Merge<Params, { device: "cpu" }>>
+  cpu(): TypedTensor<
+    Shape,
+    Merge<Params, { device: "cpu" }>
+  >
 
   dtype<const D extends DType>(
     dtype: D
-  ): TN<Shape, Merge<Params, { dtype: D }>>
+  ): TypedTensor<Shape, Merge<Params, { dtype: D }>>
 
-  requires_grad(): TN<
+  requires_grad(): TypedTensor<
     Shape,
     Merge<Params, { requires_grad: true }>
   >
 
-  no_grad(): TN<
+  no_grad(): TypedTensor<
     Shape,
     Merge<Params, { requires_grad: false }>
   >
 
   view<const View extends number[]>(
     view: View & ValidView<Shape, View>
-  ): TN<View, Params>
+  ): TypedTensor<View, Params>
 
-  squeeze(): TN<SqueezeShape<Shape>, Params>
+  squeeze(): TypedTensor<SqueezeShape<Shape>, Params>
+
+  static stack<
+    const Tensors extends TypedTensor<any>[],
+    const Dim extends number,
+    const Shape extends any[] = Tensors[0] extends (
+      TypedTensor<infer S>
+    ) ?
+      S
+    : never
+  >(tensor: Tensors, dim: Dim): Shape
 }
 
-const asdf = TN.ones([1, 2]).squeeze()
-const zeros = TN.zeros([2, 1, 5])
+const asdf = TypedTensor.ones([1, 2]).squeeze()
+const zeros = TypedTensor.zeros([2, 1, 5])
 
-const haha = TN.ones([4, 4]).view([2, 2, 2, 2])
+const haha = TypedTensor.ones([4, 4]).view([2, 2, 2, 2])
+
+const asdfsdf = TypedTensor.stack([haha, asdf], 2)
