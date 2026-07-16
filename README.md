@@ -1,6 +1,8 @@
 # typenet
 
-A tensor and neural-network library for TypeScript where shapes live in the type system. Broadcasting, matmul, reshapes and reductions are computed at the type level, so shape mismatches are compile errors. Underneath is a PyTorch-shaped runtime: typed-array storage, NumPy broadcasting, reverse-mode autograd, layers, optimizers, and an optional WebGPU backend. Operators work on tensors via [tsover](https://tsover.swmansion.com), a TypeScript fork with operator overloading.
+Type-safe tensor arithmetic for TypeScript. Shapes are tracked in the type system — broadcasting, matmul, reshapes and reductions are all checked at compile time.
+
+Includes autograd, layers, optimizers, and an optional WebGPU backend.
 
 ```ts
 "use tsover"
@@ -13,30 +15,19 @@ const h = a.matmul(w) // Tensor<[2, 4]>
 const s = h + randn([4]) // Tensor<[2, 4]>, broadcast
 const l = ((s - 1) ** 2).mean() // Tensor<[]>
 
-// cross-broadcast: column + row -> matrix
-const col = randn([2, 1]) // Tensor<[2, 1]>
-const row = randn([1, 3]) // Tensor<[1, 3]>
-const m = col + row // Tensor<[2, 3]>
+const m = randn([2, 1]) + randn([1, 3]) // Tensor<[2, 3]>
 
 a.matmul(randn([5, 4]))
 // compile error: matmul: inner dimensions do not match
-col + randn([3, 2])
-// compile error: Operator '+' cannot be applied
 ```
 
 ## A complete network
 
-Shapes are checked end to end. The batch dimension is generic, the feature dimensions are literal:
+Feature dimensions are literal, the batch dimension stays generic:
 
 ```ts
 "use tsover"
-import {
-  tensor,
-  Tensor,
-  Linear,
-  Module,
-  SGD
-} from "typenet"
+import { tensor, Tensor, Linear, Module, SGD } from "typenet"
 import type { TensorParams } from "typenet"
 
 class XorNet extends Module {
@@ -51,19 +42,11 @@ class XorNet extends Module {
   }
 }
 
-const X = tensor([
-  [0, 0],
-  [0, 1],
-  [1, 0],
-  [1, 1]
-]) // Tensor<[4, 2]>
+const X = tensor([[0, 0], [0, 1], [1, 0], [1, 1]]) // Tensor<[4, 2]>
 const Y = tensor([[0], [1], [1], [0]]) // Tensor<[4, 1]>
 
 const net = new XorNet()
-const optim = new SGD(net.parameters(), {
-  lr: 0.5,
-  momentum: 0.9
-})
+const optim = new SGD(net.parameters(), { lr: 0.5, momentum: 0.9 })
 
 for (let epoch = 0; epoch < 1500; epoch++) {
   const loss = ((net.forward(X) - Y) ** 2).mean()
@@ -73,35 +56,33 @@ for (let epoch = 0; epoch < 1500; epoch++) {
 }
 ```
 
-Runnable versions live in `examples/`:
+More in `examples/`:
 
 ```sh
 pnpm example:xor      # MLP learns XOR, MSE + SGD
 pnpm example:spiral   # 3-class spiral, crossEntropy + Adam
-pnpm example:gat      # graph attention network on a synthetic graph
+pnpm example:gat      # graph attention network
 pnpm example:dawn     # WebGPU compute in Node through Dawn
 pnpm example:xor:dawn # XOR trained on GPU tensors in Node
 ```
 
 ## What the type system tracks
 
-| Property        | Mechanism                                                              |
-| --------------- | ---------------------------------------------------------------------- |
-| shape           | tuple of number literals, e.g. `Tensor<[32, 784]>`                     |
-| dynamic dims    | `number` is a wildcard: `Tensor<[number, 784]>` accepts any batch size |
-| dtype           | `"float32"` (default) or `"float64"`, switch with `.to("float64")`     |
-| device          | `"cpu"` typed arrays or `"gpu"` TypeGPU storage                        |
-| `requires_grad` | `.requires_grad()` flips the type-level flag and enables autograd      |
+| Property        | Mechanism                                                          |
+| --------------- | ------------------------------------------------------------------ |
+| shape           | tuple of literals: `Tensor<[32, 784]>`                             |
+| dynamic dims    | `number` is a wildcard: `Tensor<[number, 784]>` takes any batch    |
+| dtype           | `"float32"` (default) or `"float64"`, via `.to("float64")`         |
+| device          | `"cpu"` typed arrays or `"gpu"` TypeGPU storage                    |
+| `requires_grad` | `.requires_grad()` flips the type-level flag and enables autograd  |
 
-The shape algebra is in `src/shape.ts` (types only, no runtime cost): `Broadcast` (NumPy rules), `MatMul` (full PyTorch semantics — dot, mat-vec, vec-mat, batched), `ResolveView` (reshape with `-1` inference), `Transpose` / `Permute` / `Squeeze` / `Unsqueeze` (with negative indices), `ReduceDim`, `Stack`, `Cat`. Errors state the problem: `a.view([7, 2])` on 6 elements fails with `Cannot view tensor of shape [2, 3] as [7, 2] (6 vs 14 elements)`.
+The shape algebra lives in `src/shape.ts` (types only): `Broadcast`, `MatMul` (dot, mat-vec, vec-mat, batched), `ResolveView` (reshape with `-1`), `Transpose`/`Permute`/`Squeeze`/`Unsqueeze`, `ReduceDim`, `Stack`, `Cat`. Errors say what went wrong: `Cannot view tensor of shape [2, 3] as [7, 2] (6 vs 14 elements)`.
 
 ## Operator overloading
 
-[tsover](https://tsover.swmansion.com) is a TypeScript fork by Software Mansion that adds operator overloading. This repo installs it as the `typescript` package and applies its transform through the vite plugin (see `vite.config.ts`), which covers both `vitest` and `vite-node`. Files or single functions opt in with a `"use tsover"` directive; inside such a scope `+ - * / **` (and their `+=` forms) work on tensors with full shape checking.
+[tsover](https://tsover.swmansion.com) is a TypeScript fork with operator overloading. It's installed here as the `typescript` package and applied via the vite plugin, covering `vitest` and `vite-node`. Opt in with a `"use tsover"` directive; inside that scope `+ - * / **` work on tensors with full shape inference, including cross-broadcasts like `[2, 1] + [1, 3] -> [2, 3]`.
 
-Operators are fully generic: each `+ - * /` is a single signature with an inferred type parameter, so `a + b` resolves cross-broadcasts like `[2, 1] + [1, 3] -> [2, 3]` and any-rank mixes with precise result shapes, exactly like the method form `a.add(b)`.
-
-For editor support, point your editor at the workspace TypeScript. In VS Code:
+For editor support, point your editor at the workspace TypeScript — in VS Code:
 
 ```json
 { "typescript.tsdk": "node_modules/typescript/lib" }
@@ -109,7 +90,7 @@ For editor support, point your editor at the workspace TypeScript. In VS Code:
 
 ## Autograd
 
-Reverse-mode and tape-based:
+Reverse-mode, tape-based:
 
 ```ts
 const x = tensor([1, 2]).requires_grad()
@@ -118,24 +99,17 @@ x.mul(y).add(x).pow(2).sum().backward()
 x.grad // Tensor<[2]>
 ```
 
-- `backward()` on a scalar, or pass an explicit gradient; grads accumulate on leaves until `zeroGrad()`
-- gradients through broadcasting are reduced correctly
-- differentiable: arithmetic, `pow`, `exp`/`log`/`sqrt`/`abs`, `relu`/`sigmoid`/`tanh`/`softmax`/`logSoftmax`, `matmul` (all variants), `sum`/`mean` (per-dim too), `view`/`squeeze`/`unsqueeze`/`transpose`/`permute`, `cat`/`stack`
-- `noGrad(fn)` disables taping, `.detach()` cuts the graph
-- every gradient is checked against central finite differences in `test/autograd.test.ts`
+Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, `matmul`, reductions, and shape ops; broadcasts are reduced correctly. `noGrad(fn)` disables taping, `.detach()` cuts the graph. Every gradient is checked against finite differences in `test/autograd.test.ts`.
 
 ## WebGPU
 
-The TypeGPU backend is explicit: initialize once, move tensors and modules over synchronously, await only when data returns to JavaScript.
+Initialize once, move tensors and modules over synchronously, await only when data comes back:
 
 ```ts
 import { initTypeGPU, tensor, Linear, SGD } from "typenet"
 
 const root = await initTypeGPU()
-const x = tensor([
-  [1, 2],
-  [3, 4]
-]).gpu()
+const x = tensor([[1, 2], [3, 4]]).gpu()
 const net = new Linear(2, 1).gpu()
 const optim = new SGD(net.parameters(), { lr: 0.01 })
 
@@ -144,17 +118,14 @@ loss.backward()
 optim.step()
 
 console.log(await loss.read()) // Float32Array
-console.log((await loss.toCPU()).item()) // CPU tensor
 
 optim.dispose()
 root.destroy()
 ```
 
-If your application already owns a TypeGPU root, pass it to `configureTypeGPU(root)` instead. GPU tensors expose `read()`, `toCPU()`, `write()` and `dispose()`; synchronous host access (`data`, `item()`, `get()`, `toArray()`, `cpu()`) throws, since WebGPU readback is asynchronous. Views share their GPU allocation, so disposing any alias invalidates all of them.
+If you already own a TypeGPU root, pass it to `configureTypeGPU(root)`. GPU tensors expose `read()`, `toCPU()`, `write()`, `dispose()`; synchronous host access throws, since WebGPU readback is async. `float64` is rejected on GPU (WebGPU has no f64) rather than silently downcast.
 
-The backend covers broadcasting, unary math, reductions, matmul, permutation, cat/stack, autograd, `Linear`, cross-entropy, SGD and Adam. WebGPU has no float64 shader type, so `.to("float64").gpu()` is rejected rather than silently downcast.
-
-The Dawn examples (`example:dawn`, `example:xor:dawn`) run the same backend headless in Node: the [`webgpu`](https://www.npmjs.com/package/webgpu) package provides a native Dawn device, which is handed to `tgpu.initFromDevice({ device })` and `configureTypeGPU(root)`. Dawn is a dev-only dependency of the examples; typenet itself never imports it.
+The Dawn examples run the same backend headless in Node via the [`webgpu`](https://www.npmjs.com/package/webgpu) package. Dawn is a dev-only dependency of the examples.
 
 ## API sketch
 
@@ -197,8 +168,8 @@ pnpm test        # vitest: runtime, operators, numerical grad checks
 pnpm typecheck   # tsover's tsc, includes test/types.test-d.ts
 ```
 
-The browser GPU parity harness is `test/gpu.html`: run `pnpm exec vite`, open `/test/gpu.html` in a WebGPU-capable browser, expect `PASS`. It covers kernels, autograd, modules, losses, optimizers and backend error paths.
+Browser GPU parity harness: `pnpm exec vite`, open `/test/gpu.html` in a WebGPU-capable browser, expect `PASS`.
 
 ## Status
 
-typenet is a work in progress — the API and type system are still evolving.
+Work in progress — the API and type system are still evolving.
