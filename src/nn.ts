@@ -1,13 +1,12 @@
-
 import { Tensor } from "./tensor.ts";
-import type { TensorParams } from "./tensor.ts";
+import type { Device, TensorParams } from "./tensor.ts";
 import type { DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts";
 
 type AnyTensor = Tensor<any, any>;
 
 type GradParams = {
   requires_grad: true;
-  device: "cpu";
+  device: Device;
   dtype: "float32";
 };
 
@@ -30,6 +29,30 @@ export abstract class Module {
   zeroGrad(): void {
     for (const p of this.parameters()) p.zeroGrad();
   }
+
+  gpu(): this {
+    for (const [key, value] of Object.entries(this)) {
+      if (value instanceof Tensor) (this as any)[key] = value.gpu();
+      else if (value instanceof Module) value.gpu();
+      else if (Array.isArray(value))
+        (this as any)[key] = value.map((item) =>
+          item instanceof Tensor ? item.gpu() : item instanceof Module ? item.gpu() : item,
+        );
+    }
+    return this;
+  }
+
+  async toCPU(): Promise<this> {
+    for (const [key, value] of Object.entries(this)) {
+      if (value instanceof Tensor) (this as any)[key] = await value.toCPU();
+      else if (value instanceof Module) await value.toCPU();
+      else if (Array.isArray(value))
+        (this as any)[key] = await Promise.all(
+          value.map((item) => (item instanceof Tensor ? item.toCPU() : item instanceof Module ? item.toCPU() : item)),
+        );
+    }
+    return this;
+  }
 }
 
 export class Linear<In extends number, Out extends number> extends Module {
@@ -48,8 +71,7 @@ export class Linear<In extends number, Out extends number> extends Module {
       .sub(k)
       .detach()
       .requires_grad() as any;
-    this.bias =
-      options.bias === false ? null : (Tensor.zeros([outFeatures]).requires_grad() as any);
+    this.bias = options.bias === false ? null : (Tensor.zeros([outFeatures]).requires_grad() as any);
   }
 
   forward<S extends Shape, P extends TensorParams>(
@@ -61,13 +83,10 @@ export class Linear<In extends number, Out extends number> extends Module {
 }
 
 export interface Layer<In extends number, Out extends number> {
-
   readonly inFeatures?: In;
   readonly outFeatures?: Out;
 
-  forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, NoInfer<In>], P>,
-  ): Tensor<[B, NoInfer<Out>], P>;
+  forward<B extends number, P extends TensorParams>(x: Tensor<[B, NoInfer<In>], P>): Tensor<[B, NoInfer<Out>], P>;
 }
 
 export class ReLU extends Module {
@@ -103,10 +122,7 @@ export class Softmax extends Module {
   }
 }
 
-export class Sequential<In extends number, Out extends number>
-  extends Module
-  implements Layer<In, Out>
-{
+export class Sequential<In extends number, Out extends number> extends Module implements Layer<In, Out> {
   declare readonly inFeatures?: In;
   declare readonly outFeatures?: Out;
 
@@ -135,10 +151,10 @@ type LayerOut<L> = L extends { readonly outFeatures?: infer O }
 
 type NextDim<H, Prev> = LayerOut<H> extends number ? LayerOut<H> : Prev;
 
-type ChainCheck<
-  L extends readonly unknown[],
-  Prev extends number | undefined = undefined,
-> = L extends readonly [infer H, ...infer R]
+type ChainCheck<L extends readonly unknown[], Prev extends number | undefined = undefined> = L extends readonly [
+  infer H,
+  ...infer R,
+]
   ? LayerIn<H> extends infer I
     ? I extends number
       ? Prev extends number
@@ -156,10 +172,7 @@ type ChainIn<L extends readonly unknown[]> = L extends readonly [infer H, ...inf
     : ChainIn<R>
   : number;
 
-type ChainOut<L extends readonly unknown[], Acc extends number = number> = L extends readonly [
-  infer H,
-  ...infer R,
-]
+type ChainOut<L extends readonly unknown[], Acc extends number = number> = L extends readonly [infer H, ...infer R]
   ? ChainOut<R, LayerOut<H> extends number ? LayerOut<H> : Acc>
   : Acc;
 
@@ -167,7 +180,6 @@ export function sequential<const L extends readonly Layer<any, any>[]>(
   ...layers: L & ChainCheck<L>
 ): Sequential<ChainIn<L>, ChainOut<L>>;
 export function sequential(...layers: Layer<any, any>[]): Sequential<any, any> {
-
   let prevOut: number | undefined;
   layers.forEach((l, i) => {
     if (prevOut !== undefined && l.inFeatures !== undefined && l.inFeatures !== prevOut)
@@ -196,22 +208,29 @@ export function crossEntropy<B extends number, C extends number, P extends Tenso
 ): Tensor<[], P> {
   const l = logits as AnyTensor;
   const [batch, classes] = l.shape as number[];
-  const idx = targets instanceof Tensor ? Array.from(targets.data) : targets;
-  if (idx.length !== batch)
-    throw new Error(`crossEntropy: ${idx.length} targets for batch of ${batch}`);
-  const onehot = new Float32Array(batch! * classes!);
-  for (let i = 0; i < batch!; i++) {
-    const t = idx[i]!;
-    if (t < 0 || t >= classes! || !Number.isInteger(t))
-      throw new Error(`crossEntropy: target ${t} out of range for ${classes} classes`);
-    onehot[i * classes! + t] = 1;
+  let mask: AnyTensor;
+  if (targets instanceof Tensor) {
+    if (targets.numel !== batch) throw new Error(`crossEntropy: ${targets.numel} targets for batch of ${batch}`);
+    if (targets.device !== l.device)
+      throw new Error(`crossEntropy: logits are on ${l.device} but targets are on ${targets.device}`);
+    mask = targets.oneHot(classes!);
+  } else {
+    if (targets.length !== batch) throw new Error(`crossEntropy: ${targets.length} targets for batch of ${batch}`);
+    const onehot = new Float32Array(batch! * classes!);
+    for (let i = 0; i < batch!; i++) {
+      const target = targets[i]!;
+      if (target < 0 || target >= classes! || !Number.isInteger(target))
+        throw new Error(`crossEntropy: target ${target} out of range for ${classes} classes`);
+      onehot[i * classes! + target] = 1;
+    }
+    mask = fromFlat(onehot, [batch!, classes!]);
+    if (l.device === "gpu") mask = mask.gpu();
   }
-  const mask = fromFlat(onehot, [batch!, classes!]);
   return l.logSoftmax(1).mul(mask).sum().neg().div(batch!) as any;
 }
 
 function fromFlat(data: Float32Array, shape: number[]): AnyTensor {
   const t = Tensor.zeros(shape as [number, number]);
-  (t.data as Float32Array).set(data);
+  t.write(data);
   return t as AnyTensor;
 }

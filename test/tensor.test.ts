@@ -249,4 +249,14 @@ describe("dtype / device tags", () => {
       .add(tensor([2]));
     expect(out.dtype).toBe("float64");
   });
+
+  it("supports backend-neutral writes and async CPU reads", async () => {
+    const t = zeros([3]).write([1, 2, 3]);
+    expect(Array.from(await t.read())).toEqual([1, 2, 3]);
+  });
+
+  it("requires TypeGPU configuration and rejects float64 upload", () => {
+    expect(() => tensor([1]).gpu()).toThrow(/TypeGPU is not configured/);
+    expect(() => tensor([1]).to("float64").gpu()).toThrow(/does not support float64/);
+  });
 });

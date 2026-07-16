@@ -1,4 +1,3 @@
-
 export {
   Tensor,
   tensor,
@@ -15,15 +14,7 @@ export {
   noGrad,
   broadcastShapes,
 } from "./src/tensor.ts";
-export type {
-  DType,
-  Device,
-  TensorParams,
-  DefaultParams,
-  ShapeOf,
-  ParamsOf,
-  NestedNumbers,
-} from "./src/tensor.ts";
+export type { DType, Device, TensorParams, DefaultParams, ShapeOf, ParamsOf, NestedNumbers } from "./src/tensor.ts";
 
 export {
   Module,
@@ -36,11 +27,13 @@ export {
   Sequential,
   sequential,
   mseLoss,
-  crossEntropy
-} from "./src/nn.ts"
+  crossEntropy,
+} from "./src/nn.ts";
 export type { Layer } from "./src/nn.ts";
 export { Optimizer, SGD, Adam } from "./src/optim.ts";
 export type { SGDOptions, AdamOptions } from "./src/optim.ts";
+export { configureTypeGPU, initTypeGPU, clearTypeGPU } from "./src/typegpu.ts";
+export type { TgpuRoot } from "typegpu";
 
 export type {
   Shape,

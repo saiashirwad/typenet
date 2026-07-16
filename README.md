@@ -3,19 +3,19 @@
 A type-safe tensor and neural-network library for TypeScript. Tensor **shapes live in the type system**: broadcasting, matmul, reshapes and reductions are all computed at the type level, so shape bugs are compile errors instead of runtime crashes. On top of that sits a real runtime — typed-array storage, NumPy-style broadcasting, reverse-mode autograd, layers and optimizers — plus **operator overloading** via [tsover](https://tsover.swmansion.com), so `((pred - target) ** 2).mean()` is real code.
 
 ```ts
-"use tsover";
-import { tensor, randn } from "typenet";
+"use tsover"
+import { tensor, randn } from "typenet"
 
-const a = randn([2, 3]); // Tensor<[2, 3]>
-const w = randn([3, 4]); // Tensor<[3, 4]>
+const a = randn([2, 3]) // Tensor<[2, 3]>
+const w = randn([3, 4]) // Tensor<[3, 4]>
 
-const h = a.matmul(w); // Tensor<[2, 4]>
-const s = h + randn([4]); // Tensor<[2, 4]>  (broadcast)
-const l = ((s - 1) ** 2).mean(); // Tensor<[]>      (scalar)
+const h = a.matmul(w) // Tensor<[2, 4]>
+const s = h + randn([4]) // Tensor<[2, 4]>  (broadcast)
+const l = ((s - 1) ** 2).mean() // Tensor<[]>      (scalar)
 
-a.matmul(randn([5, 4]));
+a.matmul(randn([5, 4]))
 // ^ compile error: matmul: inner dimensions do not match
-s + randn([3]);
+s + randn([3])
 // ^ compile error: Operator '+' cannot be applied
 ```
 
@@ -24,17 +24,17 @@ s + randn([3]);
 Shapes are checked end to end — the batch dim is generic, the feature dims are literal:
 
 ```ts
-"use tsover";
-import { tensor, Tensor, Linear, Module, SGD } from "typenet";
-import type { TensorParams } from "typenet";
+"use tsover"
+import { tensor, Tensor, Linear, Module, SGD } from "typenet"
+import type { TensorParams } from "typenet"
 
 class XorNet extends Module {
-  hidden = new Linear(2, 8);
-  out = new Linear(8, 1);
+  hidden = new Linear(2, 8)
+  out = new Linear(8, 1)
 
   forward<B extends number, P extends TensorParams>(x: Tensor<[B, 2], P>): Tensor<[B, 1], P> {
-    const h = this.hidden.forward(x).tanh(); // Tensor<[B, 8]>
-    return this.out.forward(h).sigmoid(); // Tensor<[B, 1]>
+    const h = this.hidden.forward(x).tanh() // Tensor<[B, 8]>
+    return this.out.forward(h).sigmoid() // Tensor<[B, 1]>
   }
 }
 
@@ -42,18 +42,21 @@ const X = tensor([
   [0, 0],
   [0, 1],
   [1, 0],
-  [1, 1],
-]); // Tensor<[4, 2]>
-const Y = tensor([[0], [1], [1], [0]]); // Tensor<[4, 1]>
+  [1, 1]
+]) // Tensor<[4, 2]>
+const Y = tensor([[0], [1], [1], [0]]) // Tensor<[4, 1]>
 
-const net = new XorNet();
-const optim = new SGD(net.parameters(), { lr: 0.5, momentum: 0.9 });
+const net = new XorNet()
+const optim = new SGD(net.parameters(), {
+  lr: 0.5,
+  momentum: 0.9
+})
 
 for (let epoch = 0; epoch < 1500; epoch++) {
-  const loss = ((net.forward(X) - Y) ** 2).mean();
-  optim.zeroGrad();
-  loss.backward();
-  optim.step();
+  const loss = ((net.forward(X) - Y) ** 2).mean()
+  optim.zeroGrad()
+  loss.backward()
+  optim.step()
 }
 ```
 
@@ -64,6 +67,36 @@ pnpm example:xor      # MLP learns XOR with MSE + SGD
 pnpm example:spiral   # 3-class spiral, crossEntropy + Adam
 ```
 
+## TypeGPU / WebGPU
+
+TypeGPU is an explicit backend: initialize it once, upload tensors and modules synchronously, then await only when data has to return to JavaScript.
+
+```ts
+import { initTypeGPU, tensor, Linear, SGD } from "typenet"
+
+const root = await initTypeGPU()
+const x = tensor([
+  [1, 2],
+  [3, 4]
+]).gpu()
+const net = new Linear(2, 1).gpu()
+const optim = new SGD(net.parameters(), { lr: 0.01 })
+
+const loss = net.forward(x).pow(2).mean() // queues WebGPU work
+loss.backward() // queues GPU autograd work
+optim.step() // updates GPU buffers in place
+
+console.log(await loss.read()) // Float32Array
+console.log((await loss.toCPU()).item()) // ordinary CPU tensor
+
+optim.dispose()
+root.destroy()
+```
+
+Use `configureTypeGPU(root)` instead when an application already owns a TypeGPU root. GPU tensors expose `read()`, `toCPU()`, `write()` and `dispose()`; synchronous host access through `data`, `item()`, `get()`, `toArray()` or `cpu()` throws because WebGPU readback is asynchronous. Views share their GPU allocation, so disposing any alias invalidates all aliases.
+
+The correctness-first backend supports broadcasting, unary math, reductions, matmul, permutation, cat/stack, autograd, `Linear`, cross-entropy, SGD and Adam. WebGPU has no float64 shader type, so `.to("float64").gpu()` is rejected rather than downcast.
+
 ## What the type system tracks
 
 | Property      | Mechanism                                                                                                    |
@@ -71,7 +104,7 @@ pnpm example:spiral   # 3-class spiral, crossEntropy + Adam
 | shape         | tuple of number literals, e.g. `Tensor<[32, 784]>`                                                           |
 | dynamic dims  | `number` acts as a wildcard: `Tensor<[number, 784]>` type-checks against any batch size, enforced at runtime |
 | dtype         | `"float32"` (default) / `"float64"`, switch with `.to("float64")`                                            |
-| device        | `"cpu"` / `"gpu"` tag (V1 executes on CPU either way)                                                        |
+| device        | `"cpu"` typed arrays / `"gpu"` TypeGPU storage                                                               |
 | requires_grad | `.requires_grad()` flips the type-level flag and enables autograd                                            |
 
 Shape algebra implemented in `src/shape.ts` (types only, zero runtime cost):
@@ -93,7 +126,7 @@ Errors are readable: `a.view([7, 2])` on 6 elements fails with
 Files (or single functions) opt in with a directive:
 
 ```ts
-"use tsover";
+"use tsover"
 ```
 
 Inside such a scope, `+ - * / **` (and their `+=` forms) work on tensors with full shape checking. `**` requires a scalar exponent.
@@ -111,10 +144,10 @@ Editor setup: point your editor at the workspace TypeScript. In VS Code:
 Reverse-mode, tape-based, PyTorch-shaped:
 
 ```ts
-const x = tensor([1, 2]).requires_grad();
-const y = tensor([3, 4]).requires_grad();
-x.mul(y).add(x).pow(2).sum().backward();
-x.grad; // Tensor<[2]> — populated
+const x = tensor([1, 2]).requires_grad()
+const y = tensor([3, 4]).requires_grad()
+x.mul(y).add(x).pow(2).sum().backward()
+x.grad // Tensor<[2]> — populated
 ```
 
 - `backward()` on a scalar (or pass an explicit gradient), grads accumulate on leaves until `zeroGrad()`
@@ -153,6 +186,7 @@ new Adam(params, { lr?, betas?, eps?, weightDecay? })
 
 // data out
 a.item() a.get(1, 2) a.toArray()  // NestedArray<S> — typed nesting depth!
+await gpuTensor.read() await gpuTensor.toCPU()
 ```
 
 ## Development
@@ -163,9 +197,12 @@ pnpm test        # vitest (runtime + operator tests, numerical grad checks)
 pnpm typecheck   # tsover's tsc; also validates test/types.test-d.ts
 ```
 
-## V1 limitations
+The browser GPU parity harness is at `test/gpu.html`. Start Vite with `pnpm exec vite`, open `/test/gpu.html` in a WebGPU-capable browser and expect `PASS`; it covers kernels, autograd, modules, losses, optimizers and backend error paths.
 
-- CPU only; `.gpu()` is a type-level tag.
+## Limitations
+
+- TypeGPU currently uses correctness-first one-thread-per-output kernels; tiled matmul, hierarchical reductions, pipeline caching and command batching are future optimizations.
+- GPU tensors are float32-only, and moving an already-recorded CPU autograd graph to the GPU creates a new GPU leaf.
 - `max()` is not differentiable (exists for stable softmax + metrics).
 - Operators need the shapes above; cross-broadcasts use `.add()` et al.
 - No slicing/fancy indexing yet — `get`, `narrow`-via-`cat`/`stack` patterns only.
