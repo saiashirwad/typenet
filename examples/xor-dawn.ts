@@ -32,6 +32,7 @@ const cases = [
   [1, 0],
   [1, 1]
 ] as const
+const targets = [0, 1, 1, 0] as const
 
 Object.assign(globalThis, globals)
 let gpu: GPU | undefined = create([])
@@ -80,7 +81,7 @@ try {
   console.log("\npredictions:")
   cases.forEach(([a, b], i) => {
     console.log(
-      `  ${a} xor ${b} -> ${prediction[i]!.toFixed(4)} (target ${i === 1 || i === 2 ? 1 : 0})`
+      `  ${a} xor ${b} -> ${prediction[i]!.toFixed(4)} (target ${targets[i]})`
     )
   })
 } finally {
