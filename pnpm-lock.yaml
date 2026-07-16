@@ -39,6 +39,9 @@ importers:
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@26.1.1)(vite@8.1.4(@types/node@26.1.1))
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
 
 packages:
 
@@ -647,6 +650,9 @@ packages:
       jsdom:
         optional: true
 
+  webgpu@0.4.0:
+    resolution: {integrity: sha512-F5pimn3Aoi0zWjuRdiVs5TnrUwSzD2lESBohsIUsqyitWkGRQlXU2fhV6ycXlQTa1bvAf3sjqiUpBEpmSQ5ptA==}
+
   webpack-virtual-modules@0.6.2:
     resolution: {integrity: sha512-66/V2i5hQanC51vBQKPH4aI8NMAcBW59FVBs+rC7eGHupMyfn34q7rZIE+ETlJ+XTevqfUhVVBgSUNSW2flEUQ==}
 
@@ -1155,6 +1161,13 @@ snapshots:
       '@types/node': 26.1.1
     transitivePeerDependencies:
       - msw
+
+  webgpu@0.4.0:
+    dependencies:
+      '@webgpu/types': 0.1.71
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
 
   webpack-virtual-modules@0.6.2: {}
 

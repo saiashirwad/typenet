@@ -9,7 +9,9 @@
 		"typecheck": "tsc --noEmit",
 		"example:xor": "vite-node examples/xor.ts",
 		"example:spiral": "vite-node examples/spiral.ts",
-		"example:gat": "vite-node examples/gat.ts"
+		"example:gat": "vite-node examples/gat.ts",
+		"example:dawn": "vite-node examples/dawn.ts",
+		"example:xor:dawn": "vite-node examples/xor-dawn.ts"
 	},
 	"dependencies": {
 		"hotscript": "^1.0.13",
@@ -23,7 +25,8 @@
 		"typescript": "npm:tsover@^6.0.2",
 		"unplugin-typegpu": "^0.11.6",
 		"vite-node": "^6.0.0",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.10",
+		"webgpu": "^0.4.0"
 	},
 	"prettier": {
 		"arrowParens": "avoid",

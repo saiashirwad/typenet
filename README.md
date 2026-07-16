@@ -63,8 +63,10 @@ for (let epoch = 0; epoch < 1500; epoch++) {
 Run the full examples:
 
 ```sh
-pnpm example:xor      # MLP learns XOR with MSE + SGD
-pnpm example:spiral   # 3-class spiral, crossEntropy + Adam
+corepack pnpm example:xor      # MLP learns XOR with MSE + SGD
+corepack pnpm example:spiral   # 3-class spiral, crossEntropy + Adam
+corepack pnpm example:dawn     # WebGPU compute in Node through Dawn
+corepack pnpm example:xor:dawn # MLP learns XOR on Dawn in Node
 ```
 
 ## TypeGPU / WebGPU
@@ -92,6 +94,17 @@ console.log((await loss.toCPU()).item()) // ordinary CPU tensor
 optim.dispose()
 root.destroy()
 ```
+
+### Headless Node with Dawn
+
+The optional [`webgpu`](https://www.npmjs.com/package/webgpu) examples create a native Dawn device and pass it to TypeGPU, so the same GPU tensor backend runs in Node without a browser:
+
+```sh
+corepack pnpm example:dawn      # compute and autograd smoke test
+corepack pnpm example:xor:dawn  # train the XOR network on GPU tensors
+```
+
+Dawn remains a development-only dependency used by these examples; typenet itself does not import it. They use `tgpu.initFromDevice({ device })` and `configureTypeGPU(root)`, then explicitly destroy both the TypeGPU root and the externally owned device.
 
 Use `configureTypeGPU(root)` instead when an application already owns a TypeGPU root. GPU tensors expose `read()`, `toCPU()`, `write()` and `dispose()`; synchronous host access through `data`, `item()`, `get()`, `toArray()` or `cpu()` throws because WebGPU readback is asynchronous. Views share their GPU allocation, so disposing any alias invalidates all aliases.
 
