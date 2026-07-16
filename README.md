@@ -13,9 +13,14 @@ const h = a.matmul(w) // Tensor<[2, 4]>
 const s = h + randn([4]) // Tensor<[2, 4]>, broadcast
 const l = ((s - 1) ** 2).mean() // Tensor<[]>
 
+// cross-broadcast: column + row -> matrix
+const col = randn([2, 1]) // Tensor<[2, 1]>
+const row = randn([1, 3]) // Tensor<[1, 3]>
+const m = col + row // Tensor<[2, 3]>
+
 a.matmul(randn([5, 4]))
 // compile error: matmul: inner dimensions do not match
-s + randn([3])
+col + randn([3, 2])
 // compile error: Operator '+' cannot be applied
 ```
 
@@ -94,7 +99,7 @@ The shape algebra is in `src/shape.ts` (types only, no runtime cost): `Broadcast
 
 [tsover](https://tsover.swmansion.com) is a TypeScript fork by Software Mansion that adds operator overloading. This repo installs it as the `typescript` package and applies its transform through the vite plugin (see `vite.config.ts`), which covers both `vitest` and `vite-node`. Files or single functions opt in with a `"use tsover"` directive; inside such a scope `+ - * / **` (and their `+=` forms) work on tensors with full shape checking.
 
-One caveat: tsover resolves operator overloads without generic inference — it only checks assignability against declared signatures. `Tensor` therefore enumerates the legal right-hand shapes for its resolved shape as a union (every suffix with any subset of dims set to 1) and defers to the bigger operand's overloads. In practice `a + b` works whenever one shape broadcasts _into_ the other (scalars, rows, columns, biases). For a true cross-broadcast like `[2, 1] + [1, 3]`, use the method form `a.add(b)`, which is fully generic.
+Operators are fully generic: each `+ - * /` is a single signature with an inferred type parameter, so `a + b` resolves cross-broadcasts like `[2, 1] + [1, 3] -> [2, 3]` and any-rank mixes with precise result shapes, exactly like the method form `a.add(b)`.
 
 For editor support, point your editor at the workspace TypeScript. In VS Code:
 
@@ -194,10 +199,6 @@ pnpm typecheck   # tsover's tsc, includes test/types.test-d.ts
 
 The browser GPU parity harness is `test/gpu.html`: run `pnpm exec vite`, open `/test/gpu.html` in a WebGPU-capable browser, expect `PASS`. It covers kernels, autograd, modules, losses, optimizers and backend error paths.
 
-## Limitations
+## Status
 
-- GPU kernels are correctness-first (one thread per output); tiled matmul, hierarchical reductions and pipeline caching are future work.
-- GPU tensors are float32-only, and moving an already-recorded CPU autograd graph to the GPU creates a new GPU leaf.
-- `max()` is not differentiable (it exists for stable softmax and metrics).
-- Operators cover shapes that broadcast into one another; cross-broadcasts use the method forms.
-- No slicing or fancy indexing yet.
+typenet is a work in progress — the API and type system are still evolving.

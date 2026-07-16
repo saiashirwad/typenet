@@ -1,2 +1,4 @@
 allowBuilds:
   webgpu: true
+minimumReleaseAgeExclude:
+  - tsover-generic-overloads@6.0.2-generic.0

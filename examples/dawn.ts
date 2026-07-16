@@ -1,3 +1,5 @@
+"use tsover"
+
 import tgpu, { type TgpuRoot } from "typegpu"
 import { create, globals } from "webgpu"
 
@@ -37,7 +39,7 @@ try {
     .requires_grad()
 
   const output = input.matmul(weight)
-  const loss = output.pow(2).mean()
+  const loss = (output ** 2).mean()
   loss.backward()
 
   console.log("output:", Array.from(await output.read()))

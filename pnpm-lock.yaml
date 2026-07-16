@@ -27,9 +27,12 @@ importers:
       prettier:
         specifier: ^3.5.3
         version: 3.9.5
+      tsover:
+        specifier: npm:tsover-generic-overloads@6.0.2-generic.0
+        version: tsover-generic-overloads@6.0.2-generic.0
       typescript:
-        specifier: npm:tsover@^6.0.2
-        version: tsover@6.0.2
+        specifier: npm:tsover-generic-overloads@6.0.2-generic.0
+        version: tsover-generic-overloads@6.0.2-generic.0
       unplugin-typegpu:
         specifier: ^0.11.6
         version: 0.11.6(rolldown@1.1.5)(typegpu@0.11.9)(vite@8.1.4(@types/node@26.1.1))
@@ -501,12 +504,12 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
+  tsover-generic-overloads@6.0.2-generic.0:
+    resolution: {integrity: sha512-z3y+z7Jn8CGLzcU2C0BRyu9LMwYpmnbQQ8AS6bzdjygx51I9BSEh4nSR+NaaDD9mxOZujiUmZ8NaKGJXKROBUQ==}
+    hasBin: true
+
   tsover-runtime@0.0.7:
     resolution: {integrity: sha512-FHHwMJzZbnP23+fU1PxXljy7j0RRRosL2r1/CRUNTqfW+l7m35JsUkM615x/cAzw4GqRdXPIl3axKMj9qzpZtQ==}
-
-  tsover@6.0.2:
-    resolution: {integrity: sha512-jvGCZ82Hg/vT5kqpg/+DU1emj1tEYJcigocE7eqqReV/jYsxk4c/Ggu6B69z9JR+MB9DvZbN2VpSJYmehIeXuQ==}
-    hasBin: true
 
   typed-binary@4.3.3:
     resolution: {integrity: sha512-W2hLsSzt3k/tg38gDE4Fn/QiwcoqGuUHBc2cb3mXuH7KcYxe/GM57vzW14s2/bawB4R5knGgGq8Xb57vsaJ4Sg==}
@@ -1044,12 +1047,12 @@ snapshots:
   tslib@2.8.1:
     optional: true
 
-  tsover-runtime@0.0.7: {}
-
-  tsover@6.0.2:
+  tsover-generic-overloads@6.0.2-generic.0:
     dependencies:
       minimatch: 9.0.9
       unplugin: 2.3.11
+
+  tsover-runtime@0.0.7: {}
 
   typed-binary@4.3.3: {}
 
