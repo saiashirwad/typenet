@@ -4,6 +4,8 @@ Type-safe tensor arithmetic for TypeScript. Shapes are tracked in the type syste
 
 Includes autograd, layers, optimizers, and an optional WebGPU backend.
 
+Operators (`+ - * / **`) work on tensors via [tsover](https://tsover.swmansion.com), a TypeScript fork with operator overloading. The WebGPU backend is built on [TypeGPU](https://typegpu.com).
+
 ```ts
 "use tsover"
 import { randn } from "typenet"
