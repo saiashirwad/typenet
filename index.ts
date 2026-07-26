@@ -12,6 +12,8 @@ export {
   stack,
   cat,
   noGrad,
+  configure,
+  isLazy,
   broadcastShapes
 } from "./src/tensor.ts"
 export type {

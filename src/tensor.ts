@@ -69,7 +69,60 @@ type CpuStorage = {
   readonly data: TypedArray
 }
 
-type TensorStorage = CpuStorage | TypeGPUStorage
+type LazyNodeBody =
+  | {
+      op: "binary"
+      kind: BinaryOp
+      parameter: number
+      a: AnyTensor
+      b: AnyTensor
+    }
+  | {
+      op: "unary"
+      kind: UnaryOp
+      parameter: number
+      input: AnyTensor
+    }
+  | { op: "matmul"; a: AnyTensor; b: AnyTensor }
+  | {
+      op: "reduce"
+      kind: ReduceOp
+      dim: number
+      keepdim: boolean
+      input: AnyTensor
+    }
+  | {
+      op: "reduceAll"
+      kind: "sum" | "max"
+      input: AnyTensor
+    }
+  | { op: "broadcastTo"; input: AnyTensor }
+  | { op: "permute"; order: number[]; input: AnyTensor }
+  | { op: "view"; input: AnyTensor }
+  | {
+      op: "narrow"
+      dim: number
+      start: number
+      length: number
+      input: AnyTensor
+    }
+  | { op: "cat"; a: AnyTensor; b: AnyTensor; dim: number }
+  | { op: "oneHot"; classes: number; input: AnyTensor }
+
+type LazyNode = LazyNodeBody & {
+  shape: number[]
+  dtype: DType
+  device: Device
+}
+
+type LazyStorage = {
+  readonly kind: "lazy"
+  readonly node: LazyNode
+  cache: AnyTensor | null
+}
+
+type TensorStorage =
+  CpuStorage | TypeGPUStorage | LazyStorage
 
 export type NestedNumbers =
   number | readonly NestedNumbers[]
@@ -171,6 +224,28 @@ export function noGrad<T>(fn: () => T): T {
     return fn()
   } finally {
     gradEnabled = prev
+  }
+}
+
+let lazyMode = false
+
+export function configure(options: {
+  lazy?: boolean
+}): void {
+  if (options.lazy !== undefined) lazyMode = options.lazy
+}
+
+export function isLazy(): boolean {
+  return lazyMode
+}
+
+function eagerly<T>(fn: () => T): T {
+  const prev = lazyMode
+  lazyMode = false
+  try {
+    return fn()
+  } finally {
+    lazyMode = prev
   }
 }
 
@@ -314,6 +389,13 @@ function rawBinary(
   const rank = outShape.length
   const sa = broadcastStrides(a.shape, outShape)
   const sb = broadcastStrides(b.shape, outShape)
+  if (lazyMode)
+    return makeLazy(
+      { op: "binary", kind: op, parameter, a, b },
+      outShape,
+      dtype,
+      a.device
+    )
   if (a.device === "gpu") {
     if (dtype !== "float32")
       throw new Error(
@@ -365,6 +447,13 @@ function rawUnary(
   op: UnaryOp,
   parameter = 0
 ): AnyTensor {
+  if (lazyMode)
+    return makeLazy(
+      { op: "unary", kind: op, parameter, input: a },
+      a.shape,
+      a.dtype,
+      a.device
+    )
   if (a.device === "gpu")
     return makeStorage(
       typegpuBackend.unary(gpuStorage(a), op, parameter),
@@ -398,6 +487,13 @@ function rawReduce(
   const keepShape = a.shape.map((s: number, i: number) =>
     i === d ? 1 : s
   )
+  if (lazyMode)
+    return makeLazy(
+      { op: "reduce", kind: op, dim: d, keepdim, input: a },
+      keepdim ? keepShape : outShape,
+      a.dtype,
+      a.device
+    )
   const n = prod(outShape)
   const strides = contiguousStrides(a.shape)
   const outer = prod(a.shape.slice(0, d))
@@ -443,11 +539,54 @@ function rawReduce(
   )
 }
 
+function rawReduceAll(
+  a: AnyTensor,
+  op: "sum" | "max"
+): AnyTensor {
+  if (lazyMode)
+    return makeLazy(
+      { op: "reduceAll", kind: op, input: a },
+      [],
+      a.dtype,
+      a.device
+    )
+  if (a.device === "gpu")
+    return makeStorage(
+      typegpuBackend.reduce(
+        gpuStorage(a),
+        op,
+        1,
+        a.numel,
+        1
+      ),
+      [],
+      a.dtype
+    )
+  const init = op === "sum" ? 0 : -Infinity
+  let acc = init
+  for (let i = 0; i < a.data.length; i++)
+    if (op === "sum") acc += a.data[i]!
+    else if (a.data[i]! > acc) acc = a.data[i]!
+  return makeRaw(
+    arrayCtor(a.dtype).of(acc),
+    [],
+    a.dtype,
+    "cpu"
+  )
+}
+
 function rawBroadcastTo(
   a: AnyTensor,
   shape: number[]
 ): AnyTensor {
   if (shapesEqual(a.shape, shape)) return a
+  if (lazyMode)
+    return makeLazy(
+      { op: "broadcastTo", input: a },
+      shape,
+      a.dtype,
+      a.device
+    )
   const n = prod(shape)
   const rank = shape.length
   const sa = broadcastStrides(a.shape, shape)
@@ -480,6 +619,13 @@ function rawPermute(
 ): AnyTensor {
   const rank = a.shape.length
   const outShape = order.map(i => a.shape[i]!)
+  if (lazyMode)
+    return makeLazy(
+      { op: "permute", order, input: a },
+      outShape,
+      a.dtype,
+      a.device
+    )
   const inStrides = contiguousStrides(a.shape)
   const readStrides = order.map(i => inStrides[i]!)
   const n = a.numel
@@ -533,6 +679,13 @@ function rawMatmul(a: AnyTensor, b: AnyTensor): AnyTensor {
   const batchCount = prod(batch)
   const saBatch = broadcastStrides(batchA, batch)
   const sbBatch = broadcastStrides(batchB, batch)
+  if (lazyMode)
+    return makeLazy(
+      { op: "matmul", a, b },
+      outShape,
+      dtype,
+      a.device
+    )
   if (a.device === "gpu") {
     if (dtype !== "float32")
       throw new Error(
@@ -599,6 +752,13 @@ function rawNarrow(
   const outShape = a.shape.map((s: number, i: number) =>
     i === d ? length : s
   )
+  if (lazyMode)
+    return makeLazy(
+      { op: "narrow", dim: d, start, length, input: a },
+      outShape,
+      a.dtype,
+      a.device
+    )
   const strides = contiguousStrides(a.shape)
   const outer = prod(a.shape.slice(0, d))
   const inner = strides[d]!
@@ -628,6 +788,174 @@ function rawNarrow(
     }
   }
   return makeRaw(out, outShape, a.dtype, a.device)
+}
+
+function rawOneHot(
+  a: AnyTensor,
+  classes: number
+): AnyTensor {
+  if (lazyMode)
+    return makeLazy(
+      { op: "oneHot", classes, input: a },
+      [a.numel, classes],
+      a.dtype,
+      a.device
+    )
+  if (a.device === "gpu")
+    return makeStorage(
+      typegpuBackend.oneHot(
+        gpuStorage(a),
+        a.numel,
+        classes
+      ),
+      [a.numel, classes],
+      a.dtype
+    )
+  const out = new (arrayCtor(a.dtype))(a.numel * classes)
+  for (let i = 0; i < a.numel; i++) {
+    const target = a.data[i]!
+    if (
+      !Number.isInteger(target) ||
+      target < 0 ||
+      target >= classes
+    )
+      throw new Error(
+        `oneHot: target ${target} out of range for ${classes} classes`
+      )
+    out[i * classes + target] = 1
+  }
+  return makeRaw(out, [a.numel, classes], a.dtype, "cpu")
+}
+
+function rawCat(
+  a: AnyTensor,
+  b: AnyTensor,
+  dim: number
+): AnyTensor {
+  const outShape = a.shape.map((s: number, i: number) =>
+    i === dim ? s + b.shape[dim]! : s
+  )
+  const dtype: DType =
+    a.dtype === "float64" || b.dtype === "float64" ?
+      "float64"
+    : "float32"
+  checkDevices(a, b)
+  if (lazyMode)
+    return makeLazy(
+      { op: "cat", a, b, dim },
+      outShape,
+      dtype,
+      a.device
+    )
+  const strides = contiguousStrides(outShape)
+  const outer = prod(outShape.slice(0, dim))
+  const inner = strides[dim]!
+  const lenA = a.shape[dim]!
+  const lenB = b.shape[dim]!
+  if (a.device === "gpu") {
+    if (dtype !== "float32")
+      throw new Error(
+        "TypeGPU does not support float64 tensors"
+      )
+    return makeStorage(
+      typegpuBackend.concatenate(
+        gpuStorage(a),
+        gpuStorage(b),
+        outer,
+        lenA,
+        lenB,
+        inner
+      ),
+      outShape,
+      dtype
+    )
+  }
+  const out = new (arrayCtor(dtype))(prod(outShape))
+  let o = 0
+  for (let i = 0; i < outer; i++) {
+    for (let j = 0; j < lenA; j++)
+      for (let k = 0; k < inner; k++)
+        out[o++] = a.data[(i * lenA + j) * inner + k]!
+    for (let j = 0; j < lenB; j++)
+      for (let k = 0; k < inner; k++)
+        out[o++] = b.data[(i * lenB + j) * inner + k]!
+  }
+  return makeRaw(out, outShape, dtype, a.device)
+}
+
+function makeLazy(
+  body: LazyNodeBody,
+  shape: readonly number[],
+  dtype: DType,
+  device: Device
+): AnyTensor {
+  const node = {
+    ...body,
+    shape: [...shape],
+    dtype,
+    device
+  } as LazyNode
+  return makeStorage(
+    { kind: "lazy", node, cache: null },
+    shape,
+    dtype
+  )
+}
+
+function evalNode(node: LazyNode): AnyTensor {
+  switch (node.op) {
+    case "binary":
+      return rawBinary(
+        force(node.a),
+        force(node.b),
+        node.kind,
+        node.parameter
+      )
+    case "unary":
+      return rawUnary(
+        force(node.input),
+        node.kind,
+        node.parameter
+      )
+    case "matmul":
+      return rawMatmul(force(node.a), force(node.b))
+    case "reduce":
+      return rawReduce(
+        force(node.input),
+        node.dim,
+        node.keepdim,
+        node.kind
+      )
+    case "reduceAll":
+      return rawReduceAll(force(node.input), node.kind)
+    case "broadcastTo":
+      return rawBroadcastTo(force(node.input), node.shape)
+    case "permute":
+      return rawPermute(force(node.input), node.order)
+    case "view":
+      return reshapeRaw(force(node.input), node.shape)
+    case "narrow":
+      return rawNarrow(
+        force(node.input),
+        node.dim,
+        node.start,
+        node.length
+      )
+    case "cat":
+      return rawCat(force(node.a), force(node.b), node.dim)
+    case "oneHot":
+      return rawOneHot(force(node.input), node.classes)
+  }
+}
+
+function force(t: AnyTensor): AnyTensor {
+  const storage = t._storage
+  if (storage.kind !== "lazy") return t
+  if (!storage.cache)
+    storage.cache = eagerly(() => evalNode(storage.node))
+  ;(t as { _storage: TensorStorage })._storage =
+    storage.cache._storage
+  return t
 }
 
 function withGrad(
@@ -692,9 +1020,9 @@ export class Tensor<
         "Use Tensor.of / zeros / ones / randn to create tensors"
       )
     const length =
-      storage.kind === "cpu" ?
-        storage.data.length
-      : storage.length
+      storage.kind === "cpu" ? storage.data.length
+      : storage.kind === "typegpu" ? storage.length
+      : prod(storage.node.shape)
     if (length !== prod(shape))
       throw new Error(
         `Data length ${length} does not match shape ${showShape(shape)}`
@@ -702,10 +1030,15 @@ export class Tensor<
     this._storage = storage
     this.shape = shape as S
     this.dtype = dtype
-    this.device = storage.kind === "cpu" ? "cpu" : "gpu"
+    this.device =
+      storage.kind === "lazy" ? storage.node.device
+      : storage.kind === "cpu" ? "cpu"
+      : "gpu"
   }
 
   get data(): TypedArray {
+    if (this._storage.kind === "lazy")
+      return force(this as AnyTensor).data
     if (this._storage.kind !== "cpu")
       throw new Error(
         "GPU tensor data is not host-accessible; use await tensor.read()"
@@ -849,27 +1182,37 @@ export class Tensor<
   async toCPU(): Promise<
     Tensor<S, Merge<P, { device: "cpu" }>>
   > {
-    if (this._storage.kind === "cpu") return this as any
-    const data = await typegpuBackend.read(this._storage)
+    force(this as AnyTensor)
+    const storage = this._storage as
+      CpuStorage | TypeGPUStorage
+    if (storage.kind === "cpu") return this as any
+    const data = await typegpuBackend.read(storage)
     const out = makeRaw(data, this.shape, this.dtype, "cpu")
     out.requiresGrad = this.requiresGrad
     return out as any
   }
 
   async read(): Promise<TypedArray> {
-    if (this._storage.kind === "cpu")
-      return this._storage.data.slice()
-    return typegpuBackend.read(this._storage)
+    force(this as AnyTensor)
+    const storage = this._storage as
+      CpuStorage | TypeGPUStorage
+    if (storage.kind === "cpu") return storage.data.slice()
+    return typegpuBackend.read(storage)
   }
 
   write(values: ArrayLike<number>): this {
+    force(this as AnyTensor)
     if (values.length !== this.numel)
       throw new Error(
         `write() expected ${this.numel} values, got ${values.length}`
       )
     if (this._storage.kind === "cpu")
       this._storage.data.set(Array.from(values))
-    else typegpuBackend.write(this._storage, values)
+    else
+      typegpuBackend.write(
+        this._storage as TypeGPUStorage,
+        values
+      )
     return this
   }
 
@@ -940,6 +1283,7 @@ export class Tensor<
   }
 
   clone(): Tensor<S, P> {
+    force(this as AnyTensor)
     const t =
       this._storage.kind === "cpu" ?
         makeRaw(
@@ -949,7 +1293,9 @@ export class Tensor<
           "cpu"
         )
       : makeStorage(
-          typegpuBackend.clone(this._storage),
+          typegpuBackend.clone(
+            this._storage as TypeGPUStorage
+          ),
           this.shape,
           this.dtype
         )
@@ -971,7 +1317,7 @@ export class Tensor<
         throw new Error(
           `backward() gradient is on ${gradient.device}, expected ${this.device}`
         )
-      seed = gradient
+      seed = force(gradient as AnyTensor)
     } else {
       if (this.numel !== 1)
         throw new Error(
@@ -1007,33 +1353,41 @@ export class Tensor<
     }
     visit(this)
 
+    // Materialize the forward graph; the GradNode engine
+    // below then runs eagerly on real storages.
+    for (const t of topo) force(t)
+
     const grads = new Map<AnyTensor, AnyTensor>()
     grads.set(this, seed)
 
-    noGrad(() => {
-      for (let i = topo.length - 1; i >= 0; i--) {
-        const t = topo[i]!
-        const g = grads.get(t)
-        if (!g) continue
-        if (t.gradNode) {
-          const inputGrads = t.gradNode.backward(g)
-          t.gradNode.inputs.forEach((input, j) => {
-            const ig = inputGrads[j]
-            if (!ig || !input.needsGrad) return
-            const existing = grads.get(input)
-            grads.set(
-              input,
-              existing ? rawBinary(existing, ig, "add") : ig
-            )
-          })
-        } else if (t.requiresGrad) {
-          t.grad =
-            t.grad ?
-              (rawBinary(t.grad, g, "add") as any)
-            : (g as any)
+    eagerly(() =>
+      noGrad(() => {
+        for (let i = topo.length - 1; i >= 0; i--) {
+          const t = topo[i]!
+          const g = grads.get(t)
+          if (!g) continue
+          if (t.gradNode) {
+            const inputGrads = t.gradNode.backward(g)
+            t.gradNode.inputs.forEach((input, j) => {
+              const ig = inputGrads[j]
+              if (!ig || !input.needsGrad) return
+              const existing = grads.get(input)
+              grads.set(
+                input,
+                existing ?
+                  rawBinary(existing, ig, "add")
+                : ig
+              )
+            })
+          } else if (t.requiresGrad) {
+            t.grad =
+              t.grad ?
+                (rawBinary(t.grad, g, "add") as any)
+              : (g as any)
+          }
         }
-      }
-    })
+      })
+    )
   }
 
   zeroGrad(): void {
@@ -1226,30 +1580,7 @@ export class Tensor<
   ): Tensor<ReduceDim<S, D, K>, P>
   sum(dim?: number, keepdim = false): AnyTensor {
     if (dim === undefined) {
-      let out: AnyTensor
-      if (this.device === "gpu")
-        out = makeStorage(
-          typegpuBackend.reduce(
-            gpuStorage(this),
-            "sum",
-            1,
-            this.numel,
-            1
-          ),
-          [],
-          this.dtype
-        )
-      else {
-        let acc = 0
-        for (let i = 0; i < this.data.length; i++)
-          acc += this.data[i]!
-        out = makeRaw(
-          arrayCtor(this.dtype).of(acc),
-          [],
-          this.dtype,
-          "cpu"
-        )
-      }
+      const out = rawReduceAll(this, "sum")
       return withGrad(out, "sum", [this], g => [
         rawBroadcastTo(g, [...this.shape])
       ])
@@ -1291,29 +1622,7 @@ export class Tensor<
     keepdim: K
   ): Tensor<ReduceDim<S, D, K>, P>
   max(dim?: number, keepdim = false): AnyTensor {
-    if (dim === undefined) {
-      if (this.device === "gpu")
-        return makeStorage(
-          typegpuBackend.reduce(
-            gpuStorage(this),
-            "max",
-            1,
-            this.numel,
-            1
-          ),
-          [],
-          this.dtype
-        )
-      let m = -Infinity
-      for (let i = 0; i < this.data.length; i++)
-        if (this.data[i]! > m) m = this.data[i]!
-      return makeRaw(
-        arrayCtor(this.dtype).of(m),
-        [],
-        this.dtype,
-        "cpu"
-      )
-    }
+    if (dim === undefined) return rawReduceAll(this, "max")
     return rawReduce(this, dim, keepdim, "max")
   }
 
@@ -1331,37 +1640,7 @@ export class Tensor<
       throw new Error(
         `oneHot() requires a positive class count, got ${classes}`
       )
-    if (this.device === "gpu")
-      return makeStorage(
-        typegpuBackend.oneHot(
-          gpuStorage(this),
-          this.numel,
-          classes
-        ),
-        [this.numel, classes],
-        this.dtype
-      ) as any
-    const out = new (arrayCtor(this.dtype))(
-      this.numel * classes
-    )
-    for (let i = 0; i < this.numel; i++) {
-      const target = this.data[i]!
-      if (
-        !Number.isInteger(target) ||
-        target < 0 ||
-        target >= classes
-      )
-        throw new Error(
-          `oneHot: target ${target} out of range for ${classes} classes`
-        )
-      out[i * classes + target] = 1
-    }
-    return makeRaw(
-      out,
-      [this.numel, classes],
-      this.dtype,
-      "cpu"
-    ) as any
+    return rawOneHot(this, classes) as any
   }
 
   view<const V extends number[]>(
@@ -1522,52 +1801,9 @@ export class Tensor<
         throw new Error(
           `cat: shapes ${showShape(ta.shape)} and ${showShape(tb.shape)} differ outside dim ${d}`
         )
-    const outShape = ta.shape.map((s: number, i: number) =>
-      i === d ? s + tb.shape[d]! : s
-    )
-    const dtype: DType =
-      ta.dtype === "float64" || tb.dtype === "float64" ?
-        "float64"
-      : "float32"
-    const out = new (arrayCtor(dtype))(prod(outShape))
-    const strides = contiguousStrides(outShape)
-    const outer = prod(outShape.slice(0, d))
-    const inner = strides[d]!
     const lenA = ta.shape[d]!
     const lenB = tb.shape[d]!
-    checkDevices(ta, tb)
-    if (ta.device === "gpu") {
-      if (dtype !== "float32")
-        throw new Error(
-          "TypeGPU does not support float64 tensors"
-        )
-      const result = makeStorage(
-        typegpuBackend.concatenate(
-          gpuStorage(ta),
-          gpuStorage(tb),
-          outer,
-          lenA,
-          lenB,
-          inner
-        ),
-        outShape,
-        dtype
-      )
-      return withGrad(result, "cat", [ta, tb], g => [
-        rawNarrow(g, d, 0, lenA),
-        rawNarrow(g, d, lenA, lenB)
-      ]) as any
-    }
-    let o = 0
-    for (let i = 0; i < outer; i++) {
-      for (let j = 0; j < lenA; j++)
-        for (let k = 0; k < inner; k++)
-          out[o++] = ta.data[(i * lenA + j) * inner + k]!
-      for (let j = 0; j < lenB; j++)
-        for (let k = 0; k < inner; k++)
-          out[o++] = tb.data[(i * lenB + j) * inner + k]!
-    }
-    const result = makeRaw(out, outShape, dtype, ta.device)
+    const result = rawCat(ta, tb, d)
     return withGrad(result, "cat", [ta, tb], g => [
       rawNarrow(g, d, 0, lenA),
       rawNarrow(g, d, lenA, lenB)
@@ -1751,6 +1987,13 @@ function reshapeRaw(
   if (t.numel !== prod(shape))
     throw new Error(
       `Cannot reshape ${showShape(t.shape)} to ${showShape(shape)}`
+    )
+  if (lazyMode)
+    return makeLazy(
+      { op: "view", input: t },
+      shape,
+      t.dtype,
+      t.device
     )
   return makeStorage(t._storage, shape, t.dtype)
 }
