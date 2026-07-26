@@ -1,4 +1,5 @@
 import { Operator } from "tsover-runtime"
+import * as nativeBackend from "./backends/native.ts"
 import * as typegpuBackend from "./backends/typegpu.ts"
 import type {
   BinaryOp,
@@ -952,10 +953,187 @@ function force(t: AnyTensor): AnyTensor {
   const storage = t._storage
   if (storage.kind !== "lazy") return t
   if (!storage.cache)
-    storage.cache = eagerly(() => evalNode(storage.node))
+    storage.cache =
+      evalNative(t) ?? eagerly(() => evalNode(storage.node))
   ;(t as { _storage: TensorStorage })._storage =
     storage.cache._storage
   return t
+}
+
+// --- native (candle) backend -------------------------------------
+// Serialize the whole lazy graph to JSON with leaves as indexed
+// placeholders, evaluate it natively in one FFI hop, and wrap the
+// result as a CPU tensor. Returns null when the graph is not
+// supported natively (GPU leaves, float64) so force() falls back to
+// the interpreter.
+
+type SerializedNode = Record<string, unknown> & { op: string }
+
+function serializeLazyGraph(root: AnyTensor): {
+  json: string
+  leaves: Float32Array
+  rootShape: number[]
+} | null {
+  const nodes: SerializedNode[] = []
+  const leafIds = new Map<AnyTensor, number>()
+  const leafData: Float32Array[] = []
+  const leafOffsets: number[] = []
+  let leafCount = 0
+  let leafBytes = 0
+
+  const visit = (t: AnyTensor): number | null => {
+    if (t._storage.kind === "lazy") {
+      const node = t._storage.node
+      const ref = (u: AnyTensor): number | null => visit(u)
+      let body: SerializedNode
+      switch (node.op) {
+        case "binary": {
+          const a = ref(node.a)
+          const b = ref(node.b)
+          if (a === null || b === null) return null
+          body = {
+            op: "binary",
+            kind: node.kind,
+            parameter: node.parameter,
+            a,
+            b,
+            shape: node.shape
+          }
+          break
+        }
+        case "unary": {
+          const input = ref(node.input)
+          if (input === null) return null
+          body = {
+            op: "unary",
+            kind: node.kind,
+            parameter: node.parameter,
+            input
+          }
+          break
+        }
+        case "matmul": {
+          const a = ref(node.a)
+          const b = ref(node.b)
+          if (a === null || b === null) return null
+          body = { op: "matmul", a, b }
+          break
+        }
+        case "reduce": {
+          const input = ref(node.input)
+          if (input === null) return null
+          body = {
+            op: "reduce",
+            kind: node.kind,
+            dim: node.dim,
+            keepdim: node.keepdim,
+            input
+          }
+          break
+        }
+        case "reduceAll": {
+          const input = ref(node.input)
+          if (input === null) return null
+          body = { op: "reduceAll", kind: node.kind, input }
+          break
+        }
+        case "broadcastTo": {
+          const input = ref(node.input)
+          if (input === null) return null
+          body = { op: "broadcastTo", input, shape: node.shape }
+          break
+        }
+        case "permute": {
+          const input = ref(node.input)
+          if (input === null) return null
+          body = { op: "permute", order: node.order, input }
+          break
+        }
+        case "view": {
+          const input = ref(node.input)
+          if (input === null) return null
+          body = { op: "view", input, shape: node.shape }
+          break
+        }
+        case "narrow": {
+          const input = ref(node.input)
+          if (input === null) return null
+          body = {
+            op: "narrow",
+            dim: node.dim,
+            start: node.start,
+            length: node.length,
+            input
+          }
+          break
+        }
+        case "cat": {
+          const a = ref(node.a)
+          const b = ref(node.b)
+          if (a === null || b === null) return null
+          body = { op: "cat", a, b, dim: node.dim }
+          break
+        }
+        case "oneHot": {
+          const input = ref(node.input)
+          if (input === null) return null
+          body = { op: "oneHot", classes: node.classes, input }
+          break
+        }
+      }
+      nodes.push(body)
+      return nodes.length - 1
+    }
+    if (t._storage.kind !== "cpu" || t.dtype !== "float32")
+      return null
+    let id = leafIds.get(t)
+    if (id === undefined) {
+      id = leafCount++
+      leafIds.set(t, id)
+      leafData.push(t._storage.data as Float32Array)
+      leafOffsets.push(leafBytes)
+      leafBytes += t._storage.data.length
+    }
+    nodes.push({
+      op: "leaf",
+      leaf: id,
+      offset: leafOffsets[id]!,
+      shape: [...t.shape]
+    })
+    return nodes.length - 1
+  }
+
+  if (visit(root) === null) return null
+  const total = leafData.reduce((n, d) => n + d.length, 0)
+  const leaves = new Float32Array(total)
+  let offset = 0
+  for (const d of leafData) {
+    leaves.set(d, offset)
+    offset += d.length
+  }
+  return {
+    json: JSON.stringify({ nodes }),
+    leaves,
+    rootShape: [...root.shape]
+  }
+}
+
+function evalNative(t: AnyTensor): AnyTensor | null {
+  const storage = t._storage
+  if (storage.kind !== "lazy") return null
+  if (storage.node.device !== "cpu") return null
+  if (!nativeBackend.isNativeEnabled()) return null
+  const serialized = serializeLazyGraph(t)
+  if (!serialized) return null
+  const data = nativeBackend.evalGraphNative(
+    serialized.json,
+    serialized.leaves
+  )
+  if (data.length !== prod(serialized.rootShape))
+    throw new Error(
+      `native backend returned ${data.length} values, expected ${prod(serialized.rootShape)} for shape ${showShape(serialized.rootShape)}`
+    )
+  return makeRaw(data, serialized.rootShape, "float32", "cpu")
 }
 
 function withGrad(

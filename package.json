@@ -7,6 +7,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "build:native": "pnpm -C native build",
     "format": "prettier --write .",
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
@@ -20,6 +21,7 @@
     "typegpu": "^0.11.9"
   },
   "devDependencies": {
+    "@typenet/native": "workspace:*",
     "@types/node": "^26.1.1",
     "@webgpu/types": "^0.1.71",
     "prettier": "^3.5.3",

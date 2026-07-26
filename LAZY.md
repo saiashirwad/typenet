@@ -84,26 +84,114 @@ Known limitations:
 Nice-to-haves later (not phase 1): op fusion in the interpreter, buffer reuse,
 batched WGSL dispatches.
 
-## Phase 2 — Rust/candle native backend (not started)
+## Phase 2 — Rust/candle native backend
 
-Goal: a third executor behind the lazy-graph boundary, preferred in Node.
-TypeGPU remains the browser executor; candle likely replaces it for Node.
+Status: implemented (v1). Lazy CPU graphs are evaluated by a
+napi-rs/candle addon in one FFI hop per forcing point; tests green on
+Metal.
 
-Plan:
+What landed:
 
-- New `native/` package: napi-rs crate, `candle-core` dep (metal + accelerate
-  on macOS, cuda features later). Model on `/tmp/effect-torch-study/packages/native/src/lib.rs`:
-  - tensors cross the bridge as opaque handles (Arc-backed candle tensors);
-  - **zero-copy readback** via `napi_create_external_arraybuffer` (`lib.rs:36-95`);
-  - eval on tokio blocking pool (`lib.rs:1127-1160`), release profile
-    `lto = true, codegen-units = 1`.
-- Bridge shape: TS serializes/walks the `LazyNode` tree once → Rust rebuilds it
-  as candle ops → runs → returns buffer. One FFI hop per forcing point.
-- No Effect: errors thrown as `TensorError`; skip cancellation initially
-  (add `AbortSignal` later only if needed).
-- Backend selection: `useNative()` init call alongside `configureTypeGPU`.
-- Parity tests: same op-by-op comparison harness as `test/gpu-browser.ts`,
-  candle vs CPU within 1e-4.
+- `native/` package (`@typenet/native`, private workspace package):
+  napi-rs crate with `candle-core 0.9` (`metal` + `accelerate` on
+  macOS), modeled on `/tmp/effect-torch-study/packages/native/src/lib.rs`.
+  Two exported functions: `evalGraph(graphJson, leaves)` and
+  `deviceName()`. Zero-copy readback via
+  `napi_create_external_arraybuffer` (the f32 result Vec is handed to
+  JS as an external ArrayBuffer, freed by the finalizer).
+  Release profile: `lto = true, codegen-units = 1`.
+- Bridge shape: `serializeLazyGraph` in `src/tensor.ts` walks the
+  `LazyNode` tree once, emitting a topological JSON node list with
+  leaves as `{ op: "leaf", leaf, offset, shape }` placeholders plus one
+  concatenated `Float32Array`. Rust rebuilds it with candle ops on the
+  best device (Metal if `Device::new_metal(0)` succeeds, else CPU) and
+  returns f32 bytes. `force()` uses it when lazy mode is on, the graph
+  device is `"cpu"`, and native is enabled — otherwise it falls back to
+  the interpreter (GPU leaves and float64 graphs also fall back).
+- Activation: `useNative()` / `disableNative()` / `isNativeAvailable()`
+  / `nativeDevice()` in `src/backends/native.ts`, re-exported from
+  `index.ts`. The addon is loaded lazily via `createRequire`, so the
+  library works fine when the `.node` binary is missing; `useNative()`
+  throws a clear "run pnpm build:native" error in that case. Eager mode
+  is completely unaffected.
+- Op coverage (f32 only): all `LazyNode` variants — binary (add, sub,
+  mul, div with broadcasting, plus the composite grad ops negDiv,
+  halfDiv, mulSign, reluGrad, leakyReluGrad, sigmoidGrad, tanhGrad),
+  unary (pow, neg, exp, log, sqrt, abs, relu, leakyRelu, sigmoid, tanh,
+  scalePowGrad), matmul (with batch-dim broadcasting, which candle does
+  not do natively), reduce/reduceAll (sum, max, argmax — argmax returns
+  the first index on ties, matching the CPU kernel), broadcastTo,
+  permute, view, narrow, cat, oneHot. Errors come back as JS errors
+  prefixed `native backend:`.
+- Tests: `test/native.test.ts` — parity vs CPU eager within 1e-4 for
+  the same op set as `test/lazy.test.ts` plus batched matmul, argmax,
+  an error-path test, and a full XOR forward (native) + backward +
+  SGD step. Skips gracefully via `describe.skipIf(!isNativeAvailable())`
+  when the binary isn't built.
+
+Build:
+
+```sh
+pnpm install        # links native/ into the workspace
+pnpm build:native   # napi build --release → native/typenet-native.node
+```
+
+Prerequisites: a Rust toolchain (`rustup`, 1.75+). First candle build
+takes ~1–2 min on an M-series Mac; incremental rebuilds ~15–20 s.
+`native/target/` and `native/*.node` are gitignored.
+
+Deviations from the original plan:
+
+- **Synchronous FFI, not tokio async.** The forcing points `data`,
+  `item()`, `backward()` are synchronous public methods whose
+  signatures may not change, so `evalGraph` blocks (one hop) instead of
+  returning a Promise. Graphs are test-scale; revisit async if large
+  graphs make the blocking hop visible.
+- Errors are plain `Error`s (there is no `TensorError` class in the
+  codebase — the interpreter throws plain errors too).
+
+Known limitations:
+
+- f32 only; float64 and GPU-device lazy graphs silently fall back to
+  the CPU/TypeGPU interpreter.
+- The whole graph is re-serialized at every forcing point (no caching
+  of the JSON or of candle tensors across forces).
+- No op fusion; composite grad ops are lowered to several candle
+  elementwise kernels.
+- Metal device selection is "first Metal device or CPU"; no way to
+  force CPU short of not enabling native.
+
+### Benchmarks
+
+Run with `pnpm vite-node examples/bench.ts` (2026-07-27, Apple M5,
+`nativeDevice()`: metal). Wall time per iteration, fresh leaf tensors
+each iteration so lazy graphs are rebuilt and re-serialized; the timer
+covers graph build + forcing for the lazy modes. Averages over 3–10
+iterations after 1 warmup.
+
+| Workload | eager CPU | lazy (interpreter) | lazy + native |
+| --- | --- | --- | --- |
+| matmul chain: 10 × ([256,256] @ [256,256]) | 147.5 ms | 146.8 ms | 13.2 ms |
+| matmul chain: 10 × ([512,512] @ [512,512]) | 1213.9 ms | 1192.9 ms | 51.2 ms |
+| elementwise chain: 20 ops on [1024,1024] | 286.0 ms | 291.5 ms | 43.8 ms |
+| XOR MLP train, 200 steps (fwd+bwd+SGD) | 2.8 ms | 1.9 ms | 740.5 ms |
+
+Takeaways:
+
+- Native (Metal) wins big on large compute-dense graphs: ~11x on the
+  256² matmul chain, ~23x on 512², ~6.5x on the elementwise chain.
+  One serialization + FFI hop is easily amortized there.
+- The lazy interpreter alone neither helps nor hurts — it ends up
+  running the same CPU typed-array kernels.
+- Native loses badly on the XOR training loop (~300x slower). The
+  graphs are tiny (4×2 inputs), so compute is negligible and the cost
+  is all overhead: `backward()` forces every tensor in the GradNode
+  topo order, and each forcing point re-serializes and re-ships its
+  subgraph across the FFI boundary. Hundreds of hops per step × 200
+  steps dwarfs the ~2 ms of actual math. Expected — see "the whole
+  graph is re-serialized at every forcing point" above. Native pays
+  off for few-force, big-graph workloads, not chatty small-graph
+  training loops.
 
 ## How to resume
 

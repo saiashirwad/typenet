@@ -1,3 +1,5 @@
+packages:
+  - native
 allowBuilds:
   webgpu: true
 minimumReleaseAgeExclude:

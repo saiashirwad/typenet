@@ -10,3 +10,7 @@ coverage/
 
 .DS_Store
 .idea/
+
+# native backend build artifacts
+native/target/
+native/*.node

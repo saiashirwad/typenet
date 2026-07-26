@@ -50,6 +50,13 @@ export {
   initTypeGPU,
   clearTypeGPU
 } from "./src/typegpu.ts"
+export {
+  useNative,
+  disableNative,
+  isNativeEnabled,
+  isNativeAvailable,
+  nativeDevice
+} from "./src/backends/native.ts"
 export type { TgpuRoot } from "typegpu"
 
 export type {
