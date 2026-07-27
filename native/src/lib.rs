@@ -106,6 +106,16 @@ enum Node {
 #[derive(Debug, Deserialize)]
 struct Graph {
     nodes: Vec<Node>,
+    /// Indices of the output nodes. Defaults to the last node, so
+    /// single-root graphs from older callers keep working.
+    #[serde(default)]
+    roots: Option<Vec<usize>>,
+    /// Device hint from the JS side: "cpu" pins evaluation to the CPU
+    /// (tiny graphs, where Metal's per-kernel dispatch and readback
+    /// overhead dwarfs the compute); anything else uses the best
+    /// available device.
+    #[serde(default)]
+    device: Option<String>,
 }
 
 fn prod(shape: &[usize]) -> usize {
@@ -263,7 +273,11 @@ fn eval_one_hot(classes: usize, a: &Tensor) -> candle_core::Result<Tensor> {
     targets.eq(&range)?.to_dtype(DType::F32)
 }
 
-fn run_graph(graph: &Graph, leaves: &[f32]) -> candle_core::Result<Tensor> {
+fn run_graph(
+    graph: &Graph,
+    leaves: &[f32],
+    device: &Device,
+) -> candle_core::Result<Vec<Tensor>> {
     let mut outputs: Vec<Tensor> = Vec::with_capacity(graph.nodes.len());
     for node in &graph.nodes {
         let get = |i: usize| -> candle_core::Result<&Tensor> {
@@ -284,7 +298,7 @@ fn run_graph(graph: &Graph, leaves: &[f32]) -> candle_core::Result<Tensor> {
                         leaves.len()
                     ))
                 })?;
-                Tensor::from_vec(data.to_vec(), shape.clone(), device())?
+                Tensor::from_vec(data.to_vec(), shape.clone(), device)?
             }
             Node::Binary {
                 kind,
@@ -361,9 +375,18 @@ fn run_graph(graph: &Graph, leaves: &[f32]) -> candle_core::Result<Tensor> {
         };
         outputs.push(out);
     }
-    outputs.pop().ok_or_else(|| {
-        candle_core::Error::Msg("empty graph: no root node".to_string())
-    })
+    let roots: Vec<usize> = match &graph.roots {
+        Some(roots) => roots.clone(),
+        None => vec![graph.nodes.len().saturating_sub(1)],
+    };
+    roots
+        .iter()
+        .map(|&i| {
+            outputs.get(i).cloned().ok_or_else(|| {
+                candle_core::Error::Msg(format!("root references missing node {i}"))
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -439,12 +462,33 @@ fn vec_readback(mut vec: Vec<f32>) -> Readback {
 pub fn eval_graph(graph_json: String, leaves: Float32Array) -> Result<Readback> {
     let graph: Graph = serde_json::from_str(&graph_json)
         .map_err(|e| Error::new(Status::InvalidArg, format!("invalid graph JSON: {e}")))?;
-    let output = run_graph(&graph, &leaves).map_err(to_napi_err)?;
-    output.device().synchronize().map_err(to_napi_err)?;
-    let flat = output
-        .contiguous()
-        .and_then(|t| t.flatten_all())
-        .map_err(to_napi_err)?;
-    let data = flat.to_vec1::<f32>().map_err(to_napi_err)?;
+    let cpu = Device::Cpu;
+    let device = if graph.device.as_deref() == Some("cpu") {
+        &cpu
+    } else {
+        device()
+    };
+    let outputs = run_graph(&graph, &leaves, device).map_err(to_napi_err)?;
+    // All roots are read back as one concatenated f32 buffer; the JS
+    // side slices it per root using the shapes it already knows.
+    device.synchronize().map_err(to_napi_err)?;
+    let mut flats: Vec<Tensor> = Vec::with_capacity(outputs.len());
+    for output in &outputs {
+        flats.push(
+            output
+                .contiguous()
+                .and_then(|t| t.flatten_all())
+                .map_err(to_napi_err)?,
+        );
+    }
+    // One cat + one readback, no matter how many roots — per-tensor
+    // readbacks on Metal each cost a sync.
+    let data = if flats.len() == 1 {
+        flats.into_iter().next().unwrap()
+    } else {
+        Tensor::cat(&flats.iter().collect::<Vec<_>>(), 0).map_err(to_napi_err)?
+    }
+    .to_vec1::<f32>()
+    .map_err(to_napi_err)?;
     Ok(vec_readback(data))
 }

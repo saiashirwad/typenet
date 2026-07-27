@@ -952,11 +952,10 @@ function evalNode(node: LazyNode): AnyTensor {
 function force(t: AnyTensor): AnyTensor {
   const storage = t._storage
   if (storage.kind !== "lazy") return t
-  if (!storage.cache)
-    storage.cache =
-      evalNative(t) ?? eagerly(() => evalNode(storage.node))
+  if (!storage.cache && !evalNativeMany([t]))
+    storage.cache = eagerly(() => evalNode(storage.node))
   ;(t as { _storage: TensorStorage })._storage =
-    storage.cache._storage
+    storage.cache!._storage
   return t
 }
 
@@ -969,20 +968,39 @@ function force(t: AnyTensor): AnyTensor {
 
 type SerializedNode = Record<string, unknown> & { op: string }
 
-function serializeLazyGraph(root: AnyTensor): {
+// Graphs touching at most this many elements (leaves + intermediate
+// node outputs) are pinned to the candle CPU device via the graph
+// JSON's `device` hint. 65536 = one 256×256 matrix.
+const CPU_HINT_MAX_WORK = 65536
+
+function serializeLazyGraph(roots: AnyTensor[]): {
   json: string
   leaves: Float32Array
-  rootShape: number[]
+  rootShapes: number[][]
 } | null {
   const nodes: SerializedNode[] = []
+  const seen = new Map<AnyTensor, number>()
   const leafIds = new Map<AnyTensor, number>()
   const leafData: Float32Array[] = []
   const leafOffsets: number[] = []
   let leafCount = 0
   let leafBytes = 0
+  // Rough work estimate (elements touched) — used to pin tiny graphs
+  // to the candle CPU device, where per-kernel Metal dispatch and
+  // readback overhead would dwarf the compute.
+  let work = 0
 
   const visit = (t: AnyTensor): number | null => {
+    const cached = seen.get(t)
+    if (cached !== undefined) return cached
+    const index = visitUncached(t)
+    if (index !== null) seen.set(t, index)
+    return index
+  }
+
+  const visitUncached = (t: AnyTensor): number | null => {
     if (t._storage.kind === "lazy") {
+      work += prod(t._storage.node.shape)
       const node = t._storage.node
       const ref = (u: AnyTensor): number | null => visit(u)
       let body: SerializedNode
@@ -1093,6 +1111,7 @@ function serializeLazyGraph(root: AnyTensor): {
       leafData.push(t._storage.data as Float32Array)
       leafOffsets.push(leafBytes)
       leafBytes += t._storage.data.length
+      work += t._storage.data.length
     }
     nodes.push({
       op: "leaf",
@@ -1103,7 +1122,14 @@ function serializeLazyGraph(root: AnyTensor): {
     return nodes.length - 1
   }
 
-  if (visit(root) === null) return null
+  const rootIndices: number[] = []
+  const rootShapes: number[][] = []
+  for (const root of roots) {
+    const index = visit(root)
+    if (index === null) return null
+    rootIndices.push(index)
+    rootShapes.push([...root.shape])
+  }
   const total = leafData.reduce((n, d) => n + d.length, 0)
   const leaves = new Float32Array(total)
   let offset = 0
@@ -1112,28 +1138,72 @@ function serializeLazyGraph(root: AnyTensor): {
     offset += d.length
   }
   return {
-    json: JSON.stringify({ nodes }),
+    json: JSON.stringify({
+      nodes,
+      roots: rootIndices,
+      // Tiny graphs evaluate faster on candle's CPU device: Metal
+      // charges ~10µs per kernel dispatch plus a sync per readback,
+      // which dominates when the compute itself is microseconds.
+      ...(work <= CPU_HINT_MAX_WORK ? { device: "cpu" } : {})
+    }),
     leaves,
-    rootShape: [...root.shape]
+    rootShapes
   }
 }
 
-function evalNative(t: AnyTensor): AnyTensor | null {
-  const storage = t._storage
-  if (storage.kind !== "lazy") return null
-  if (storage.node.device !== "cpu") return null
-  if (!nativeBackend.isNativeEnabled()) return null
-  const serialized = serializeLazyGraph(t)
-  if (!serialized) return null
+// Evaluate every root in one FFI hop. The roots share a single
+// serialized graph (memoized on tensor identity), so subexpressions
+// shared across roots are evaluated once natively. On success each
+// root's LazyStorage cache is filled with a CPU tensor viewing its
+// slice of the returned buffer and true is returned; force()/forceMany()
+// then do the usual in-place storage swap.
+function evalNativeMany(roots: AnyTensor[]): boolean {
+  if (!nativeBackend.isNativeEnabled()) return false
+  for (const t of roots) {
+    const storage = t._storage
+    if (storage.kind !== "lazy" || storage.node.device !== "cpu")
+      return false
+  }
+  const serialized = serializeLazyGraph(roots)
+  if (!serialized) return false
   const data = nativeBackend.evalGraphNative(
     serialized.json,
     serialized.leaves
   )
-  if (data.length !== prod(serialized.rootShape))
+  let offset = 0
+  serialized.rootShapes.forEach((shape, i) => {
+    const n = prod(shape)
+    const storage = roots[i]!._storage
+    if (storage.kind === "lazy")
+      storage.cache = makeRaw(
+        data.subarray(offset, offset + n),
+        shape,
+        "float32",
+        "cpu"
+      )
+    offset += n
+  })
+  if (offset !== data.length)
     throw new Error(
-      `native backend returned ${data.length} values, expected ${prod(serialized.rootShape)} for shape ${showShape(serialized.rootShape)}`
+      `native backend returned ${data.length} values, expected ${offset} for roots [${serialized.rootShapes.map(showShape).join(", ")}]`
     )
-  return makeRaw(data, serialized.rootShape, "float32", "cpu")
+  return true
+}
+
+// Force several lazy tensors, preferring a single multi-root native
+// eval. Falls back to forcing each tensor with the interpreter, whose
+// per-LazyStorage memoization still evaluates shared subgraphs once.
+function forceMany(ts: AnyTensor[]): void {
+  const pending = ts.filter(t => {
+    const storage = t._storage
+    return storage.kind === "lazy" && !storage.cache
+  })
+  if (pending.length === 0) return
+  if (pending.length > 1 && evalNativeMany(pending)) {
+    for (const t of pending) force(t)
+    return
+  }
+  for (const t of pending) force(t)
 }
 
 function withGrad(
@@ -1486,6 +1556,11 @@ export class Tensor<
         "backward() on a tensor that does not require grad"
       )
     let seed: AnyTensor
+    // Lazy symbolic backward: when the output is a lazy graph node,
+    // the whole backward pass is built as lazy expressions and forced
+    // in one multi-root hop instead of materializing the forward and
+    // running the GradNode engine eagerly.
+    const lazyPath = lazyMode && this._storage.kind === "lazy"
     if (gradient) {
       if (!shapesEqual(gradient.shape, this.shape))
         throw new Error(
@@ -1495,7 +1570,8 @@ export class Tensor<
         throw new Error(
           `backward() gradient is on ${gradient.device}, expected ${this.device}`
         )
-      seed = force(gradient as AnyTensor)
+      seed =
+        lazyPath ? (gradient as AnyTensor) : force(gradient as AnyTensor)
     } else {
       if (this.numel !== 1)
         throw new Error(
@@ -1531,14 +1607,10 @@ export class Tensor<
     }
     visit(this)
 
-    // Materialize the forward graph; the GradNode engine
-    // below then runs eagerly on real storages.
-    for (const t of topo) force(t)
-
     const grads = new Map<AnyTensor, AnyTensor>()
     grads.set(this, seed)
 
-    eagerly(() =>
+    const walk = () =>
       noGrad(() => {
         for (let i = topo.length - 1; i >= 0; i--) {
           const t = topo[i]!
@@ -1565,7 +1637,34 @@ export class Tensor<
           }
         }
       })
-    )
+
+    if (lazyPath) {
+      // Build all gradient expressions as lazy nodes — the backward
+      // rules compose public ops, which emit lazy nodes while lazy
+      // mode is on, and capture the lazy forward tensors, so forward
+      // values (e.g. tanh output) are shared subgraphs, not recomputed.
+      // Then materialize every parameter grad in a single multi-root
+      // forcing point (one native FFI hop when native is enabled).
+      walk()
+      // Materialize the whole forward topo plus every parameter grad
+      // in a single multi-root forcing point (one native FFI hop when
+      // native is enabled). The forward tensors are forced too so that
+      // values read after an in-place optimizer step (which mutates
+      // the leaf parameter data) still see pre-step values, matching
+      // eager and phase-1 lazy semantics.
+      forceMany([
+        ...topo,
+        ...topo
+          .filter(t => t.requiresGrad && t.grad)
+          .map(t => t.grad as AnyTensor)
+      ])
+      return
+    }
+
+    // Eager path: materialize the forward graph; the GradNode engine
+    // then runs eagerly on real storages.
+    for (const t of topo) force(t)
+    eagerly(walk)
   }
 
   zeroGrad(): void {

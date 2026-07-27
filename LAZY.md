@@ -61,8 +61,10 @@ What landed:
   and every alias of a tensor sees the materialized result.
 - Forcing points: `data`, `read()`, `item()`/`get()`/`toArray()` (via
   `data`), `toCPU()`, `write()`, `clone()`, `backward()`.
-  `backward()` first forces every tensor in the GradNode topo order, then
-  runs the existing autograd engine unchanged inside `eagerly()`.
+  `backward()` on a lazy loss builds the backward pass as lazy
+  expressions and forces the forward topo plus all parameter grads in
+  one `forceMany` (see phase 2 — lazy symbolic backward); the eager
+  path is unchanged.
 - Disposal: lazy nodes hold no buffers (CPU or GPU) until evaluated; after
   materialization the usual `.dispose()` rules apply.
 - Tests: `test/lazy.test.ts` compares lazy vs eager numerically for
@@ -86,9 +88,11 @@ batched WGSL dispatches.
 
 ## Phase 2 — Rust/candle native backend
 
-Status: implemented (v1). Lazy CPU graphs are evaluated by a
-napi-rs/candle addon in one FFI hop per forcing point; tests green on
-Metal.
+Status: implemented (v2 — multi-root eval + lazy symbolic backward).
+Lazy CPU graphs are evaluated by a napi-rs/candle addon in one FFI
+hop per forcing point; `backward()` on a lazy loss builds the entire
+backward pass as lazy expressions and forces the forward topo plus
+all parameter grads in a single multi-root hop. Tests green on Metal.
 
 What landed:
 
@@ -101,13 +105,42 @@ What landed:
   JS as an external ArrayBuffer, freed by the finalizer).
   Release profile: `lto = true, codegen-units = 1`.
 - Bridge shape: `serializeLazyGraph` in `src/tensor.ts` walks the
-  `LazyNode` tree once, emitting a topological JSON node list with
-  leaves as `{ op: "leaf", leaf, offset, shape }` placeholders plus one
-  concatenated `Float32Array`. Rust rebuilds it with candle ops on the
-  best device (Metal if `Device::new_metal(0)` succeeds, else CPU) and
-  returns f32 bytes. `force()` uses it when lazy mode is on, the graph
-  device is `"cpu"`, and native is enabled — otherwise it falls back to
-  the interpreter (GPU leaves and float64 graphs also fall back).
+  `LazyNode` tree once (memoized on tensor identity, so shared
+  subexpressions serialize as one node), emitting a topological JSON
+  node list with leaves as `{ op: "leaf", leaf, offset, shape }`
+  placeholders plus one concatenated `Float32Array`. Rust rebuilds it
+  with candle ops on the best device (Metal if `Device::new_metal(0)`
+  succeeds, else CPU) and returns f32 bytes. `force()` uses it when
+  lazy mode is on, the graph device is `"cpu"`, and native is enabled
+  — otherwise it falls back to the interpreter (GPU leaves and
+  float64 graphs also fall back).
+- Multi-root eval: the graph JSON carries a `roots` index list
+  (default: last node, so single-root callers are unchanged). Rust
+  evaluates the node list once — nodes shared across roots compute
+  once — and returns all roots as one concatenated f32 buffer, which
+  the TS side slices per root shape (zero-copy subarray views into
+  the external ArrayBuffer). `forceMany(tensors)` in `src/tensor.ts`
+  is the multi-root forcing point: it serializes every pending root
+  into one graph and makes one FFI hop; without native it simply
+  forces each tensor through the interpreter, whose per-`LazyStorage`
+  cache still evaluates shared subgraphs once.
+- Lazy symbolic backward: `backward()` on a lazy loss no longer
+  materializes the forward and re-runs the GradNode engine eagerly.
+  The seed stays a plain ones leaf and the existing reverse-topo
+  GradNode walk runs with lazy mode still on, so the backward rules
+  (which compose public ops — mul/matmul/sumTo/broadcastTo/etc.)
+  build lazy grad expressions whose closures capture the lazy forward
+  tensors. Forward values the grad rules need (e.g. the tanh output)
+  are therefore shared subgraphs, not recomputed. Grad accumulation
+  across steps becomes a lazy `add` node against the previous
+  (materialized) `.grad` leaf; nothing is mutated per-force. Finally
+  `forceMany` materializes the whole forward topo plus every
+  parameter grad in one hop. The forward topo is forced too (not
+  just the grads) so values read after an in-place optimizer step —
+  which mutates leaf parameter data — still see pre-step values,
+  matching eager and phase-1 semantics. Eager mode, and calling
+  `.backward()` on an eager loss while lazy mode is on, take the
+  original code path unchanged.
 - Activation: `useNative()` / `disableNative()` / `isNativeAvailable()`
   / `nativeDevice()` in `src/backends/native.ts`, re-exported from
   `index.ts`. The addon is loaded lazily via `createRequire`, so the
@@ -125,9 +158,14 @@ What landed:
   prefixed `native backend:`.
 - Tests: `test/native.test.ts` — parity vs CPU eager within 1e-4 for
   the same op set as `test/lazy.test.ts` plus batched matmul, argmax,
-  an error-path test, and a full XOR forward (native) + backward +
-  SGD step. Skips gracefully via `describe.skipIf(!isNativeAvailable())`
-  when the binary isn't built.
+  an error-path test, a full XOR forward (native) + backward +
+  SGD step, and gradient parity: lazy-vs-eager and native-vs-eager
+  parameter grads for a matmul/broadcast/reduce/unary chain, the
+  crossEntropy path (tensor and array targets), an XOR training step,
+  grad accumulation across repeated `backward()` calls, and a
+  shared-subexpression multi-root case (`z = x*x` used by two
+  parents). Skips gracefully via
+  `describe.skipIf(!isNativeAvailable())` when the binary isn't built.
 
 Build:
 
@@ -155,43 +193,71 @@ Known limitations:
 - f32 only; float64 and GPU-device lazy graphs silently fall back to
   the CPU/TypeGPU interpreter.
 - The whole graph is re-serialized at every forcing point (no caching
-  of the JSON or of candle tensors across forces).
+  of the JSON or of candle tensors across forces). For training loops
+  this means one serialization + FFI hop per step, ~40–50 µs for a
+  tiny graph — fine, but still ~4x slower than pure eager CPU on
+  graph sizes where the compute itself is microseconds (see the
+  benchmark table). Closing that gap needs structural graph caching
+  across steps or a binary wire format, not more tuning of this path.
+- Small-graph device hint: graphs touching ≤ 65536 elements
+  (`CPU_HINT_MAX_WORK` in `src/tensor.ts`) carry `device: "cpu"` in
+  the graph JSON and evaluate on candle's CPU device even when Metal
+  is available. Metal charges per-kernel dispatch plus a sync per
+  readback (~3 ms for a 32-node training-step graph) while candle
+  CPU evaluates the same graph in ~25 µs; Metal only pays off on
+  large compute-dense graphs.
 - No op fusion; composite grad ops are lowered to several candle
   elementwise kernels.
 - Metal device selection is "first Metal device or CPU"; no way to
-  force CPU short of not enabling native.
+  force CPU short of the small-graph hint or not enabling native.
+
+Data-dependent reads in backward: none. The backward rules only
+compose shape-driven ops. `softmax`/`logSoftmax` detach the max (a
+symbolic op, no data read); `crossEntropy` builds its one-hot mask
+from a plain JS array or via the lazy `oneHot` node; `max`/`argmax`
+do not propagate gradients at all (no GradNode), so no max-mask is
+needed; optimizers read `.data` only after `backward()` has forced
+the grads.
 
 ### Benchmarks
 
 Run with `pnpm vite-node examples/bench.ts` (2026-07-27, Apple M5,
-`nativeDevice()`: metal). Wall time per iteration, fresh leaf tensors
-each iteration so lazy graphs are rebuilt and re-serialized; the timer
+`nativeDevice()`: metal; tiny graphs pinned to candle CPU via the
+device hint). Wall time per iteration, fresh leaf tensors each
+iteration so lazy graphs are rebuilt and re-serialized; the timer
 covers graph build + forcing for the lazy modes. Averages over 3–10
 iterations after 1 warmup.
 
 | Workload | eager CPU | lazy (interpreter) | lazy + native |
 | --- | --- | --- | --- |
-| matmul chain: 10 × ([256,256] @ [256,256]) | 147.5 ms | 146.8 ms | 13.2 ms |
-| matmul chain: 10 × ([512,512] @ [512,512]) | 1213.9 ms | 1192.9 ms | 51.2 ms |
-| elementwise chain: 20 ops on [1024,1024] | 286.0 ms | 291.5 ms | 43.8 ms |
-| XOR MLP train, 200 steps (fwd+bwd+SGD) | 2.8 ms | 1.9 ms | 740.5 ms |
+| matmul chain: 10 × ([256,256] @ [256,256]) | 153.1 ms | 143.0 ms | 13.2 ms |
+| matmul chain: 10 × ([512,512] @ [512,512]) | 1296.5 ms | 1202.3 ms | 56.0 ms |
+| elementwise chain: 20 ops on [1024,1024] | 323.9 ms | 330.2 ms | 46.5 ms |
+| XOR MLP train, 200 steps (fwd+bwd+SGD) | 3.5 ms | 2.8 ms | 6.2 ms |
+
+Previous run (2026-07-27, Apple M5, single-root eval + eager
+backward): 147.5 / 1213.9 / 286.0 / 2.8 ms eager, and **740.5 ms**
+for native XOR — the problem this phase fixed.
 
 Takeaways:
 
 - Native (Metal) wins big on large compute-dense graphs: ~11x on the
-  256² matmul chain, ~23x on 512², ~6.5x on the elementwise chain.
+  256² matmul chain, ~23x on 512², ~7x on the elementwise chain.
   One serialization + FFI hop is easily amortized there.
 - The lazy interpreter alone neither helps nor hurts — it ends up
   running the same CPU typed-array kernels.
-- Native loses badly on the XOR training loop (~300x slower). The
-  graphs are tiny (4×2 inputs), so compute is negligible and the cost
-  is all overhead: `backward()` forces every tensor in the GradNode
-  topo order, and each forcing point re-serializes and re-ships its
-  subgraph across the FFI boundary. Hundreds of hops per step × 200
-  steps dwarfs the ~2 ms of actual math. Expected — see "the whole
-  graph is re-serialized at every forcing point" above. Native pays
-  off for few-force, big-graph workloads, not chatty small-graph
-  training loops.
+- XOR training went from 740.5 ms to 6.2 ms per 200 steps (~120x):
+  `backward()` is now one multi-root hop per step (measured: 1 FFI
+  call per step, ~32 graph nodes) instead of one per topo tensor,
+  and the tiny graph runs on candle CPU instead of paying Metal
+  dispatch + readback overhead (~3 ms/hop).
+- Native is still ~1.8x slower than eager CPU on the XOR loop
+  (~31 µs/step of graph serialization + candle per-op dispatch vs
+  ~13 µs/step for the whole eager step). On micro-graphs eager wins
+  because it has zero per-op overhead; native pays off for
+  few-force, big-graph workloads. Getting to parity would need
+  structural graph caching across steps or a binary wire format —
+  noted as future work, not done here.
 
 ## How to resume
 

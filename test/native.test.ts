@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { Tensor, tensor, configure } from "../src/tensor.ts"
+import { crossEntropy } from "../src/nn.ts"
 import {
   disableNative,
   isNativeAvailable,
@@ -221,6 +222,111 @@ describe.skipIf(!available)("native backend", () => {
     configure({ lazy: true })
     const bad = tensor([0, 5, 1]).oneHot(3)
     expect(() => bad.toArray()).toThrow(/native backend/)
+  })
+
+  it("matches eager gradients for a matmul/broadcast/reduce/unary chain", () => {
+    useNative()
+    const run = () => {
+      const a = tensor([
+        [0.5, -1, 2],
+        [1.5, 0.25, -0.75]
+      ]).requires_grad()
+      const b = tensor([
+        [1, -2],
+        [0.5, 0.5],
+        [-1, 3]
+      ]).requires_grad()
+      const c = tensor([2, -1]).requires_grad()
+      const loss = (a as AnyTensor)
+        .matmul(b)
+        .tanh()
+        .mul(c)
+        .add(0.5)
+        .sigmoid()
+        .sum(0)
+        .log()
+        .sum()
+      loss.backward()
+      return [a, b, c] as AnyTensor[]
+    }
+    const { eager, native } = bothWays(run)
+    eager.forEach((p, i) =>
+      expectClose(p.grad!, native[i]!.grad!)
+    )
+  })
+
+  it("matches eager gradients through crossEntropy", () => {
+    useNative()
+    const run = () => {
+      const logits = tensor([
+        [2, 1, 0.1],
+        [0.5, 1.5, -1],
+        [-0.3, 0.8, 1.2],
+        [1, -1, 0]
+      ]).requires_grad()
+      const loss = crossEntropy(
+        logits as any,
+        tensor([0, 1, 2, 0]) as any
+      )
+      loss.backward()
+      return [logits] as AnyTensor[]
+    }
+    const { eager, native } = bothWays(run)
+    expectClose(eager[0]!.grad!, native[0]!.grad!)
+  })
+
+  it("matches eager gradients for an XOR training step", () => {
+    useNative()
+    const run = () => {
+      const x = tensor([
+        [0, 0],
+        [0, 1],
+        [1, 0],
+        [1, 1]
+      ])
+      const y = tensor([[0], [1], [1], [0]])
+      const w1 = tensor([
+        [0.5, -0.5, 0.25, -0.25],
+        [0.1, 0.2, -0.3, 0.4]
+      ]).requires_grad()
+      const b1 = tensor([
+        0.1, -0.1, 0.05, -0.05
+      ]).requires_grad()
+      const w2 = tensor([
+        [0.6],
+        [-0.6],
+        [0.3],
+        [-0.3]
+      ]).requires_grad()
+      const b2 = tensor([0.2]).requires_grad()
+      const h = x.matmul(w1).add(b1).tanh()
+      const out = h.matmul(w2).add(b2).sigmoid()
+      out.sub(y).pow(2).mean().backward()
+      return [w1, b1, w2, b2] as AnyTensor[]
+    }
+    const { eager, native } = bothWays(run)
+    eager.forEach((p, i) =>
+      expectClose(p.grad!, native[i]!.grad!)
+    )
+  })
+
+  it("evaluates shared subexpressions once across multiple roots", () => {
+    useNative()
+    configure({ lazy: true })
+    const x = tensor([1, 2, 3]).requires_grad()
+    const z = (x as AnyTensor).mul(x) // shared across y, w, and grads
+    const y = z.add(z)
+    const w = z.sum()
+    y.sum().add(w).backward()
+    // loss = 3 * sum(x²) → d/dx = 6x; the forward x*x must be one
+    // node in the serialized graph (dedupe) and every alias must see
+    // the same materialized values.
+    expectClose(
+      tensor([6, 12, 18]) as AnyTensor,
+      x.grad as AnyTensor
+    )
+    expectClose(tensor([1, 4, 9]) as AnyTensor, z as AnyTensor)
+    expectClose(tensor([2, 8, 18]) as AnyTensor, y as AnyTensor)
   })
 })
 
