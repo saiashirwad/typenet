@@ -1216,7 +1216,8 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
 // Force several lazy tensors, preferring a single multi-root native
 // eval. Falls back to forcing each tensor with the interpreter, whose
 // per-LazyStorage memoization still evaluates shared subgraphs once.
-function forceMany(ts: AnyTensor[]): void {
+// Exported for src/optim.ts (optimizer-in-graph forcing point).
+export function forceMany(ts: AnyTensor[]): void {
   const pending = ts.filter(t => {
     const storage = t._storage
     return storage.kind === "lazy" && !storage.cache
@@ -1227,6 +1228,36 @@ function forceMany(ts: AnyTensor[]): void {
     return
   }
   for (const t of pending) force(t)
+}
+
+// --- optimizer in the graph (phase B task 4) ----------------------
+// In lazy mode an optimizer step builds its parameter/state updates
+// as lazy expressions instead of looping over `.data`, forces them in
+// one multi-root hop, and writes the results back into the leaf
+// buffers. During a compile() trace the updates are collected here
+// instead of forced, becoming extra graph roots that replay writes
+// back into the same leaves — the whole training step (forward +
+// backward + optimizer update) is then one graph. Optimizer state
+// (momentum velocities) lives in ordinary CPU leaf tensors carried
+// between steps (the typonet model).
+
+type GraphUpdate = {
+  target: AnyTensor
+  expr: AnyTensor
+}
+
+type UpdateTrace = {
+  updates: GraphUpdate[]
+  // Grad tensors the step consumed — replay materializes them so
+  // `.grad` reads after a compiled step see this step's values.
+  materialize: AnyTensor[]
+}
+
+let updateTrace: UpdateTrace | null = null
+
+// Internal hook for src/optim.ts — not part of the public API.
+export function _activeUpdateTrace(): UpdateTrace | null {
+  return updateTrace
 }
 
 // --- compile(): build once, replay many ---------------------------
@@ -1282,9 +1313,13 @@ type CompiledInput<T extends AnyTensor> =
  *
  * Tracing always happens under lazy semantics regardless of the
  * global `configure({ lazy })` flag, and the flag is restored
- * afterwards. `fn` must be a pure dataflow function of its inputs:
- * forcing points (`.data`, `.item()`, `.backward()`, ...) inside `fn`
- * are unsupported — backward-in-graph is phase B task 4.
+ * afterwards. `fn` must be a pure dataflow function of its inputs
+ * with one exception: a full training step — `loss.backward()` plus
+ * an optimizer `step()` — is traced into the graph, so a compiled
+ * step evaluates forward, backward, and the parameter update in one
+ * pass and writes the updated values back into the parameter (and
+ * optimizer state) buffers on every call. Other forcing points
+ * (`.data`, `.item()`, ...) inside `fn` remain unsupported.
  */
 export function compile<
   Args extends AnyTensor[],
@@ -1299,6 +1334,13 @@ export function compile<
     outputs: AnyTensor[]
     tuple: boolean
     shapes: number[][]
+    // Optimizer updates traced inside fn: on every replay the update
+    // roots are evaluated together with the outputs and written back
+    // into the target leaf buffers (parameters, optimizer state).
+    updates: GraphUpdate[]
+    // Grad tensors to materialize per replay (lazy tensor + its
+    // original storage, so the result can be swapped in like force()).
+    materialize: { t: AnyTensor; storage: LazyStorage }[]
     // Native replay: serialized once at trace time; only the leaf
     // buffer is rebuilt per call from the live leaf tensors.
     native: {
@@ -1336,9 +1378,18 @@ export function compile<
         "cpu"
       )
     })
-    const result = lazily(() =>
-      fn(...(placeholders as Args))
-    )
+    const prevTrace = updateTrace
+    const traced: UpdateTrace = {
+      updates: [],
+      materialize: []
+    }
+    updateTrace = traced
+    let result: unknown
+    try {
+      result = lazily(() => fn(...(placeholders as Args)))
+    } finally {
+      updateTrace = prevTrace
+    }
     const tuple = Array.isArray(result)
     const outputs = (
       tuple ? result : [result]) as AnyTensor[]
@@ -1348,6 +1399,20 @@ export function compile<
           `compile() expected fn to return a Tensor or Tensor[], got ${typeof out} at output ${i}`
         )
     })
+    const updates = traced.updates
+    const materialize = traced.materialize.map(t => {
+      if (t._storage.kind !== "lazy")
+        throw new Error(
+          "compile(): an optimizer step produced a non-lazy gradient — compiled training steps need lazy gradients"
+        )
+      return { t, storage: t._storage }
+    })
+    // Root order: outputs, then update expressions, then grads.
+    const roots = [
+      ...outputs,
+      ...updates.map(u => u.expr),
+      ...materialize.map(m => m.t)
+    ]
     const seen = new Set<AnyTensor>()
     const lazy: State["lazy"] = []
     const walk = (t: AnyTensor) => {
@@ -1360,13 +1425,15 @@ export function compile<
           walk(input)
       }
     }
-    for (const out of outputs) walk(out)
-    const serialized = serializeLazyGraph(outputs)
+    for (const root of roots) walk(root)
+    const serialized = serializeLazyGraph(roots)
     return {
       placeholders,
       outputs,
       tuple,
       shapes: placeholders.map(p => [...p.shape]),
+      updates,
+      materialize,
       native:
         serialized ?
           {
@@ -1431,6 +1498,23 @@ export function compile<
     })
   }
 
+  // Write one evaluated update root back into its target leaf buffer.
+  const applyUpdate = (
+    u: GraphUpdate,
+    values: Float32Array
+  ): void => {
+    const storage = u.target._storage
+    if (storage.kind !== "cpu")
+      throw new Error(
+        "compiled function: an optimizer update target left the CPU — compiled graphs require parameters and optimizer state to stay put"
+      )
+    if (storage.data.length !== values.length)
+      throw new Error(
+        "compiled function: an optimizer update target changed size"
+      )
+    ;(storage.data as Float32Array).set(values)
+  }
+
   const runNative = (state: State): AnyTensor[] => {
     const native = state.native!
     const leaves = new Float32Array(native.leafBytes)
@@ -1450,17 +1534,32 @@ export function compile<
       leaves
     )
     let offset = 0
-    return native.rootShapes.map(shape => {
+    const take = (shape: number[]): Float32Array => {
       const n = prod(shape)
-      const out = makeRaw(
-        data.subarray(offset, offset + n),
-        shape,
+      const view = data.subarray(offset, offset + n)
+      offset += n
+      return view
+    }
+    const outputs = native.rootShapes
+      .slice(0, state.outputs.length)
+      .map(shape =>
+        makeRaw(take(shape), shape, "float32", "cpu")
+      )
+    // Root order: outputs, update expressions, grads (see trace()).
+    for (const u of state.updates)
+      applyUpdate(u, take([...u.expr.shape]))
+    for (const m of state.materialize) {
+      const values = take([...m.t.shape])
+      m.storage.cache = makeRaw(
+        values,
+        [...m.t.shape],
         "float32",
         "cpu"
       )
-      offset += n
-      return out
-    })
+      ;(m.t as { _storage: TensorStorage })._storage =
+        m.storage.cache._storage
+    }
+    return outputs
   }
 
   const runInterpreter = (state: State): AnyTensor[] => {
@@ -1470,7 +1569,13 @@ export function compile<
       storage.cache = null
       ;(t as { _storage: TensorStorage })._storage = storage
     }
-    forceMany(state.outputs)
+    forceMany([
+      ...state.outputs,
+      ...state.updates.map(u => u.expr),
+      ...state.materialize.map(m => m.t)
+    ])
+    for (const u of state.updates)
+      applyUpdate(u, u.expr.data as Float32Array)
     // Fresh tensors sharing this call's result buffers — the next
     // call allocates new buffers, so callers can hold onto these.
     return state.outputs.map(out =>
@@ -1939,13 +2044,17 @@ export class Tensor<
       // native is enabled). The forward tensors are forced too so that
       // values read after an in-place optimizer step (which mutates
       // the leaf parameter data) still see pre-step values, matching
-      // eager and phase-1 lazy semantics.
-      forceMany([
-        ...topo,
-        ...topo
-          .filter(t => t.requiresGrad && t.grad)
-          .map(t => t.grad as AnyTensor)
-      ])
+      // eager and phase-1 lazy semantics. During a compile() trace the
+      // forcing is deferred: the lazy grads stay graph expressions and
+      // the traced optimizer updates (plus the grads themselves) become
+      // extra roots of the compiled graph, materialized on replay.
+      if (!updateTrace)
+        forceMany([
+          ...topo,
+          ...topo
+            .filter(t => t.requiresGrad && t.grad)
+            .map(t => t.grad as AnyTensor)
+        ])
       return
     }
 

@@ -2,6 +2,7 @@ import {
   Linear,
   Module,
   SGD,
+  compile,
   configure,
   disableNative,
   isNativeAvailable,
@@ -20,7 +21,10 @@ import {
 
 function timeIter(
   fn: () => void,
-  { warmup = 2, iters = 5 }: { warmup?: number; iters?: number } = {}
+  {
+    warmup = 2,
+    iters = 5
+  }: { warmup?: number; iters?: number } = {}
 ): number {
   for (let i = 0; i < warmup; i++) fn()
   const t0 = performance.now()
@@ -51,7 +55,8 @@ function elementwiseChain(size: number, ops: number): void {
     () => t.sqrt().add(1),
     () => t.mul(0.5).sub(other.mul(0.01))
   ]
-  for (let i = 0; i < ops; i++) t = unary[i % unary.length]()
+  for (let i = 0; i < ops; i++)
+    t = unary[i % unary.length]()
   void t.data // forcing point
 }
 
@@ -79,7 +84,10 @@ const XOR_Y = tensor([[0], [1], [1], [0]])
 
 function xorTrain(steps: number): number {
   const net = new XorNet()
-  const optim = new SGD(net.parameters(), { lr: 0.5, momentum: 0.9 })
+  const optim = new SGD(net.parameters(), {
+    lr: 0.5,
+    momentum: 0.9
+  })
   let loss = net.forward(XOR_X).sub(XOR_Y).pow(2).mean()
   for (let step = 0; step < steps; step++) {
     const pred = net.forward(XOR_X)
@@ -88,6 +96,30 @@ function xorTrain(steps: number): number {
     loss.backward() // forcing point
     optim.step()
   }
+  return loss.item()
+}
+
+// The whole training step (forward + backward + SGD update) traced
+// once and replayed as one graph — the phase B task 4 path. Replay
+// evaluates everything in a single native hop (or one interpreter
+// pass) and writes updated params/velocities back into the leaves.
+function xorTrainCompiled(steps: number): number {
+  const net = new XorNet()
+  const optim = new SGD(net.parameters(), {
+    lr: 0.5,
+    momentum: 0.9
+  })
+  const step = compile(
+    (x: Tensor<[4, 2]>, y: Tensor<[4, 1]>) => {
+      const loss = net.forward(x).sub(y).pow(2).mean()
+      optim.zeroGrad()
+      loss.backward()
+      optim.step()
+      return loss
+    }
+  )
+  let loss = step(XOR_X, XOR_Y)
+  for (let i = 1; i < steps; i++) loss = step(XOR_X, XOR_Y)
   return loss.item()
 }
 
@@ -161,12 +193,53 @@ for (const w of workloads) {
   const cells = [w.name.padEnd(22)]
   for (const m of modes) {
     m.setup()
-    const ms = timeIter(w.run, { warmup: 1, iters: w.iters })
+    const ms = timeIter(w.run, {
+      warmup: 1,
+      iters: w.iters
+    })
     cells.push(`${ms.toFixed(1)} ms/iter`.padEnd(22))
   }
   console.log(cells.join(""))
   if (w.finalLoss !== undefined)
-    console.log(`  xor final loss (last mode): ${w.finalLoss.toFixed(6)}`)
+    console.log(
+      `  xor final loss (last mode): ${w.finalLoss.toFixed(6)}`
+    )
+}
+
+// Compiled training step (phase B task 4): the whole XOR step —
+// forward, backward, and the SGD update — is one replayed graph.
+for (const mode of [
+  {
+    name: "compiled (interpreter)",
+    setup: () => {
+      configure({ lazy: false })
+      disableNative()
+    }
+  },
+  ...(isNativeAvailable() ?
+    [
+      {
+        name: "compiled + native",
+        setup: () => {
+          configure({ lazy: false })
+          useNative()
+        }
+      }
+    ]
+  : [])
+]) {
+  mode.setup()
+  let finalLoss = 0
+  const ms = timeIter(
+    () => {
+      finalLoss = xorTrainCompiled(200)
+    },
+    { warmup: 1, iters: 3 }
+  )
+  console.log(
+    `${"xor train 200 steps".padEnd(22)}${`${ms.toFixed(1)} ms/iter`.padEnd(22)}  [${mode.name}]`
+  )
+  console.log(`  xor final loss: ${finalLoss.toFixed(6)}`)
 }
 
 configure({ lazy: false })

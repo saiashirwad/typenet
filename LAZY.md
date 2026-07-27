@@ -230,10 +230,18 @@ iterations after 1 warmup.
 
 | Workload | eager CPU | lazy (interpreter) | lazy + native |
 | --- | --- | --- | --- |
-| matmul chain: 10 × ([256,256] @ [256,256]) | 153.1 ms | 143.0 ms | 13.2 ms |
-| matmul chain: 10 × ([512,512] @ [512,512]) | 1296.5 ms | 1202.3 ms | 56.0 ms |
-| elementwise chain: 20 ops on [1024,1024] | 323.9 ms | 330.2 ms | 46.5 ms |
-| XOR MLP train, 200 steps (fwd+bwd+SGD) | 3.5 ms | 2.8 ms | 6.2 ms |
+| matmul chain: 10 × ([256,256] @ [256,256]) | 145.4 ms | 145.9 ms | 13.3 ms |
+| matmul chain: 10 × ([512,512] @ [512,512]) | 1082.8 ms | 1193.9 ms | 49.6 ms |
+| elementwise chain: 20 ops on [1024,1024] | 294.7 ms | 314.0 ms | 42.0 ms |
+| XOR MLP train, 200 steps (fwd+bwd+SGD) | 2.6 ms | 4.3 ms | 11.3 ms |
+| XOR MLP train, 200 steps, compiled (task 4) | — | 2.1 ms | 5.0 ms |
+
+XOR numbers updated 2026-07-27 (Apple M5) after Phase B task 4: the
+lazy-mode `step()` is now itself a graph eval (one extra forcing point
+per step in the un-compiled modes — hence the regression there), and
+the compiled rows replay the whole training step as one graph. The
+previous run (same day, before task 4): 153.1 / 1296.5 / 323.9 /
+3.5 ms eager and 2.8 / 6.2 ms for the lazy XOR modes.
 
 Previous run (2026-07-27, Apple M5, single-root eval + eager
 backward): 147.5 / 1213.9 / 286.0 / 2.8 ms eager, and **740.5 ms**
@@ -251,13 +259,91 @@ Takeaways:
   call per step, ~32 graph nodes) instead of one per topo tensor,
   and the tiny graph runs on candle CPU instead of paying Metal
   dispatch + readback overhead (~3 ms/hop).
-- Native is still ~1.8x slower than eager CPU on the XOR loop
-  (~31 µs/step of graph serialization + candle per-op dispatch vs
-  ~13 µs/step for the whole eager step). On micro-graphs eager wins
-  because it has zero per-op overhead; native pays off for
-  few-force, big-graph workloads. Getting to parity would need
-  structural graph caching across steps or a binary wire format —
-  noted as future work, not done here.
+- Native is still ~2x slower than eager CPU on the un-compiled XOR
+  loop, and task 4 widened that gap (6.2 → 11.3 ms): the in-graph
+  `step()` adds a second serialization + FFI hop per step. The answer
+  for tiny training loops is `compile()` — one cached graph, no
+  re-serialization (see the task 4 section). On micro-graphs eager
+  wins because it has zero per-op overhead; native pays off for
+  few-force, big-graph workloads.
+
+## Phase B task 4 — optimizer updates in the graph
+
+Status: implemented (tests green, interpreter + native paths).
+
+What landed:
+
+- In lazy mode, `SGD.step()` / `Adam.step()` build their parameter
+  updates as lazy graph expressions (`src/optim.ts`) instead of
+  looping over `.data` on CPU: weight decay folds into the grad,
+  momentum velocities / Adam moments live in ordinary CPU leaf
+  tensors owned by the optimizer (the typonet model — state as graph
+  inputs carried between steps), and the new values
+  (`p - lr·v`, `v'`, …) are forced in one multi-root hop and written
+  back into the same leaf buffers in place. Public signatures are
+  unchanged (`step()` stays sync, no arguments), and the eager and
+  GPU paths are byte-identical — the graph path only triggers for
+  CPU float32 params while lazy mode (or a compile trace) is active.
+- `compile()` composes with this: a compiled function may contain
+  the full training step — `opt.zeroGrad(); loss.backward();
+  opt.step(); return loss`. During tracing an update collector
+  (`_activeUpdateTrace` in `src/tensor.ts`) is installed: backward's
+  lazy forcing point is deferred (grads stay graph expressions) and
+  `step()` registers `(target, expr)` update pairs instead of
+  forcing. The update expressions become extra roots of the cached
+  graph, and every replay — native or interpreter — evaluates
+  forward + backward + updates in one pass, writes the update roots
+  back into the parameter/state leaf buffers, and materializes the
+  grad tensors so `.grad` reads after a compiled step see this
+  step's values. Grads never touch a JS-side element loop; the
+  returned loss is the pre-step value (single eval, updates are
+  written back afterwards), matching eager.
+- Post-step read semantics: the compiled step evaluates everything
+  from pre-step leaf values and only then mutates the leaves, which
+  is exactly the invariant the un-compiled lazy path enforces by
+  forcing the forward topo in `backward()` — so post-step reads see
+  pre-step values in both.
+- Tests: `test/optim-graph.test.ts` — lazy SGD (momentum + weight
+  decay) and lazy Adam tracking eager step-by-step over 30 steps
+  (params, grads, and losses within f32 tolerance), an eager-mode
+  step-numerics guard, a compiled 50-step training run matching the
+  eager loss trajectory step-by-step plus final params and grads, a
+  compiled 400-step XOR loop that learns (final loss < 0.05), a
+  clear error for Adam inside `compile()`, and a native-path
+  compiled-step parity test via the `describe.skipIf` pattern.
+- `examples/bench.ts` gained a compiled-XOR section
+  (`xorTrainCompiled` traces the whole step once, then replays).
+
+Benchmark (XOR MLP, 200 steps, 2026-07-27, Apple M5 — see the phase 2
+table): eager CPU 2.6 ms; **compiled (interpreter) 2.1 ms**;
+compiled + native 5.0 ms. The gate (compiled ≤ eager ~3.5 ms) passes
+on the interpreter path; the native path is over it but improved vs
+its 6.2 ms pre-task-4 number. Why native is still slower on this
+micro-graph: the replayed step is ~100 tiny ops and candle charges
+per-op dispatch (~25–50 µs/step total) while eager JS just runs the
+same arithmetic inline; the interpreter replay avoids both the FFI
+hop and serialization, which is why it beats eager. Closing the
+native gap needs graph-level fusion / fewer kernels (Phase D), not
+more plumbing here.
+
+Known limitations:
+
+- Adam inside `compile()` throws: bias correction depends on the
+  host-side step count, which a build-once graph cannot carry (the
+  constants would freeze at trace-time `t`). Un-compiled lazy Adam
+  is unaffected — its graph is rebuilt per step with fresh
+  constants. SGD (incl. momentum, weight decay) works in compiled
+  steps since all its scalars are constant.
+- `zeroGrad()` inside a compiled function runs only at trace time;
+  replay always produces fresh grads (no cross-call accumulation),
+  matching the standard per-step `zeroGrad` idiom.
+- The un-compiled lazy modes pay one extra forcing point per step
+  for the update graph (XOR: interpreter 2.8 → 4.3 ms, native
+  6.2 → 11.3 ms) — the compiled step is the fast path for tiny
+  training loops.
+- Graph-path optimizer state is f32 (eager keeps f64
+  velocities/moments); covered by the step-by-step parity tests
+  within f32 tolerance.
 
 ## Phase B task 3 — `compile()`: build once, replay many
 
@@ -299,11 +385,12 @@ What landed:
   compiled XOR-style forward step (interpreter, plus native parity
   via the `describe.skipIf` pattern).
 
-Known limitations:
+Known limitations (task 3, as landed — see task 4 for the update):
 
-- Forward graphs only: forcing points (`.data`, `.item()`,
-  `.backward()`) inside `fn` are unsupported — they would bake in
-  trace-time values. Task 4 puts backward + optimizer in the graph.
+- Forward graphs only at this point: forcing points (`.data`,
+  `.item()`, `.backward()`) inside `fn` are unsupported — they would
+  bake in trace-time values. Task 4 (above) puts backward +
+  optimizer in the graph.
 - CPU float32 only (same coverage as the native bridge); f64/GPU
   graphs and GPU-captured leaves throw or fall back as before.
 - Captured leaves must stay on the CPU tensors they were traced with
