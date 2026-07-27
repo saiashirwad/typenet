@@ -15,6 +15,7 @@ export {
   configure,
   isLazy,
   compile,
+  printGraph,
   broadcastShapes
 } from "./src/tensor.ts"
 export type {

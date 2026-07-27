@@ -12,7 +12,7 @@ do not care how or when numbers are computed. So we split each op in two:
 1. **Type level (unchanged):** methods in `src/tensor.ts` keep their exact
    signatures; output shapes are still computed by the compiler.
 2. **Runtime (changed):** instead of computing immediately, ops append a node to
-   a lazy graph. Each node records its output *shape* (pure shape math, no data
+   a lazy graph. Each node records its output _shape_ (pure shape math, no data
    touched), so type-level shape and runtime shape stay in sync by construction.
 
 Execution happens only at explicit **forcing points**: `.read()`, `.item()`,
@@ -25,8 +25,8 @@ selection stays the existing `configureTypeGPU`-style init.
 
 ## Vocabulary
 
-- **Lazy graph / scheduler** = the "recipe" layer. Decides *what* to compute and
-  defers *when*. Not a backend.
+- **Lazy graph / scheduler** = the "recipe" layer. Decides _what_ to compute and
+  defers _when_. Not a backend.
 - **Executor / backend** = the "stove" that crunches numbers: CPU typed-array
   kernels, TypeGPU/WebGPU kernels, or (phase 2) Rust/candle.
 - The lazy graph is the **boundary** that makes backends swappable. Phase 1
@@ -228,13 +228,13 @@ iteration so lazy graphs are rebuilt and re-serialized; the timer
 covers graph build + forcing for the lazy modes. Averages over 3–10
 iterations after 1 warmup.
 
-| Workload | eager CPU | lazy (interpreter) | lazy + native |
-| --- | --- | --- | --- |
-| matmul chain: 10 × ([256,256] @ [256,256]) | 145.4 ms | 145.9 ms | 13.3 ms |
-| matmul chain: 10 × ([512,512] @ [512,512]) | 1082.8 ms | 1193.9 ms | 49.6 ms |
-| elementwise chain: 20 ops on [1024,1024] | 294.7 ms | 314.0 ms | 42.0 ms |
-| XOR MLP train, 200 steps (fwd+bwd+SGD) | 2.6 ms | 4.3 ms | 11.3 ms |
-| XOR MLP train, 200 steps, compiled (task 4) | — | 2.1 ms | 5.0 ms |
+| Workload                                    | eager CPU | lazy (interpreter) | lazy + native |
+| ------------------------------------------- | --------- | ------------------ | ------------- |
+| matmul chain: 10 × ([256,256] @ [256,256])  | 145.4 ms  | 145.9 ms           | 13.3 ms       |
+| matmul chain: 10 × ([512,512] @ [512,512])  | 1082.8 ms | 1193.9 ms          | 49.6 ms       |
+| elementwise chain: 20 ops on [1024,1024]    | 294.7 ms  | 314.0 ms           | 42.0 ms       |
+| XOR MLP train, 200 steps (fwd+bwd+SGD)      | 2.6 ms    | 4.3 ms             | 11.3 ms       |
+| XOR MLP train, 200 steps, compiled (task 4) | —         | 2.1 ms             | 5.0 ms        |
 
 XOR numbers updated 2026-07-27 (Apple M5) after Phase B task 4: the
 lazy-mode `step()` is now itself a graph eval (one extra forcing point
@@ -286,7 +286,7 @@ What landed:
   CPU float32 params while lazy mode (or a compile trace) is active.
 - `compile()` composes with this: a compiled function may contain
   the full training step — `opt.zeroGrad(); loss.backward();
-  opt.step(); return loss`. During tracing an update collector
+opt.step(); return loss`. During tracing an update collector
   (`_activeUpdateTrace` in `src/tensor.ts`) is installed: backward's
   lazy forcing point is deferred (grads stay graph expressions) and
   `step()` registers `(target, expr)` update pairs instead of
@@ -399,6 +399,47 @@ Known limitations (task 3, as landed — see task 4 for the update):
 - The interpreter fallback still pays per-op dispatch (no structural
   win there); the native path amortizes to one serialization-free
   FFI hop per call.
+
+## Phase C task 5 — `.named()` + `printGraph()`
+
+Debug ergonomics ported from typonet (its `Graph.names` + `Graph.print()`),
+minus the `yield*` naming mechanism — names attach via a plain method:
+
+```ts
+const h = x.matmul(w).named("h")
+printGraph(loss) // or printGraph([a, b]) for several roots
+```
+
+Output is an SSA-ish listing in topological order, one line per node,
+labels padded for alignment, roots marked:
+
+```
+x    = leaf [2, 3] float32
+w    = leaf [3, 4] float32
+h    = matmul(x, w) [2, 4] float32
+%3   = relu(h) [2, 4] float32
+loss = reduceAll.sum(%3) [] float32 ; root
+```
+
+Design decisions:
+
+- **Names are metadata only.** They live in a module-level
+  `WeakMap<Tensor, string>` in `src/tensor.ts`, never consulted by
+  compute, autograd, or graph serialization. `named(name)` sets the
+  label and returns `this`, so it chains and preserves the tensor's
+  type parameters.
+- **Name survival.** Forcing keeps a tensor's identity (its storage is
+  swapped in place), so a name survives materialization. Names do NOT
+  cross operations that create fresh tensor objects — `detach()`,
+  `clone()`, and `compile()` placeholders start unnamed.
+- **Auto labels.** Unnamed nodes print as `%0`, `%1`, ... in traversal
+  order (post-order DFS from the roots), stable for a given graph.
+- **Eager tensors** have no graph and print as a single `leaf` line —
+  honest, no crash. Since lazy `backward()` forces grads in one
+  multi-root hop, a `.grad` tensor also prints as a leaf; print the
+  loss _before_ calling `backward()` to see the forward graph.
+- **Shared subgraphs** print once; multi-root calls mark each root
+  with `; root`.
 
 ## How to resume
 

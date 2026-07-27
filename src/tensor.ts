@@ -1302,6 +1302,114 @@ type CompiledInput<T extends AnyTensor> =
     Tensor<S, any> | ArrayLike<number>
   : never
 
+// --- debug names + graph printing (phase C task 5) ----------------
+// Names are debug metadata only: a WeakMap from tensor object to
+// label, never consulted by compute, autograd, or serialization.
+// Forcing keeps a tensor's identity (its storage is swapped in
+// place), so a name survives materialization; names do NOT cross
+// detach()/clone()/compile() placeholders, which create fresh tensor
+// objects.
+
+const tensorNames = new WeakMap<AnyTensor, string>()
+
+/**
+ * Dump the lazy graph behind `root` (or several roots) as a readable
+ * SSA-ish listing: one line per node, in topological order, with
+ * inputs, output shape, and dtype. Named tensors (see `.named()`)
+ * print under their name; unnamed nodes get `%0`, `%1`, ... in
+ * traversal order. Shared subgraphs print once. An eager tensor has
+ * no graph and prints as a single `leaf` line.
+ */
+export function printGraph(
+  roots: AnyTensor | AnyTensor[]
+): string {
+  const rootList = Array.isArray(roots) ? roots : [roots]
+  const ids = new Map<AnyTensor, number>()
+  const entries: { t: AnyTensor; node: LazyNode | null }[] =
+    []
+  const visit = (t: AnyTensor): void => {
+    if (ids.has(t)) return
+    let node: LazyNode | null = null
+    if (t._storage.kind === "lazy") {
+      node = t._storage.node
+      for (const input of nodeInputs(node)) visit(input)
+    }
+    ids.set(t, entries.length)
+    entries.push({ t, node })
+  }
+  for (const root of rootList) visit(root)
+  const label = (t: AnyTensor): string =>
+    tensorNames.get(t) ?? `%${ids.get(t)!}`
+  const width = Math.max(
+    1,
+    ...entries.map(({ t }) => label(t).length)
+  )
+  const rootSet = new Set(rootList)
+  return entries
+    .map(({ t, node }) => {
+      const lhs = label(t).padEnd(width)
+      const shape = showShape(t.shape)
+      const tail = `${shape} ${t.dtype}${
+        rootSet.has(t) ? " ; root" : ""
+      }`
+      if (!node) return `${lhs} = leaf ${tail}`
+      const arg = (u: AnyTensor) => label(u)
+      const attrs = (pairs: [string, unknown][]): string =>
+        pairs.length === 0 ?
+          ""
+        : ` {${pairs.map(([k, v]) => `${k}=${v}`).join(", ")}}`
+      const param = (p: number): [string, unknown][] =>
+        p === 0 ? [] : [["parameter", p]]
+      switch (node.op) {
+        case "binary":
+          return `${lhs} = ${node.kind}(${arg(node.a)}, ${arg(node.b)})${attrs(param(node.parameter))} ${tail}`
+        case "unary":
+          return `${lhs} = ${node.kind}(${arg(node.input)})${attrs(param(node.parameter))} ${tail}`
+        case "matmul":
+          return `${lhs} = matmul(${arg(node.a)}, ${arg(node.b)}) ${tail}`
+        case "reduce":
+          return `${lhs} = reduce.${node.kind}(${arg(node.input)})${attrs(
+            [
+              ["dim", node.dim],
+              ...(node.keepdim ?
+                ([["keepdim", node.keepdim]] as [
+                  string,
+                  unknown
+                ][])
+              : [])
+            ]
+          )} ${tail}`
+        case "reduceAll":
+          return `${lhs} = reduceAll.${node.kind}(${arg(node.input)}) ${tail}`
+        case "broadcastTo":
+          return `${lhs} = broadcastTo(${arg(node.input)}) ${tail}`
+        case "permute":
+          return `${lhs} = permute(${arg(node.input)})${attrs(
+            [["order", `[${node.order.join(", ")}]`]]
+          )} ${tail}`
+        case "view":
+          return `${lhs} = view(${arg(node.input)}) ${tail}`
+        case "narrow":
+          return `${lhs} = narrow(${arg(node.input)})${attrs(
+            [
+              ["dim", node.dim],
+              ["start", node.start],
+              ["length", node.length]
+            ]
+          )} ${tail}`
+        case "cat":
+          return `${lhs} = cat(${arg(node.a)}, ${arg(node.b)})${attrs(
+            [["dim", node.dim]]
+          )} ${tail}`
+        case "oneHot":
+          return `${lhs} = oneHot(${arg(node.input)})${attrs(
+            [["classes", node.classes]]
+          )} ${tail}`
+      }
+    })
+    .join("\n")
+}
+
 /**
  * Trace `fn` once and replay the resulting graph on every call.
  *
@@ -1938,6 +2046,14 @@ export class Tensor<
           this.dtype
         )
     return withGrad(t, "clone", [this], g => [g]) as any
+  }
+
+  // Debug label, shown by printGraph(). Metadata only — no effect on
+  // computation, autograd, or graph semantics. Returns `this` so it
+  // chains inside an expression: `x.matmul(w).named("h")`.
+  named(name: string): this {
+    tensorNames.set(this as AnyTensor, name)
+    return this
   }
 
   backward(gradient?: Tensor<S, any>): void {

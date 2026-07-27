@@ -39,7 +39,7 @@ its good ideas graduate here.
   (eager mode, real backends, tsover, dtypes, tests). Maintaining two Tensor
   APIs and two shape algebras is the losing option.
 - **Known tracing limitation (accepted, JAX-style):** data-dependent JS
-  control flow (`if` on tensor *values*) can't be captured in a compiled
+  control flow (`if` on tensor _values_) can't be captured in a compiled
   graph. Shape-dependent control flow is fine — shapes are known at trace time.
 
 ## Phase A — safety net
@@ -63,14 +63,17 @@ Gate: gradcheck green in both modes; negative tests green.
    when native unavailable). No generators:
 
    ```ts
-   const step = compile((x: Tensor<[4,2]>, t: Tensor<[4,1]>) =>
-     ((net.forward(x) - t) ** 2).mean())
-   step(inputData, targetData)  // reuse: swap buffers, one FFI hop
+   const step = compile(
+     (x: Tensor<[4, 2]>, t: Tensor<[4, 1]>) =>
+       ((net.forward(x) - t) ** 2).mean()
+   )
+   step(inputData, targetData) // reuse: swap buffers, one FFI hop
    ```
 
    API details to pin during impl: how params/grads are exposed (return
    grads? auto-step?), cache invalidation honesty, error on shape change
    between calls.
+
 4. **Optimizer updates in the graph.** In lazy/compiled mode,
    `optimizer.step()` appends update nodes (typonet model: momentum/Adam
    state as graph inputs carried between steps) instead of CPU-side `.data`
@@ -109,5 +112,6 @@ scratch files (`examples/basic.ts`, `examples/_gatdsl.ts`,
 - [x] Phase A — gradcheck + negative type tests
 - [x] Phase B task 3 — compile(): build-once replay-many graphs
 - [x] Phase B task 4 — optimizer in graph
-- [ ] Phase C — naming/printing + type hardening
+- [x] Phase C task 5 — .named() + printGraph() graph dumps
+- [ ] Phase C task 6 — type-algebra hardening
 - [ ] Phase D — conditional graph optimization
