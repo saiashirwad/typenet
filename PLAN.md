@@ -113,5 +113,5 @@ scratch files (`examples/basic.ts`, `examples/_gatdsl.ts`,
 - [x] Phase B task 3 — compile(): build-once replay-many graphs
 - [x] Phase B task 4 — optimizer in graph
 - [x] Phase C task 5 — .named() + printGraph() graph dumps
-- [ ] Phase C task 6 — type-algebra hardening
+- [x] Phase C task 6 — type-algebra hardening
 - [ ] Phase D — conditional graph optimization

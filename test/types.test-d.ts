@@ -271,3 +271,88 @@ function _genericDims<
   type _6 = Expect<Equal<typeof two.shape, [N, 16]>>
   return two
 }
+
+// hardening: checks fail open on unresolved generics, so valid generic
+// builders compile — while concrete mismatches inside them still error.
+
+function _genericOuter<
+  N extends number,
+  P extends TensorParams
+>(col: Tensor<[N, 1], P>, row: Tensor<[1, N], any>) {
+  // structural overloads resolve the cross-broadcast to [N, N]
+  const sum = col.add(row)
+  type _1 = Expect<Equal<typeof sum.shape, [N, N]>>
+  const prod = col.mul(row)
+  type _2 = Expect<Equal<typeof prod.shape, [N, N]>>
+  const flipped = row.add(col)
+  type _3 = Expect<Equal<typeof flipped.shape, [N, N]>>
+  return sum
+}
+
+function _genericBatched<
+  B extends number,
+  N extends number,
+  P extends TensorParams
+>(q: Tensor<[B, N, 8], P>, w: Tensor<[8, 16], any>) {
+  const out = q.matmul(w)
+  type _1 = Expect<Equal<typeof out.shape, [B, N, 16]>>
+  const tr = q.transpose(1, 2)
+  type _2 = Expect<Equal<typeof tr.shape, [B, 8, N]>>
+  const s = q.sum(0)
+  type _3 = Expect<Equal<typeof s.shape, [N, 8]>>
+  // cat along a generic dim compiles (the sum N+N stays symbolic)
+  const c = Tensor.cat(q, q, 1)
+  const cc = Tensor.cat(q, q, 2)
+  type _4 = Expect<Equal<typeof cc.shape, [B, N, 16]>>
+  return { out, c }
+}
+
+// fail-open must not weaken concrete checks: mismatches through generic
+// builders still error.
+
+function _genericNegative<
+  N extends number,
+  P extends TensorParams
+>(h: Tensor<[N, 24], P>, q: Tensor<[2, N, 16, 8], P>) {
+  // @ts-expect-error inner dims 24 and 7 disagree
+  h.matmul(zeros([7, 8]))
+
+  // @ts-expect-error [N, 24] and [5] do not broadcast
+  h.add(zeros([5]))
+
+  // @ts-expect-error batch dims 2 and 3 do not broadcast
+  q.matmul(randn([3, N, 8, 16] as [3, N, 8, 16]))
+
+  // @ts-expect-error cat: [N, 24] and [N, 8] differ outside dim 0
+  Tensor.cat(h, zeros([8, 8]), 0)
+
+  return h
+}
+
+import { mseLoss, crossEntropy } from "../src/nn.ts"
+
+// NoInfer pins each repeated inference site to its first occurrence, so a
+// mismatched later argument is checked instead of re-inferring.
+
+function _noInfer<P extends TensorParams>(
+  pred: Tensor<[2, 3], P>,
+  logits: Tensor<[4, 3], P>,
+  badTargets: Tensor<[5], any>
+) {
+  const ok = mseLoss(
+    pred,
+    tensor([
+      [1, 2, 3],
+      [4, 5, 6]
+    ])
+  )
+  type _1 = Expect<Equal<typeof ok.shape, []>>
+
+  // @ts-expect-error target shape must match prediction
+  mseLoss(pred, zeros([2, 4]))
+
+  // @ts-expect-error one target per row: batch is 4, not 5
+  crossEntropy(logits, badTargets)
+
+  return ok
+}

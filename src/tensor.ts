@@ -2185,6 +2185,14 @@ export class Tensor<
   }
 
   add(other: number): Tensor<S, P>
+  add(
+    this: Tensor<[Dim0<S>, 1], P>,
+    other: Tensor<[1, Dim0<S>], any>
+  ): Tensor<[Dim0<S>, Dim0<S>], P>
+  add(
+    this: Tensor<[1, Dim1<S>], P>,
+    other: Tensor<[Dim1<S>, 1], any>
+  ): Tensor<[Dim1<S>, Dim1<S>], P>
   add<S2 extends Shape>(
     other: Tensor<S2, any> & BroadcastCheck<S, S2>
   ): Tensor<Broadcast<S, S2>, P>
@@ -2198,6 +2206,14 @@ export class Tensor<
   }
 
   sub(other: number): Tensor<S, P>
+  sub(
+    this: Tensor<[Dim0<S>, 1], P>,
+    other: Tensor<[1, Dim0<S>], any>
+  ): Tensor<[Dim0<S>, Dim0<S>], P>
+  sub(
+    this: Tensor<[1, Dim1<S>], P>,
+    other: Tensor<[Dim1<S>, 1], any>
+  ): Tensor<[Dim1<S>, Dim1<S>], P>
   sub<S2 extends Shape>(
     other: Tensor<S2, any> & BroadcastCheck<S, S2>
   ): Tensor<Broadcast<S, S2>, P>
@@ -2211,6 +2227,14 @@ export class Tensor<
   }
 
   mul(other: number): Tensor<S, P>
+  mul(
+    this: Tensor<[Dim0<S>, 1], P>,
+    other: Tensor<[1, Dim0<S>], any>
+  ): Tensor<[Dim0<S>, Dim0<S>], P>
+  mul(
+    this: Tensor<[1, Dim1<S>], P>,
+    other: Tensor<[Dim1<S>, 1], any>
+  ): Tensor<[Dim1<S>, Dim1<S>], P>
   mul<S2 extends Shape>(
     other: Tensor<S2, any> & BroadcastCheck<S, S2>
   ): Tensor<Broadcast<S, S2>, P>
@@ -2224,6 +2248,14 @@ export class Tensor<
   }
 
   div(other: number): Tensor<S, P>
+  div(
+    this: Tensor<[Dim0<S>, 1], P>,
+    other: Tensor<[1, Dim0<S>], any>
+  ): Tensor<[Dim0<S>, Dim0<S>], P>
+  div(
+    this: Tensor<[1, Dim1<S>], P>,
+    other: Tensor<[Dim1<S>, 1], any>
+  ): Tensor<[Dim1<S>, Dim1<S>], P>
   div<S2 extends Shape>(
     other: Tensor<S2, any> & BroadcastCheck<S, S2>
   ): Tensor<Broadcast<S, S2>, P>
@@ -2608,10 +2640,6 @@ export class Tensor<
     lhs: number,
     rhs: Tensor<S, P>
   ): Tensor<S, P>
-  [Operator.plus]<S2 extends Shape>(
-    lhs: Tensor<S, P>,
-    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>
-  ): Tensor<Broadcast<S, S2>, P>
   [Operator.plus](
     lhs: Tensor<[Dim0<S>, 1], P>,
     rhs: Tensor<[1, Dim0<S>], any>
@@ -2620,6 +2648,10 @@ export class Tensor<
     lhs: Tensor<[1, Dim1<S>], P>,
     rhs: Tensor<[Dim1<S>, 1], any>
   ): Tensor<[Dim1<S>, Dim1<S>], P>
+  [Operator.plus]<S2 extends Shape>(
+    lhs: Tensor<S, P>,
+    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
   [Operator.plus](lhs: any, rhs: any): any {
     return coerceLhs(lhs, rhs).add(rhs)
   }
@@ -2632,10 +2664,6 @@ export class Tensor<
     lhs: number,
     rhs: Tensor<S, P>
   ): Tensor<S, P>
-  [Operator.minus]<S2 extends Shape>(
-    lhs: Tensor<S, P>,
-    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>
-  ): Tensor<Broadcast<S, S2>, P>
   [Operator.minus](
     lhs: Tensor<[Dim0<S>, 1], P>,
     rhs: Tensor<[1, Dim0<S>], any>
@@ -2644,6 +2672,10 @@ export class Tensor<
     lhs: Tensor<[1, Dim1<S>], P>,
     rhs: Tensor<[Dim1<S>, 1], any>
   ): Tensor<[Dim1<S>, Dim1<S>], P>
+  [Operator.minus]<S2 extends Shape>(
+    lhs: Tensor<S, P>,
+    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
   [Operator.minus](lhs: any, rhs: any): any {
     return coerceLhs(lhs, rhs).sub(rhs)
   }
@@ -2656,10 +2688,6 @@ export class Tensor<
     lhs: number,
     rhs: Tensor<S, P>
   ): Tensor<S, P>
-  [Operator.star]<S2 extends Shape>(
-    lhs: Tensor<S, P>,
-    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>
-  ): Tensor<Broadcast<S, S2>, P>
   [Operator.star](
     lhs: Tensor<[Dim0<S>, 1], P>,
     rhs: Tensor<[1, Dim0<S>], any>
@@ -2668,6 +2696,10 @@ export class Tensor<
     lhs: Tensor<[1, Dim1<S>], P>,
     rhs: Tensor<[Dim1<S>, 1], any>
   ): Tensor<[Dim1<S>, Dim1<S>], P>
+  [Operator.star]<S2 extends Shape>(
+    lhs: Tensor<S, P>,
+    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
   [Operator.star](lhs: any, rhs: any): any {
     return coerceLhs(lhs, rhs).mul(rhs)
   }
@@ -2680,10 +2712,6 @@ export class Tensor<
     lhs: number,
     rhs: Tensor<S, P>
   ): Tensor<S, P>
-  [Operator.slash]<S2 extends Shape>(
-    lhs: Tensor<S, P>,
-    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>
-  ): Tensor<Broadcast<S, S2>, P>
   [Operator.slash](
     lhs: Tensor<[Dim0<S>, 1], P>,
     rhs: Tensor<[1, Dim0<S>], any>
@@ -2692,6 +2720,10 @@ export class Tensor<
     lhs: Tensor<[1, Dim1<S>], P>,
     rhs: Tensor<[Dim1<S>, 1], any>
   ): Tensor<[Dim1<S>, Dim1<S>], P>
+  [Operator.slash]<S2 extends Shape>(
+    lhs: Tensor<S, P>,
+    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
   [Operator.slash](lhs: any, rhs: any): any {
     return coerceLhs(lhs, rhs).div(rhs)
   }

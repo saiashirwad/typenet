@@ -158,9 +158,9 @@ type ChainCheck<L extends readonly unknown[], Prev extends number | undefined = 
   ? LayerIn<H> extends infer I
     ? I extends number
       ? Prev extends number
-        ? DimEq<Prev, I> extends true
-          ? ChainCheck<R, NextDim<H, Prev>>
-          : ErrorMessage<`sequential: layer expects ${I} input features but the previous layer outputs ${Prev}`>
+        ? DimEq<Prev, I> extends false
+          ? ErrorMessage<`sequential: layer expects ${I} input features but the previous layer outputs ${Prev}`>
+          : ChainCheck<R, NextDim<H, Prev>>
         : ChainCheck<R, NextDim<H, Prev>>
       : ChainCheck<R, NextDim<H, Prev>>
     : never
@@ -194,7 +194,7 @@ export function sequential(...layers: Layer<any, any>[]): Sequential<any, any> {
 
 export function mseLoss<S extends Shape, P extends TensorParams>(
   prediction: Tensor<S, P>,
-  target: Tensor<S, any>,
+  target: Tensor<NoInfer<S>, any>,
 ): Tensor<[], P> {
   return (prediction as AnyTensor)
     .sub(target as AnyTensor)
@@ -204,7 +204,7 @@ export function mseLoss<S extends Shape, P extends TensorParams>(
 
 export function crossEntropy<B extends number, C extends number, P extends TensorParams>(
   logits: Tensor<[B, C], P>,
-  targets: readonly number[] | Tensor<[B], any>,
+  targets: readonly number[] | Tensor<[NoInfer<B>], any>,
 ): Tensor<[], P> {
   const l = logits as AnyTensor;
   const [batch, classes] = l.shape as number[];

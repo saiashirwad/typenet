@@ -99,8 +99,9 @@ export type IsValidDim<S extends Shape, D extends number> =
   : false
 
 export type DimCheck<S extends Shape, D extends number> =
-  IsValidDim<S, D> extends true ? unknown
-  : ErrorMessage<`Dimension ${D} is out of range for shape ${ShowShape<S>}`>
+  IsValidDim<S, D> extends false ?
+    ErrorMessage<`Dimension ${D} is out of range for shape ${ShowShape<S>}`>
+  : unknown
 
 type ReplaceAt<
   S extends Shape,
@@ -205,12 +206,28 @@ export type CanBroadcast<A extends Shape, B extends Shape> =
   : IsDynamic<B> extends true ? true
   : CanBroadcastRev<Reverse<A>, Reverse<B>>
 
+/**
+ * Note the direction: `extends false`, not `extends true`.
+ *
+ * Inside a generic function body every predicate on a naked type parameter
+ * *defers* — `IsExact<N, 1>` and `N extends 1` reduce to neither `true` nor
+ * `false`. A check written `CanBroadcast<A,B> extends true ? unknown : Error`
+ * therefore takes the error branch for all generic code, rejecting valid
+ * programs like `[N,1] + [1,N]`.
+ *
+ * Testing for `false` inverts that: a deferred result is not `false` either,
+ * so it falls through to `unknown` and the call is allowed. Concrete
+ * mismatches still reduce to a definite `false` and are caught. The tradeoff
+ * is deliberate — checks are permissive exactly where the compiler has no
+ * information, and strict everywhere it does.
+ */
 export type BroadcastCheck<
   A extends Shape,
   B extends Shape
 > =
-  CanBroadcast<A, B> extends true ? unknown
-  : ErrorMessage<`Cannot broadcast ${ShowShape<A>} with ${ShowShape<B>}`>
+  CanBroadcast<A, B> extends false ?
+    ErrorMessage<`Cannot broadcast ${ShowShape<A>} with ${ShowShape<B>}`>
+  : unknown
 
 export type DimEq<X extends number, Y extends number> =
   IsExact<X, Y> extends true ? true
@@ -243,6 +260,7 @@ export type MatMul<A extends Shape, B extends Shape> =
       Last<B>
     ]
 
+/** Fails open on deferred types, for the reason spelled out on `BroadcastCheck`. */
 export type MatMulCheck<A extends Shape, B extends Shape> =
   IsDynamic<A> extends true ? unknown
   : IsDynamic<B> extends true ? unknown
@@ -250,15 +268,13 @@ export type MatMulCheck<A extends Shape, B extends Shape> =
     ErrorMessage<`matmul requires operands of rank >= 1`>
   : B extends [] ?
     ErrorMessage<`matmul requires operands of rank >= 1`>
-  : DimEq<InnerA<A>, InnerB<B>> extends true ?
-    A["length"] extends 1 ? unknown
-    : B["length"] extends 1 ? unknown
-    : CanBroadcast<BatchDims<A>, BatchDims<B>> extends (
-      true
-    ) ?
-      unknown
-    : ErrorMessage<`matmul: cannot broadcast batch dims of ${ShowShape<A>} with ${ShowShape<B>}`>
-  : ErrorMessage<`matmul: inner dimensions do not match (${ShowShape<A>} @ ${ShowShape<B>})`>
+  : DimEq<InnerA<A>, InnerB<B>> extends false ?
+    ErrorMessage<`matmul: inner dimensions do not match (${ShowShape<A>} @ ${ShowShape<B>})`>
+  : A["length"] extends 1 ? unknown
+  : B["length"] extends 1 ? unknown
+  : CanBroadcast<BatchDims<A>, BatchDims<B>> extends false ?
+    ErrorMessage<`matmul: cannot broadcast batch dims of ${ShowShape<A>} with ${ShowShape<B>}`>
+  : unknown
 
 type ProductSkipNegOne<
   V extends number[],
@@ -333,11 +349,11 @@ export type TransposeCheck<
   D0 extends number,
   D1 extends number
 > =
-  IsValidDim<S, D0> extends true ?
-    IsValidDim<S, D1> extends true ?
-      unknown
-    : ErrorMessage<`Dimension ${D1} is out of range for shape ${ShowShape<S>}`>
-  : ErrorMessage<`Dimension ${D0} is out of range for shape ${ShowShape<S>}`>
+  IsValidDim<S, D0> extends false ?
+    ErrorMessage<`Dimension ${D0} is out of range for shape ${ShowShape<S>}`>
+  : IsValidDim<S, D1> extends false ?
+    ErrorMessage<`Dimension ${D1} is out of range for shape ${ShowShape<S>}`>
+  : unknown
 
 export type Permute<
   S extends Shape,
@@ -372,17 +388,17 @@ export type PermuteCheck<
 > =
   IsDynamic<S> extends true ? unknown
   : Order["length"] extends S["length"] ?
-    AllValidDims<S, Order> extends true ?
-      HasDup<
-        NormalizeDims<S, Order> extends (
-          infer N extends number[]
-        ) ?
-          N
-        : never
-      > extends false ?
-        unknown
-      : ErrorMessage<`permute(${ShowShape<Order>}) repeats a dimension`>
-    : ErrorMessage<`permute(${ShowShape<Order>}) has a dim out of range for ${ShowShape<S>}`>
+    AllValidDims<S, Order> extends false ?
+      ErrorMessage<`permute(${ShowShape<Order>}) has a dim out of range for ${ShowShape<S>}`>
+    : HasDup<
+      NormalizeDims<S, Order> extends (
+        infer N extends number[]
+      ) ?
+        N
+      : never
+    > extends true ?
+      ErrorMessage<`permute(${ShowShape<Order>}) repeats a dimension`>
+    : unknown
   : ErrorMessage<`permute() expects ${S["length"]} dims, got ${Order["length"]}`>
 
 export type Squeeze<
@@ -410,14 +426,14 @@ export type SqueezeDimCheck<
   S extends Shape,
   D extends number
 > =
-  IsValidDim<S, D> extends true ?
-    IsDynamic<S> extends true ? unknown
-    : NormalizeDim<S, D> extends infer I extends number ?
-      number extends I ? unknown
-      : S[I & keyof S] extends 1 ? unknown
-      : ErrorMessage<`Cannot squeeze dim ${D} of ${ShowShape<S>}: size is not 1`>
-    : never
-  : ErrorMessage<`Dimension ${D} is out of range for shape ${ShowShape<S>}`>
+  IsValidDim<S, D> extends false ?
+    ErrorMessage<`Dimension ${D} is out of range for shape ${ShowShape<S>}`>
+  : IsDynamic<S> extends true ? unknown
+  : NormalizeDim<S, D> extends infer I extends number ?
+    number extends I ? unknown
+    : S[I & keyof S] extends 1 ? unknown
+    : ErrorMessage<`Cannot squeeze dim ${D} of ${ShowShape<S>}: size is not 1`>
+  : never
 
 export type Unsqueeze<S extends Shape, D extends number> =
   IsDynamic<S> extends true ? number[]
@@ -448,7 +464,9 @@ export type UnsqueezeCheck<
   ) ?
     number extends I ? unknown
     : `${I}` extends keyof S | `${S["length"]}` ? unknown
-    : ErrorMessage<`Dimension ${D} is out of range for unsqueeze on ${ShowShape<S>}`>
+    : `${I}` extends `${number}` ?
+      ErrorMessage<`Dimension ${D} is out of range for unsqueeze on ${ShowShape<S>}`>
+    : unknown
   : never
 
 export type ReduceDim<
@@ -529,13 +547,14 @@ export type CatCheck<
   IsDynamic<A> extends true ? unknown
   : IsDynamic<B> extends true ? unknown
   : A["length"] extends B["length"] ?
-    IsValidDim<A, D> extends true ?
-      NormalizeDim<A, D> extends infer I extends number ?
-        number extends I ? unknown
-        : EqualExceptAt<A, B, I> extends true ? unknown
-        : ErrorMessage<`cat: shapes ${ShowShape<A>} and ${ShowShape<B>} differ outside dim ${D}`>
-      : never
-    : ErrorMessage<`Dimension ${D} is out of range for shape ${ShowShape<A>}`>
+    IsValidDim<A, D> extends false ?
+      ErrorMessage<`Dimension ${D} is out of range for shape ${ShowShape<A>}`>
+    : NormalizeDim<A, D> extends infer I extends number ?
+      number extends I ? unknown
+      : EqualExceptAt<A, B, I> extends false ?
+        ErrorMessage<`cat: shapes ${ShowShape<A>} and ${ShowShape<B>} differ outside dim ${D}`>
+      : unknown
+    : never
   : ErrorMessage<`cat: tensors must have the same rank (${ShowShape<A>} vs ${ShowShape<B>})`>
 
 export type InferShape<T, Depth extends 1[] = []> =
