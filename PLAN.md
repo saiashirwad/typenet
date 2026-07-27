@@ -106,7 +106,7 @@ scratch files (`examples/basic.ts`, `examples/_gatdsl.ts`,
 - [x] Phase 1: lazy graph (commit 304fe6c)
 - [x] Phase 2: candle native backend (bb1ffa5)
 - [x] Symbolic backward + multi-root eval (0e603d9)
-- [ ] Phase A — gradcheck + negative type tests
+- [x] Phase A — gradcheck + negative type tests
 - [ ] Phase B — compile() + optimizer in graph
 - [ ] Phase C — naming/printing + type hardening
 - [ ] Phase D — conditional graph optimization

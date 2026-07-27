@@ -213,6 +213,36 @@ function _sequential() {
   net.forward(randn([32, 5]))
 }
 
+function _negative() {
+  const a = tensor([
+    [1, 2, 3],
+    [4, 5, 6]
+  ])
+  const b = zeros([3, 4])
+
+  // @ts-expect-error matmul result is [2,4], not [2,5]
+  const badResult: Tensor<[2, 5]> = a.matmul(b)
+
+  // @ts-expect-error .T of [2,3] is [3,2], not [2,3]
+  const badT: Tensor<[2, 3]> = a.T
+
+  const q = randn([2, 4, 16, 8])
+
+  // @ts-expect-error batched matmul: inner dims 8 and 9 disagree
+  q.matmul(randn([2, 4, 9, 16]))
+
+  // @ts-expect-error batch dims [2,4] cannot broadcast with [3,5]
+  q.matmul(randn([3, 5, 8, 16]))
+
+  // @ts-expect-error vec@vec needs matching length
+  randn([8]).matmul(randn([9]))
+
+  // @ts-expect-error trailing dim 5 does not broadcast against 4
+  randn([2, 3, 4]).add(randn([5]))
+
+  return { badResult, badT }
+}
+
 function _genericDims<
   N extends number,
   P extends TensorParams
