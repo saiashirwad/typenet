@@ -966,7 +966,9 @@ function force(t: AnyTensor): AnyTensor {
 // supported natively (GPU leaves, float64) so force() falls back to
 // the interpreter.
 
-type SerializedNode = Record<string, unknown> & { op: string }
+type SerializedNode = Record<string, unknown> & {
+  op: string
+}
 
 // Graphs touching at most this many elements (leaves + intermediate
 // node outputs) are pinned to the candle CPU device via the graph
@@ -977,11 +979,15 @@ function serializeLazyGraph(roots: AnyTensor[]): {
   json: string
   leaves: Float32Array
   rootShapes: number[][]
+  leafTensors: AnyTensor[]
+  leafOffsets: number[]
+  leafBytes: number
 } | null {
   const nodes: SerializedNode[] = []
   const seen = new Map<AnyTensor, number>()
   const leafIds = new Map<AnyTensor, number>()
   const leafData: Float32Array[] = []
+  const leafTensors: AnyTensor[] = []
   const leafOffsets: number[] = []
   let leafCount = 0
   let leafBytes = 0
@@ -1058,7 +1064,11 @@ function serializeLazyGraph(roots: AnyTensor[]): {
         case "broadcastTo": {
           const input = ref(node.input)
           if (input === null) return null
-          body = { op: "broadcastTo", input, shape: node.shape }
+          body = {
+            op: "broadcastTo",
+            input,
+            shape: node.shape
+          }
           break
         }
         case "permute": {
@@ -1095,7 +1105,11 @@ function serializeLazyGraph(roots: AnyTensor[]): {
         case "oneHot": {
           const input = ref(node.input)
           if (input === null) return null
-          body = { op: "oneHot", classes: node.classes, input }
+          body = {
+            op: "oneHot",
+            classes: node.classes,
+            input
+          }
           break
         }
       }
@@ -1109,6 +1123,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
       id = leafCount++
       leafIds.set(t, id)
       leafData.push(t._storage.data as Float32Array)
+      leafTensors.push(t)
       leafOffsets.push(leafBytes)
       leafBytes += t._storage.data.length
       work += t._storage.data.length
@@ -1144,10 +1159,15 @@ function serializeLazyGraph(roots: AnyTensor[]): {
       // Tiny graphs evaluate faster on candle's CPU device: Metal
       // charges ~10µs per kernel dispatch plus a sync per readback,
       // which dominates when the compute itself is microseconds.
-      ...(work <= CPU_HINT_MAX_WORK ? { device: "cpu" } : {})
+      ...(work <= CPU_HINT_MAX_WORK ?
+        { device: "cpu" }
+      : {})
     }),
     leaves,
-    rootShapes
+    rootShapes,
+    leafTensors,
+    leafOffsets,
+    leafBytes
   }
 }
 
@@ -1161,7 +1181,10 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
   if (!nativeBackend.isNativeEnabled()) return false
   for (const t of roots) {
     const storage = t._storage
-    if (storage.kind !== "lazy" || storage.node.device !== "cpu")
+    if (
+      storage.kind !== "lazy" ||
+      storage.node.device !== "cpu"
+    )
       return false
   }
   const serialized = serializeLazyGraph(roots)
@@ -1204,6 +1227,268 @@ function forceMany(ts: AnyTensor[]): void {
     return
   }
   for (const t of pending) force(t)
+}
+
+// --- compile(): build once, replay many ---------------------------
+// compile(fn) traces fn once in lazy mode with placeholder leaves,
+// serializes the graph once, and replays it on each call: the caller's
+// input data is copied into the placeholder leaf buffers and the whole
+// graph is evaluated in one multi-root native hop (interpreter
+// fallback when native is unavailable). Closure-captured tensors
+// (e.g. module parameters) are graph leaves too, read live on every
+// call, so in-place optimizer steps are visible to the compiled fn.
+
+function lazily<T>(fn: () => T): T {
+  const prev = lazyMode
+  lazyMode = true
+  try {
+    return fn()
+  } finally {
+    lazyMode = prev
+  }
+}
+
+function nodeInputs(node: LazyNode): AnyTensor[] {
+  switch (node.op) {
+    case "binary":
+    case "matmul":
+    case "cat":
+      return [node.a, node.b]
+    case "unary":
+    case "reduce":
+    case "reduceAll":
+    case "broadcastTo":
+    case "permute":
+    case "view":
+    case "narrow":
+    case "oneHot":
+      return [node.input]
+  }
+}
+
+type CompiledInput<T extends AnyTensor> =
+  T extends Tensor<infer S, any> ?
+    Tensor<S, any> | ArrayLike<number>
+  : never
+
+/**
+ * Trace `fn` once and replay the resulting graph on every call.
+ *
+ * The first call must pass CPU float32 tensors (their shapes/dtype
+ * pin the traced graph); later calls may pass either tensors of the
+ * same shape or flat `ArrayLike<number>` buffers of matching length.
+ * Calling with a different argument count, shape, or dtype throws —
+ * compiled graphs are shape-stable, recompile for a new shape.
+ *
+ * Tracing always happens under lazy semantics regardless of the
+ * global `configure({ lazy })` flag, and the flag is restored
+ * afterwards. `fn` must be a pure dataflow function of its inputs:
+ * forcing points (`.data`, `.item()`, `.backward()`, ...) inside `fn`
+ * are unsupported — backward-in-graph is phase B task 4.
+ */
+export function compile<
+  Args extends AnyTensor[],
+  R extends AnyTensor | AnyTensor[]
+>(
+  fn: (...args: Args) => R
+): (
+  ...inputs: { [K in keyof Args]: CompiledInput<Args[K]> }
+) => R {
+  type State = {
+    placeholders: AnyTensor[]
+    outputs: AnyTensor[]
+    tuple: boolean
+    shapes: number[][]
+    // Native replay: serialized once at trace time; only the leaf
+    // buffer is rebuilt per call from the live leaf tensors.
+    native: {
+      json: string
+      leafTensors: AnyTensor[]
+      leafOffsets: number[]
+      leafBytes: number
+      rootShapes: number[][]
+    } | null
+    // Interpreter replay: every lazy tensor in the traced graph with
+    // its original storage, so caches can be reset between calls.
+    lazy: { t: AnyTensor; storage: LazyStorage }[]
+  }
+  let state: State | null = null
+
+  const trace = (inputs: readonly unknown[]): State => {
+    const placeholders = inputs.map((input, i) => {
+      if (!(input instanceof Tensor))
+        throw new Error(
+          `compile() traces on the first call, so argument ${i} must be a Tensor (later calls may pass flat buffers)`
+        )
+      const t = force(input as AnyTensor)
+      if (
+        t._storage.kind !== "cpu" ||
+        t.dtype !== "float32"
+      )
+        throw new Error(
+          `compile() only supports CPU float32 inputs, argument ${i} is ${t.dtype} on ${t.device}`
+        )
+      // Own copy of the data: replay mutates this buffer per call.
+      return makeRaw(
+        (t._storage.data as Float32Array).slice(),
+        t.shape,
+        "float32",
+        "cpu"
+      )
+    })
+    const result = lazily(() =>
+      fn(...(placeholders as Args))
+    )
+    const tuple = Array.isArray(result)
+    const outputs = (
+      tuple ? result : [result]) as AnyTensor[]
+    outputs.forEach((out, i) => {
+      if (!(out instanceof Tensor))
+        throw new Error(
+          `compile() expected fn to return a Tensor or Tensor[], got ${typeof out} at output ${i}`
+        )
+    })
+    const seen = new Set<AnyTensor>()
+    const lazy: State["lazy"] = []
+    const walk = (t: AnyTensor) => {
+      if (seen.has(t)) return
+      seen.add(t)
+      if (t._storage.kind === "lazy") {
+        const storage = t._storage
+        lazy.push({ t, storage })
+        for (const input of nodeInputs(storage.node))
+          walk(input)
+      }
+    }
+    for (const out of outputs) walk(out)
+    const serialized = serializeLazyGraph(outputs)
+    return {
+      placeholders,
+      outputs,
+      tuple,
+      shapes: placeholders.map(p => [...p.shape]),
+      native:
+        serialized ?
+          {
+            json: serialized.json,
+            leafTensors: serialized.leafTensors,
+            leafOffsets: serialized.leafOffsets,
+            leafBytes: serialized.leafBytes,
+            rootShapes: serialized.rootShapes
+          }
+        : null,
+      lazy
+    }
+  }
+
+  const swapInputs = (
+    state: State,
+    inputs: readonly unknown[]
+  ): void => {
+    if (inputs.length !== state.placeholders.length)
+      throw new Error(
+        `compiled function expected ${state.placeholders.length} arguments, got ${inputs.length}`
+      )
+    inputs.forEach((input, i) => {
+      const storage = state.placeholders[i]!._storage
+      const buffer = (storage as CpuStorage)
+        .data as Float32Array
+      if (input instanceof Tensor) {
+        const t = force(input as AnyTensor)
+        if (t._storage.kind !== "cpu")
+          throw new Error(
+            `compiled function argument ${i}: expected a CPU tensor, got ${t.device}`
+          )
+        if (t.dtype !== "float32")
+          throw new Error(
+            `compiled function argument ${i}: expected float32, got ${t.dtype}`
+          )
+        if (!shapesEqual(t.shape, state.shapes[i]!))
+          throw new Error(
+            `compiled function argument ${i}: expected shape ${showShape(state.shapes[i]!)}, got ${showShape(t.shape)} — compiled graphs are shape-stable, recompile for a new shape`
+          )
+        buffer.set(t._storage.data as Float32Array)
+      } else if (
+        input != null &&
+        typeof (input as ArrayLike<number>).length ===
+          "number"
+      ) {
+        if (
+          (input as ArrayLike<number>).length !==
+          buffer.length
+        )
+          throw new Error(
+            `compiled function argument ${i}: expected ${buffer.length} values for shape ${showShape(state.shapes[i]!)}, got ${(input as ArrayLike<number>).length}`
+          )
+        buffer.set(
+          Array.from(input as ArrayLike<number>, Number)
+        )
+      } else {
+        throw new Error(
+          `compiled function argument ${i}: expected a Tensor or flat ArrayLike<number>`
+        )
+      }
+    })
+  }
+
+  const runNative = (state: State): AnyTensor[] => {
+    const native = state.native!
+    const leaves = new Float32Array(native.leafBytes)
+    native.leafTensors.forEach((leaf, i) => {
+      const storage = leaf._storage
+      if (storage.kind !== "cpu")
+        throw new Error(
+          "compiled function: a captured tensor left the CPU — compiled graphs require captured leaves (e.g. parameters) to stay put"
+        )
+      leaves.set(
+        storage.data as Float32Array,
+        native.leafOffsets[i]!
+      )
+    })
+    const data = nativeBackend.evalGraphNative(
+      native.json,
+      leaves
+    )
+    let offset = 0
+    return native.rootShapes.map(shape => {
+      const n = prod(shape)
+      const out = makeRaw(
+        data.subarray(offset, offset + n),
+        shape,
+        "float32",
+        "cpu"
+      )
+      offset += n
+      return out
+    })
+  }
+
+  const runInterpreter = (state: State): AnyTensor[] => {
+    // Reset every traced lazy tensor so the graph re-evaluates with
+    // the swapped leaf data instead of serving stale caches.
+    for (const { t, storage } of state.lazy) {
+      storage.cache = null
+      ;(t as { _storage: TensorStorage })._storage = storage
+    }
+    forceMany(state.outputs)
+    // Fresh tensors sharing this call's result buffers — the next
+    // call allocates new buffers, so callers can hold onto these.
+    return state.outputs.map(out =>
+      makeRaw(out.data, out.shape, out.dtype, "cpu")
+    )
+  }
+
+  return ((...inputs: readonly unknown[]) => {
+    if (!state) state = trace(inputs)
+    swapInputs(state, inputs)
+    const outputs =
+      state.native && nativeBackend.isNativeEnabled() ?
+        runNative(state)
+      : runInterpreter(state)
+    return (state.tuple ? outputs : outputs[0]) as R
+  }) as (
+    ...inputs: { [K in keyof Args]: CompiledInput<Args[K]> }
+  ) => R
 }
 
 function withGrad(
@@ -1560,7 +1845,8 @@ export class Tensor<
     // the whole backward pass is built as lazy expressions and forced
     // in one multi-root hop instead of materializing the forward and
     // running the GradNode engine eagerly.
-    const lazyPath = lazyMode && this._storage.kind === "lazy"
+    const lazyPath =
+      lazyMode && this._storage.kind === "lazy"
     if (gradient) {
       if (!shapesEqual(gradient.shape, this.shape))
         throw new Error(
@@ -1571,7 +1857,9 @@ export class Tensor<
           `backward() gradient is on ${gradient.device}, expected ${this.device}`
         )
       seed =
-        lazyPath ? (gradient as AnyTensor) : force(gradient as AnyTensor)
+        lazyPath ?
+          (gradient as AnyTensor)
+        : force(gradient as AnyTensor)
     } else {
       if (this.numel !== 1)
         throw new Error(

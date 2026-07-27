@@ -259,6 +259,60 @@ Takeaways:
   structural graph caching across steps or a binary wire format —
   noted as future work, not done here.
 
+## Phase B task 3 — `compile()`: build once, replay many
+
+Status: implemented (tests green, interpreter + native paths).
+
+What landed:
+
+- `compile(fn)` in `src/tensor.ts`, re-exported from `index.ts`. The
+  first call traces `fn` once under lazy semantics (regardless of the
+  global `configure({ lazy })` flag, which is restored afterwards)
+  with placeholder leaf tensors, serializes the graph once via
+  `serializeLazyGraph`, and caches it. Generic over `fn`'s parameter
+  and return types, so input/output shapes are preserved at the type
+  level; existing signatures untouched.
+- Replay: each call copies the caller's input data into the
+  placeholder leaf buffers and evaluates the whole graph once. With
+  native enabled that's one multi-root FFI hop — the cached JSON is
+  reused and only the concatenated leaf buffer is rebuilt per call
+  from the live leaf tensors (`serializeLazyGraph` now also returns
+  the leaf tensor list, offsets, and byte count). Without native, the
+  traced lazy tensors' caches are reset and `forceMany` re-evaluates
+  through the interpreter.
+- Closure-captured tensors (module parameters) are ordinary graph
+  leaves read live on every call, so in-place optimizer `step()`
+  updates are visible to the compiled function. Grads are not
+  exposed — backward/optimizer-in-graph is task 4.
+- Inputs: the trace (first) call must pass CPU float32 tensors so
+  shapes are pinned; later calls may pass same-shape tensors or flat
+  `ArrayLike<number>` buffers. `fn` may return a single tensor or a
+  tuple.
+- Cache invalidation honesty: wrong argument count, shape, or dtype
+  on any call throws a clear error ("compiled graphs are
+  shape-stable, recompile for a new shape"). Results are fresh
+  tensors per call — earlier results are never clobbered.
+- Tests: `test/compile.test.ts` — eager parity for a
+  matmul/unary/reduce graph, replay with swapped tensor and flat
+  buffer data, multiple outputs, in-place parameter updates, the
+  three error paths, tracing under a flipped global lazy flag, and a
+  compiled XOR-style forward step (interpreter, plus native parity
+  via the `describe.skipIf` pattern).
+
+Known limitations:
+
+- Forward graphs only: forcing points (`.data`, `.item()`,
+  `.backward()`) inside `fn` are unsupported — they would bake in
+  trace-time values. Task 4 puts backward + optimizer in the graph.
+- CPU float32 only (same coverage as the native bridge); f64/GPU
+  graphs and GPU-captured leaves throw or fall back as before.
+- Captured leaves must stay on the CPU tensors they were traced with
+  — moving a parameter to GPU after compiling throws on the native
+  path.
+- The interpreter fallback still pays per-op dispatch (no structural
+  win there); the native path amortizes to one serialization-free
+  FFI hop per call.
+
 ## How to resume
 
 1. `git checkout lazy-native`

@@ -14,6 +14,7 @@ export {
   noGrad,
   configure,
   isLazy,
+  compile,
   broadcastShapes
 } from "./src/tensor.ts"
 export type {
