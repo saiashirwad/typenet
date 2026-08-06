@@ -6,8 +6,6 @@ import {
   noGrad
 } from "./tensor.ts"
 import type { Tensor as TensorType } from "./tensor.ts"
-import * as typegpuBackend from "./backends/typegpu.ts"
-import type { TypeGPUStorage } from "./backends/typegpu.ts"
 
 type AnyTensor = TensorType<any, any>
 
@@ -40,11 +38,10 @@ function finishGraphUpdates(
 
 // The in-graph path covers CPU float32 parameters in lazy mode (or a
 // compile() trace, which traces under lazy semantics); everything else
-// keeps the original eager/GPU loops.
+// keeps the original eager loops.
 function useGraphStep(p: AnyTensor): boolean {
   return (
     (_activeUpdateTrace() !== null || isLazy()) &&
-    p.device === "cpu" &&
     p.dtype === "float32"
   )
 }
@@ -77,8 +74,7 @@ export class SGD extends Optimizer {
   private readonly lr: number
   private readonly momentum: number
   private readonly weightDecay: number
-  private velocities:
-    (Float64Array | TypeGPUStorage)[] | null = null
+  private velocities: Float64Array[] | null = null
   // Momentum state for the in-graph path: plain CPU leaf tensors whose
   // buffers the update graph reads and rewrites on every step.
   private graphVelocities: AnyTensor[] | null = null
@@ -92,14 +88,8 @@ export class SGD extends Optimizer {
 
   step(): void {
     if (this.momentum > 0 && !this.velocities)
-      this.velocities = this.params.map(p =>
-        p.device === "gpu" ?
-          typegpuBackend.fill(
-            (p._storage as TypeGPUStorage).root,
-            p.numel,
-            0
-          )
-        : new Float64Array(p.numel)
+      this.velocities = this.params.map(
+        p => new Float64Array(p.numel)
       )
     const updates: GraphUpdate[] = []
     const grads: AnyTensor[] = []
@@ -131,19 +121,6 @@ export class SGD extends Optimizer {
           grads.push(g)
           return
         }
-        if (p.device === "gpu") {
-          typegpuBackend.sgdStep(
-            p._storage as TypeGPUStorage,
-            g._storage as TypeGPUStorage,
-            this.momentum > 0 ?
-              (this.velocities![pi] as TypeGPUStorage)
-            : null,
-            this.lr,
-            this.momentum,
-            this.weightDecay
-          )
-          return
-        }
         const data = p.data
         const gd = g.data
         for (let i = 0; i < data.length; i++) {
@@ -151,7 +128,7 @@ export class SGD extends Optimizer {
           if (this.weightDecay !== 0)
             grad += this.weightDecay * data[i]!
           if (this.momentum > 0) {
-            const v = this.velocities![pi]! as Float64Array
+            const v = this.velocities![pi]!
             v[i] = this.momentum * v[i]! + grad
             grad = v[i]!
           }
@@ -164,9 +141,6 @@ export class SGD extends Optimizer {
   }
 
   override dispose(): void {
-    for (const velocity of this.velocities ?? [])
-      if (!(velocity instanceof Float64Array))
-        typegpuBackend.dispose(velocity)
     this.velocities = null
   }
 }
@@ -185,8 +159,8 @@ export class Adam extends Optimizer {
   private readonly eps: number
   private readonly weightDecay: number
   private t = 0
-  private m: (Float64Array | TypeGPUStorage)[]
-  private v: (Float64Array | TypeGPUStorage)[]
+  private m: Float64Array[]
+  private v: Float64Array[]
   // First/second moments for the in-graph path, as CPU leaf tensors.
   private graphM: AnyTensor[] | null = null
   private graphV: AnyTensor[] | null = null
@@ -202,24 +176,8 @@ export class Adam extends Optimizer {
     ]
     this.eps = options.eps ?? 1e-8
     this.weightDecay = options.weightDecay ?? 0
-    this.m = params.map(p =>
-      p.device === "gpu" ?
-        typegpuBackend.fill(
-          (p._storage as TypeGPUStorage).root,
-          p.numel,
-          0
-        )
-      : new Float64Array(p.numel)
-    )
-    this.v = params.map(p =>
-      p.device === "gpu" ?
-        typegpuBackend.fill(
-          (p._storage as TypeGPUStorage).root,
-          p.numel,
-          0
-        )
-      : new Float64Array(p.numel)
-    )
+    this.m = params.map(p => new Float64Array(p.numel))
+    this.v = params.map(p => new Float64Array(p.numel))
   }
 
   step(): void {
@@ -271,26 +229,10 @@ export class Adam extends Optimizer {
           grads.push(g)
           return
         }
-        if (p.device === "gpu") {
-          typegpuBackend.adamStep(
-            p._storage as TypeGPUStorage,
-            g._storage as TypeGPUStorage,
-            this.m[pi]! as TypeGPUStorage,
-            this.v[pi]! as TypeGPUStorage,
-            this.lr,
-            this.beta1,
-            this.beta2,
-            this.eps,
-            this.weightDecay,
-            bc1,
-            bc2
-          )
-          return
-        }
         const data = p.data
         const gd = g.data
-        const m = this.m[pi]! as Float64Array
-        const v = this.v[pi]! as Float64Array
+        const m = this.m[pi]!
+        const v = this.v[pi]!
         for (let i = 0; i < data.length; i++) {
           let grad = gd[i]!
           if (this.weightDecay !== 0)
@@ -312,9 +254,6 @@ export class Adam extends Optimizer {
   }
 
   override dispose(): void {
-    for (const state of [...this.m, ...this.v])
-      if (!(state instanceof Float64Array))
-        typegpuBackend.dispose(state)
     this.m = []
     this.v = []
   }

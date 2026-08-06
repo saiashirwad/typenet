@@ -197,10 +197,10 @@ describe("lazy mode", () => {
     expect(out.toArray()).toEqual([11, 22, 33])
   })
 
-  it("forces at read() and item()", async () => {
+  it("forces at data and item()", () => {
     configure({ lazy: true })
     const a = tensor([2, 3]).mul(4)
-    expect(await a.read()).toEqual(
+    expect(a.data).toEqual(
       Float32Array.from([8, 12])
     )
     const s = tensor([5]).add(1)

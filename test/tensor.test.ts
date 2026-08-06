@@ -263,7 +263,7 @@ describe("stack / cat", () => {
   })
 })
 
-describe("dtype / device tags", () => {
+describe("dtype tags", () => {
   it("to(float64) converts storage", () => {
     const t = tensor([1.5]).to("float64")
     expect(t.data).toBeInstanceOf(Float64Array)
@@ -275,19 +275,5 @@ describe("dtype / device tags", () => {
       .to("float64")
       .add(tensor([2]))
     expect(out.dtype).toBe("float64")
-  })
-
-  it("supports backend-neutral writes and async CPU reads", async () => {
-    const t = zeros([3]).write([1, 2, 3])
-    expect(Array.from(await t.read())).toEqual([1, 2, 3])
-  })
-
-  it("requires TypeGPU configuration and rejects float64 upload", () => {
-    expect(() => tensor([1]).gpu()).toThrow(
-      /TypeGPU is not configured/
-    )
-    expect(() => tensor([1]).to("float64").gpu()).toThrow(
-      /does not support float64/
-    )
   })
 })

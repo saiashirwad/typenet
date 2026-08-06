@@ -148,7 +148,6 @@ function _tensors() {
         [2, 3],
         {
           requires_grad: true
-          device: "cpu"
           dtype: "float32"
         }
       >
@@ -163,7 +162,6 @@ function _tensors() {
         [2, 3],
         {
           requires_grad: false
-          device: "cpu"
           dtype: "float64"
         }
       >

@@ -20,7 +20,6 @@ export {
 } from "./src/tensor.ts"
 export type {
   DType,
-  Device,
   TensorParams,
   DefaultParams,
   ShapeOf,
@@ -48,18 +47,12 @@ export type {
   AdamOptions
 } from "./src/optim.ts"
 export {
-  configureTypeGPU,
-  initTypeGPU,
-  clearTypeGPU
-} from "./src/typegpu.ts"
-export {
   useNative,
   disableNative,
   isNativeEnabled,
   isNativeAvailable,
   nativeDevice
 } from "./src/backends/native.ts"
-export type { TgpuRoot } from "typegpu"
 
 export type {
   Shape,

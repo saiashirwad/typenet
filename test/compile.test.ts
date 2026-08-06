@@ -83,11 +83,10 @@ describe("compile (interpreter)", () => {
     const w2 = tensor(wData).mul(2)
     expectClose(forwardEager(x2, w2), compiled(x2, w2))
     const x3 = Float32Array.of(1, 1, 1, 1, 1, 1)
+    const x3Tensor = Tensor.zeros([3, 2])
+    x3Tensor.data.set(x3)
     expectClose(
-      forwardEager(
-        Tensor.zeros([3, 2]).write(x3),
-        tensor(wData)
-      ),
+      forwardEager(x3Tensor, tensor(wData)),
       compiled(x3, tensor(wData))
     )
     // Earlier results are not clobbered by later calls.
@@ -116,7 +115,7 @@ describe("compile (interpreter)", () => {
     )
     const x = tensor(xData)
     const before = compiled(x).item()
-    w.write(tensor(wData).mul(2).data)
+    w.data.set(tensor(wData).mul(2).data)
     const after = compiled(x).item()
     expect(after).toBeCloseTo(2 * before, 4)
   })
@@ -173,7 +172,7 @@ describe("compile (interpreter)", () => {
       .map(
         (p, i) => [p, compiledNet.parameters()[i]!] as const
       ))
-      q.write(p.data)
+      q.data.set(p.data)
     const x = tensor([
       [0, 0],
       [0, 1],
@@ -188,9 +187,9 @@ describe("compile (interpreter)", () => {
     expectClose(mseLoss(eagerNet.forward(x), t), loss)
     // Replay after an in-place parameter nudge tracks eager.
     for (const p of compiledNet.parameters())
-      p.write(p.data.map(v => v * 0.9))
+      p.data.set(p.data.map(v => v * 0.9))
     for (const p of eagerNet.parameters())
-      p.write(p.data.map(v => v * 0.9))
+      p.data.set(p.data.map(v => v * 0.9))
     expectClose(mseLoss(eagerNet.forward(x), t), step(x, t))
   })
 })

@@ -2,9 +2,9 @@
 
 Type-safe tensor arithmetic for TypeScript. Shapes are tracked in the type system — broadcasting, matmul, reshapes and reductions are all checked at compile time.
 
-Includes autograd, layers, optimizers, and an optional WebGPU backend.
+Includes autograd, layers, and optimizers.
 
-Operators (`+ - * / **`) work on tensors via [tsover](https://tsover.swmansion.com), a TypeScript fork with operator overloading. The WebGPU backend is built on [TypeGPU](https://typegpu.com).
+Operators (`+ - * / **`) work on tensors via [tsover](https://tsover.swmansion.com), a TypeScript fork with operator overloading.
 
 ```ts
 "use tsover"
@@ -64,8 +64,6 @@ More in `examples/`:
 pnpm example:xor      # MLP learns XOR, MSE + SGD
 pnpm example:spiral   # 3-class spiral, crossEntropy + Adam
 pnpm example:gat      # graph attention network
-pnpm example:dawn     # WebGPU compute in Node through Dawn
-pnpm example:xor:dawn # XOR trained on GPU tensors in Node
 ```
 
 ## What the type system tracks
@@ -75,7 +73,6 @@ pnpm example:xor:dawn # XOR trained on GPU tensors in Node
 | shape           | tuple of literals: `Tensor<[32, 784]>`                             |
 | dynamic dims    | `number` is a wildcard: `Tensor<[number, 784]>` takes any batch    |
 | dtype           | `"float32"` (default) or `"float64"`, via `.to("float64")`         |
-| device          | `"cpu"` typed arrays or `"gpu"` TypeGPU storage                    |
 | `requires_grad` | `.requires_grad()` flips the type-level flag and enables autograd  |
 
 The shape algebra lives in `src/shape.ts` (types only): `Broadcast`, `MatMul` (dot, mat-vec, vec-mat, batched), `ResolveView` (reshape with `-1`), `Transpose`/`Permute`/`Squeeze`/`Unsqueeze`, `ReduceDim`, `Stack`, `Cat`. Errors say what went wrong: `Cannot view tensor of shape [2, 3] as [7, 2] (6 vs 14 elements)`.
@@ -102,32 +99,6 @@ x.grad // Tensor<[2]>
 ```
 
 Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, `matmul`, reductions, and shape ops; broadcasts are reduced correctly. `noGrad(fn)` disables taping, `.detach()` cuts the graph. Every gradient is checked against finite differences in `test/autograd.test.ts`.
-
-## WebGPU
-
-Initialize once, move tensors and modules over synchronously, await only when data comes back:
-
-```ts
-import { initTypeGPU, tensor, Linear, SGD } from "typenet"
-
-const root = await initTypeGPU()
-const x = tensor([[1, 2], [3, 4]]).gpu()
-const net = new Linear(2, 1).gpu()
-const optim = new SGD(net.parameters(), { lr: 0.01 })
-
-const loss = net.forward(x).pow(2).mean() // queues GPU work
-loss.backward()
-optim.step()
-
-console.log(await loss.read()) // Float32Array
-
-optim.dispose()
-root.destroy()
-```
-
-If you already own a TypeGPU root, pass it to `configureTypeGPU(root)`. GPU tensors expose `read()`, `toCPU()`, `write()`, `dispose()`; synchronous host access throws, since WebGPU readback is async. `float64` is rejected on GPU (WebGPU has no f64) rather than silently downcast.
-
-The Dawn examples run the same backend headless in Node via the [`webgpu`](https://www.npmjs.com/package/webgpu) package. Dawn is a dev-only dependency of the examples.
 
 ## API sketch
 
@@ -159,7 +130,6 @@ new Adam(params, { lr?, betas?, eps?, weightDecay? })
 
 // data out
 a.item(); a.get(1, 2); a.toArray() // NestedArray<S>, typed nesting depth
-await gpuTensor.read(); await gpuTensor.toCPU()
 ```
 
 ## Development
@@ -169,8 +139,6 @@ pnpm install
 pnpm test        # vitest: runtime, operators, numerical grad checks
 pnpm typecheck   # tsover's tsc, includes test/types.test-d.ts
 ```
-
-Browser GPU parity harness: `pnpm exec vite`, open `/test/gpu.html` in a WebGPU-capable browser, expect `PASS`.
 
 ## Status
 

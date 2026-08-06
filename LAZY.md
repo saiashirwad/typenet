@@ -3,6 +3,11 @@
 Working branch: `lazy-native`. Reference implementation cloned at
 `/tmp/effect-torch-study` (github.com/mikearnaldi/effect-torch) — re-clone if gone.
 
+> **Note (2026-08-06):** the TypeGPU/WebGPU backend has been removed.
+> typenet tensors are CPU-only (with the Rust/candle native bridge
+> accelerating lazy graphs); passages below describing GPU support
+> are historical.
+
 ## The idea in one paragraph
 
 typenet's type-level shapes (`Tensor<[2, 3]>`, `Broadcast`, `MatMulCheck`, tsover
@@ -15,26 +20,25 @@ do not care how or when numbers are computed. So we split each op in two:
    a lazy graph. Each node records its output _shape_ (pure shape math, no data
    touched), so type-level shape and runtime shape stay in sync by construction.
 
-Execution happens only at explicit **forcing points**: `.read()`, `.item()`,
-`.toCPU()`, `.backward()`, `optimizer.step()`. This is the same design as
+Execution happens only at explicit **forcing points**: `.data`, `.item()`,
+`.backward()`, `optimizer.step()`. This is the same design as
 effect-torch (`packages/native/src/lib.rs` — `LazyNode` enum ~line 335,
 `eval_lazy` ~line 1127).
 
-Effect is **not** used. Errors are thrown `TensorError`s; no DI layers; device
-selection stays the existing `configureTypeGPU`-style init.
+Effect is **not** used. Errors are thrown `TensorError`s; no DI layers.
 
 ## Vocabulary
 
 - **Lazy graph / scheduler** = the "recipe" layer. Decides _what_ to compute and
   defers _when_. Not a backend.
 - **Executor / backend** = the "stove" that crunches numbers: CPU typed-array
-  kernels, TypeGPU/WebGPU kernels, or (phase 2) Rust/candle.
+  kernels or (phase 2) Rust/candle.
 - The lazy graph is the **boundary** that makes backends swappable. Phase 1
   builds the boundary; phase 2 plugs candle into it.
 
 ## Phase 1 — lazy graph on existing backends (this branch)
 
-Status: implemented (CPU + TypeGPU paths; tests green).
+Status: implemented (CPU path; tests green).
 
 What landed:
 
@@ -45,7 +49,7 @@ What landed:
   `broadcastTo`, `permute`, `view` (reshape/squeeze/unsqueeze), `narrow`,
   `cat`, `oneHot`. There is no explicit `leaf` variant — eager tensors
   (incl. scalar coercions) serve directly as graph leaves. Each node
-  carries `shape`, `dtype`, `device`, computed by the same pure shape
+  carries `shape` and `dtype`, computed by the same pure shape
   helpers (`broadcastShapes`, stride math) as eager mode — no data is
   touched at build time.
 - The `raw*` functions (`rawBinary`, `rawUnary`, `rawReduce`,
@@ -59,14 +63,13 @@ What landed:
   Memoization: each `LazyStorage` caches its evaluated tensor; `force(t)`
   swaps the tensor's storage in place, so shared subgraphs evaluate once
   and every alias of a tensor sees the materialized result.
-- Forcing points: `data`, `read()`, `item()`/`get()`/`toArray()` (via
-  `data`), `toCPU()`, `write()`, `clone()`, `backward()`.
+- Forcing points: `data`, `item()`/`get()`/`toArray()` (via
+  `data`), `clone()`, `backward()`.
   `backward()` on a lazy loss builds the backward pass as lazy
   expressions and forces the forward topo plus all parameter grads in
   one `forceMany` (see phase 2 — lazy symbolic backward); the eager
   path is unchanged.
-- Disposal: lazy nodes hold no buffers (CPU or GPU) until evaluated; after
-  materialization the usual `.dispose()` rules apply.
+- Disposal: lazy nodes hold no buffers until evaluated.
 - Tests: `test/lazy.test.ts` compares lazy vs eager numerically for
   broadcast binary ops, matmul, reduces, a unary chain, view/permute, cat,
   oneHot, mixed lazy/eager operands, and a full XOR forward + backward +
@@ -74,9 +77,6 @@ What landed:
 
 Known limitations:
 
-- GPU lazy graphs are wired (nodes carry `device: "gpu"` and dispatch to
-  the TypeGPU kernels) but only exercised on CPU in tests; browser/dawn
-  parity not yet verified.
 - Validation that needs data (e.g. `oneHot` target range on CPU) fires at
   forcing time, not at op call time, in lazy mode.
 - `pnpm typecheck` currently fails only on `examples/basic.ts:22`, which
@@ -111,9 +111,8 @@ What landed:
   placeholders plus one concatenated `Float32Array`. Rust rebuilds it
   with candle ops on the best device (Metal if `Device::new_metal(0)`
   succeeds, else CPU) and returns f32 bytes. `force()` uses it when
-  lazy mode is on, the graph device is `"cpu"`, and native is enabled
-  — otherwise it falls back to the interpreter (GPU leaves and
-  float64 graphs also fall back).
+  lazy mode is on and native is enabled — otherwise it falls back to
+  the interpreter (float64 graphs also fall back).
 - Multi-root eval: the graph JSON carries a `roots` index list
   (default: last node, so single-root callers are unchanged). Rust
   evaluates the node list once — nodes shared across roots compute
@@ -190,8 +189,8 @@ Deviations from the original plan:
 
 Known limitations:
 
-- f32 only; float64 and GPU-device lazy graphs silently fall back to
-  the CPU/TypeGPU interpreter.
+- f32 only; float64 lazy graphs silently fall back to
+  the CPU interpreter.
 - The whole graph is re-serialized at every forcing point (no caching
   of the JSON or of candle tensors across forces). For training loops
   this means one serialization + FFI hop per step, ~40–50 µs for a
@@ -280,8 +279,8 @@ What landed:
   inputs carried between steps), and the new values
   (`p - lr·v`, `v'`, …) are forced in one multi-root hop and written
   back into the same leaf buffers in place. Public signatures are
-  unchanged (`step()` stays sync, no arguments), and the eager and
-  GPU paths are byte-identical — the graph path only triggers for
+  unchanged (`step()` stays sync, no arguments), and the eager
+  path is byte-identical — the graph path only triggers for
   CPU float32 params while lazy mode (or a compile trace) is active.
 - `compile()` composes with this: a compiled function may contain
   the full training step — `opt.zeroGrad(); loss.backward();
@@ -390,11 +389,9 @@ Known limitations (task 3, as landed — see task 4 for the update):
   `.item()`, `.backward()`) inside `fn` are unsupported — they would
   bake in trace-time values. Task 4 (above) puts backward +
   optimizer in the graph.
-- CPU float32 only (same coverage as the native bridge); f64/GPU
-  graphs and GPU-captured leaves throw or fall back as before.
-- Captured leaves must stay on the CPU tensors they were traced with
-  — moving a parameter to GPU after compiling throws on the native
-  path.
+- CPU float32 only (same coverage as the native bridge); f64
+  graphs fall back as before.
+- Captured leaves must stay the CPU tensors they were traced with.
 - The interpreter fallback still pays per-op dispatch (no structural
   win there); the native path amortizes to one serialization-free
   FFI hop per call.

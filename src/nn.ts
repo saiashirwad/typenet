@@ -1,12 +1,11 @@
 import { Tensor } from "./tensor.ts";
-import type { Device, TensorParams } from "./tensor.ts";
+import type { TensorParams } from "./tensor.ts";
 import type { DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts";
 
 type AnyTensor = Tensor<any, any>;
 
 type GradParams = {
   requires_grad: true;
-  device: Device;
   dtype: "float32";
 };
 
@@ -28,30 +27,6 @@ export abstract class Module {
 
   zeroGrad(): void {
     for (const p of this.parameters()) p.zeroGrad();
-  }
-
-  gpu(): this {
-    for (const [key, value] of Object.entries(this)) {
-      if (value instanceof Tensor) (this as any)[key] = value.gpu();
-      else if (value instanceof Module) value.gpu();
-      else if (Array.isArray(value))
-        (this as any)[key] = value.map((item) =>
-          item instanceof Tensor ? item.gpu() : item instanceof Module ? item.gpu() : item,
-        );
-    }
-    return this;
-  }
-
-  async toCPU(): Promise<this> {
-    for (const [key, value] of Object.entries(this)) {
-      if (value instanceof Tensor) (this as any)[key] = await value.toCPU();
-      else if (value instanceof Module) await value.toCPU();
-      else if (Array.isArray(value))
-        (this as any)[key] = await Promise.all(
-          value.map((item) => (item instanceof Tensor ? item.toCPU() : item instanceof Module ? item.toCPU() : item)),
-        );
-    }
-    return this;
   }
 }
 
@@ -211,8 +186,6 @@ export function crossEntropy<B extends number, C extends number, P extends Tenso
   let mask: AnyTensor;
   if (targets instanceof Tensor) {
     if (targets.numel !== batch) throw new Error(`crossEntropy: ${targets.numel} targets for batch of ${batch}`);
-    if (targets.device !== l.device)
-      throw new Error(`crossEntropy: logits are on ${l.device} but targets are on ${targets.device}`);
     mask = targets.oneHot(classes!);
   } else {
     if (targets.length !== batch) throw new Error(`crossEntropy: ${targets.length} targets for batch of ${batch}`);
@@ -224,13 +197,12 @@ export function crossEntropy<B extends number, C extends number, P extends Tenso
       onehot[i * classes! + target] = 1;
     }
     mask = fromFlat(onehot, [batch!, classes!]);
-    if (l.device === "gpu") mask = mask.gpu();
   }
   return l.logSoftmax(1).mul(mask).sum().neg().div(batch!) as any;
 }
 
 function fromFlat(data: Float32Array, shape: number[]): AnyTensor {
   const t = Tensor.zeros(shape as [number, number]);
-  t.write(data);
+  t.data.set(data);
   return t as AnyTensor;
 }

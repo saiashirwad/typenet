@@ -68,11 +68,11 @@ function makeNet() {
 }
 
 function cloneParams(params: AnyTensor[]): AnyTensor[] {
-  return params.map(p =>
-    (Tensor.zeros(p.shape) as AnyTensor)
-      .write(p.data)
-      .requires_grad()
-  )
+  return params.map(p => {
+    const q = Tensor.zeros(p.shape) as AnyTensor
+    q.data.set(p.data)
+    return q.requires_grad()
+  })
 }
 
 describe("optimizer in the lazy graph", () => {
