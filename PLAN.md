@@ -92,11 +92,18 @@ their 6–23x; grad parity tests still green.
    false-positive `ErrorMessage` in generic builders), `NoInfer` on repeated
    inference sites, any other tricks that apply to typenet's checks.
 
-## Phase D — speed on big graphs (CONDITIONAL, only if benchmarks demand)
+## Phase D — speed on big graphs (landed for tiny graphs)
 
-7. Graph-level optimization in Rust now that graphs are stable: elementwise
-   fusion, dead-code elimination, buffer pooling. This is where "actually
-   fast" lives for real workloads. No speculative work — benchmark first.
+7. Graph-level optimization in Rust now that graphs are stable. Benchmarks
+   demanded the tiny-graph side, not the big-graph side (Metal already
+   wins 6–23x there): landed the tiny-graph plan/exec evaluator with
+   elementwise fusion, DCE, and a prepared-plan cache — see the Phase D
+   section of LAZY.md. Buffer pooling deliberately skipped (fusion made
+   it moot). Remaining conditional work, only if future benchmarks
+   demand: Metal-side kernel fusion for large graphs.
+
+Gate: compiled ≤ eager ~3.5ms/200 steps — passed with margin: compiled
++ native XOR is 1.6ms, the fastest mode overall (eager 2.1ms).
 
 ## Suggested commit cadence
 
@@ -114,4 +121,4 @@ scratch files (`examples/basic.ts`, `examples/_gatdsl.ts`,
 - [x] Phase B task 4 — optimizer in graph
 - [x] Phase C task 5 — .named() + printGraph() graph dumps
 - [x] Phase C task 6 — type-algebra hardening
-- [ ] Phase D — conditional graph optimization
+- [x] Phase D — graph optimization: tiny-graph evaluator + fusion + plan cache

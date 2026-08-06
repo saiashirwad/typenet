@@ -197,8 +197,9 @@ Known limitations:
   this means one serialization + FFI hop per step, ~40–50 µs for a
   tiny graph — fine, but still ~4x slower than pure eager CPU on
   graph sizes where the compute itself is microseconds (see the
-  benchmark table). Closing that gap needs structural graph caching
-  across steps or a binary wire format, not more tuning of this path.
+  benchmark table). Phase D later added a native-side prepared-plan
+  cache (keyed on the graph JSON) that absorbs the Rust-side costs;
+  the JS-side serialization remains, and `compile()` avoids it.
 - Small-graph device hint: graphs touching ≤ 65536 elements
   (`CPU_HINT_MAX_WORK` in `src/tensor.ts`) carry `device: "cpu"` in
   the graph JSON and evaluate on candle's CPU device even when Metal
@@ -230,18 +231,17 @@ iterations after 1 warmup.
 
 | Workload                                    | eager CPU | lazy (interpreter) | lazy + native |
 | ------------------------------------------- | --------- | ------------------ | ------------- |
-| matmul chain: 10 × ([256,256] @ [256,256])  | 145.4 ms  | 145.9 ms           | 13.3 ms       |
-| matmul chain: 10 × ([512,512] @ [512,512])  | 1082.8 ms | 1193.9 ms          | 49.6 ms       |
-| elementwise chain: 20 ops on [1024,1024]    | 294.7 ms  | 314.0 ms           | 42.0 ms       |
-| XOR MLP train, 200 steps (fwd+bwd+SGD)      | 2.6 ms    | 4.3 ms             | 11.3 ms       |
-| XOR MLP train, 200 steps, compiled (task 4) | —         | 2.1 ms             | 5.0 ms        |
+| matmul chain: 10 × ([256,256] @ [256,256])  | 139.0 ms  | 137.4 ms           | 13.6 ms       |
+| matmul chain: 10 × ([512,512] @ [512,512])  | 1041.0 ms | 1052.4 ms          | 49.2 ms       |
+| elementwise chain: 20 ops on [1024,1024]    | 272.8 ms  | 284.6 ms           | 40.8 ms       |
+| XOR MLP train, 200 steps (fwd+bwd+SGD)      | 2.1 ms    | 3.8 ms             | 6.2 ms        |
+| XOR MLP train, 200 steps, compiled (task 4) | —         | 2.0 ms             | 1.6 ms        |
 
-XOR numbers updated 2026-07-27 (Apple M5) after Phase B task 4: the
-lazy-mode `step()` is now itself a graph eval (one extra forcing point
-per step in the un-compiled modes — hence the regression there), and
-the compiled rows replay the whole training step as one graph. The
-previous run (same day, before task 4): 153.1 / 1296.5 / 323.9 /
-3.5 ms eager and 2.8 / 6.2 ms for the lazy XOR modes.
+XOR numbers updated 2026-08-06 (Apple M5) after Phase D: cpu-hint graphs
+now run on the plan/exec evaluator (no candle dispatch, cached plans).
+Compiled + native is now the fastest XOR mode overall — faster than eager
+CPU (2.1 ms) and the compiled interpreter (2.0 ms). The 2026-07-27 run
+(before Phase D): 2.6 / 4.3 / 11.3 ms and 2.1 / 5.0 ms compiled.
 
 Previous run (2026-07-27, Apple M5, single-root eval + eager
 backward): 147.5 / 1213.9 / 286.0 / 2.8 ms eager, and **740.5 ms**
@@ -259,13 +259,12 @@ Takeaways:
   call per step, ~32 graph nodes) instead of one per topo tensor,
   and the tiny graph runs on candle CPU instead of paying Metal
   dispatch + readback overhead (~3 ms/hop).
-- Native is still ~2x slower than eager CPU on the un-compiled XOR
-  loop, and task 4 widened that gap (6.2 → 11.3 ms): the in-graph
-  `step()` adds a second serialization + FFI hop per step. The answer
-  for tiny training loops is `compile()` — one cached graph, no
-  re-serialization (see the task 4 section). On micro-graphs eager
-  wins because it has zero per-op overhead; native pays off for
-  few-force, big-graph workloads.
+- Native is still slower than eager CPU on the un-compiled XOR loop
+  (6.2 ms vs 2.1 ms after Phase D): the in-graph `step()` adds a second
+  serialization + FFI hop per step. The answer for tiny training loops
+  is `compile()` — one cached graph, one cached native plan, no
+  re-serialization (see the task 4 and Phase D sections). Native pays
+  off for few-force, big-graph workloads and compiled steps.
 
 ## Phase B task 4 — optimizer updates in the graph
 
@@ -440,6 +439,65 @@ Design decisions:
   loss _before_ calling `backward()` to see the forward graph.
 - **Shared subgraphs** print once; multi-root calls mark each root
   with `; root`.
+
+## Phase D task 7 — graph-level optimization in Rust
+
+Status: implemented (tests green; 2026-08-06, Apple M5). Benchmarks
+demanded it: compiled + native XOR was 4.8 ms vs 2.0 ms for the compiled
+interpreter, because a ~60-node training-step graph paid candle's per-op
+dispatch (~0.7 µs/kernel) while the FFI hop itself is only ~0.8 µs.
+
+What landed (all inside `native/src/lib.rs`; no TS/API changes):
+
+- **Tiny-graph CPU evaluator.** Graphs the JS side pins with
+  `device: "cpu"` (≤ `CPU_HINT_MAX_WORK` total elements) no longer use
+  candle at all: `execute()` runs the whole graph on `Vec<f32>` buffers
+  with plain loops — every op (all binary/unary kinds, matmul with
+  batch broadcasting, reduce/reduceAll incl. first-tie argmax,
+  broadcastTo, permute, view, narrow, cat, oneHot) has a scalar/loop
+  implementation. Numerics mirror the candle/CPU kernels; parity is
+  covered by `test/native.test.ts` (tiny graphs all take this path).
+  Metal and non-hint graphs keep the candle path unchanged.
+- **Elementwise fusion.** Maximal chains of binary/unary nodes collapse
+  into single fused passes. Absorption rule (always correct, never
+  recomputes): a node joins its consumer's group only if it is
+  elementwise, live, broadcastable to the group output shape, has
+  exactly that one consumer, and is not a root. Same-shape members
+  share one scratch pass; smaller members are pre-evaluated into temps
+  (their inputs can only be external or smaller still). The 60-node
+  XOR step fuses ~28 elementwise nodes into ~11 passes.
+- **Dead-code elimination.** Both evaluators compute liveness from the
+  roots and skip everything unreachable — dead leaves are never even
+  copied.
+- **Prepared-plan cache.** Everything derivable from the graph JSON
+  (parse, shapes, liveness, fusion groups, broadcast strides, child
+  resolution) is computed once in `PreparedGraph::prepare` and cached
+  in a `Mutex<HashMap<String, Arc<PreparedGraph>>>` keyed by the full
+  JSON (bounded at 128 entries, clear-on-full). `compile()` replays
+  the same JSON every step, so a replay is a suffix check (the JS
+  serializer emits `device` last — no JSON parse on hits), a hash
+  lookup, leaf copies, raw loops, and the readback.
+- **Buffer pooling: deliberately skipped.** Fusion removes the
+  intermediate buffers it would have pooled; what remains are root
+  outputs and small temps.
+
+Measured (60-node compiled XOR step graph): 32.5 µs → 6.2 µs per
+eval. End to end (`examples/bench.ts`, 200 steps): compiled + native
+4.8 → **1.6 ms**, now the fastest XOR mode (eager CPU 2.1 ms, compiled
+interpreter 2.0 ms); un-compiled lazy + native 10.4 → 6.2 ms; large
+Metal workloads unchanged (13.6 / 49.2 / 40.8 ms rows).
+
+Known limitations:
+
+- The naive `tiny_matmul` trades BLAS for zero dispatch; fine at
+  cpu-hint sizes, but a hypothetical hint-sized graph dominated by one
+  large-ish matmul would prefer candle. Not observed in practice.
+- The un-compiled lazy path still re-serializes the graph JSON on the
+  JS side every step (the native plan cache absorbs the Rust-side
+  costs); `compile()` remains the fast path.
+- The plan cache key is the full JSON string; two structurally
+  identical graphs with different leaf orderings get separate plans
+  (harmless, just more plans).
 
 ## How to resume
 
