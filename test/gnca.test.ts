@@ -12,19 +12,29 @@
 import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it } from "vitest"
 import {
+  Adam,
   Tensor,
+  clipGradNorm,
   compile,
   configure,
   disableNative,
   isNativeAvailable,
+  normal,
   useNative
 } from "../index.ts"
-import { knnGraph, batchEdges } from "../examples/gnca/graphs.ts"
+import {
+  batchEdges,
+  knnGraph,
+  nearestNode,
+  randomGeometricGraph
+} from "../examples/gnca/graphs.ts"
 import {
   GraphNCA,
   aliveMask,
-  graphTensors
+  graphTensors,
+  seedState
 } from "../examples/gnca/model.ts"
+import { TARGETS } from "../examples/gnca/targets.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -234,6 +244,67 @@ describe("graph cellular automaton, against PyTorch", () => {
         `compiled grad of ${PARAM_NAMES[i]}`
       )
     )
+  })
+
+  it("trains: the loss falls over compiled steps", () => {
+    // The whole machinery in one place — a rolled-out rollout, in-graph
+    // input noise and update mask, gradient clipping and Adam, replayed
+    // from one compiled graph — on a small graph so it stays a test.
+    const nodes = 96
+    const batch = 2
+    const channels = 8
+    const steps = 6
+    const built = randomGeometricGraph({ nodes, dim: 2, seed: 3 })
+    const targetData = TARGETS.heart!.build(built.pos)
+    const center = nearestNode(built.pos, TARGETS.heart!.seedAt)
+    const graph = graphTensors(
+      batchEdges(built.edges, batch, nodes),
+      batch * nodes
+    )
+    const rows = batch * nodes
+    const tiled = new Float32Array(rows * 4)
+    for (let b = 0; b < batch; b++)
+      tiled.set(targetData, b * nodes * 4)
+    const target = tensorFrom(tiled, [rows, 4])
+
+    configure({ seed: 5 })
+    if (isNativeAvailable()) useNative()
+    const model = new GraphNCA(channels, 32)
+    const params = model.parameters()
+    const optimizer = new Adam(params, { lr: 3e-3 })
+    const step = compile((input: AnyTensor) => {
+      let x = input.add(
+        (normal([rows, channels]) as AnyTensor).mul(0.02)
+      )
+      for (let i = 0; i < steps; i++)
+        x = model.forward(x, graph, 0.5).mul(aliveMask(x, graph))
+      const loss = x
+        .narrow(1, 0, 4)
+        .sub(target)
+        .pow(2)
+        .mean()
+        .add(x.sub(x.clamp(-1, 1)).abs().mean())
+      optimizer.zeroGrad()
+      loss.backward()
+      clipGradNorm(params, 1)
+      optimizer.step()
+      return loss
+    })
+
+    const seed = tensorFrom(
+      seedState(batch, nodes, channels, center),
+      [rows, channels]
+    )
+    const losses: number[] = []
+    for (let i = 0; i < 40; i++) losses.push(step(seed).item())
+    const first = losses[0]!
+    const last = losses[losses.length - 1]!
+    expect(Number.isFinite(last)).toBe(true)
+    expect(last, `${first} -> ${last}`).toBeLessThan(first * 0.7)
+    // and the parameters actually moved
+    expect(
+      Array.from(params[2]!.data).some(v => v !== 0)
+    ).toBe(true)
   })
 
   it("redraws the update mask each step of a compiled rollout", () => {
