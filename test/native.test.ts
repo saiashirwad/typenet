@@ -142,7 +142,9 @@ describe.skipIf(!available)("native backend", () => {
       ])
       const v = a.view([3, 2]).transpose(0, 1)
       const p = a.unsqueeze(0).permute(1, 0, 2).squeeze()
-      const n = (a as AnyTensor).transpose(0, 1).view([3, 2])
+      const n = (a as AnyTensor)
+        .transpose(0, 1)
+        .view([3, 2])
       return { v, p, n }
     })
     expectClose(eager.v, native.v)
@@ -325,8 +327,14 @@ describe.skipIf(!available)("native backend", () => {
       tensor([6, 12, 18]) as AnyTensor,
       x.grad as AnyTensor
     )
-    expectClose(tensor([1, 4, 9]) as AnyTensor, z as AnyTensor)
-    expectClose(tensor([2, 8, 18]) as AnyTensor, y as AnyTensor)
+    expectClose(
+      tensor([1, 4, 9]) as AnyTensor,
+      z as AnyTensor
+    )
+    expectClose(
+      tensor([2, 8, 18]) as AnyTensor,
+      y as AnyTensor
+    )
   })
 })
 
@@ -337,9 +345,9 @@ describe("native backend availability", () => {
       expect(["metal", "cpu"]).toContain(nativeDevice())
       useNative()
       configure({ lazy: true })
-      expect(
-        tensor([1, 2]).add(1).toArray()
-      ).toEqual([2, 3])
+      expect(tensor([1, 2]).add(1).toArray()).toEqual([
+        2, 3
+      ])
     } else {
       expect(() => useNative()).toThrow(/build:native/)
     }

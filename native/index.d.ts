@@ -2,10 +2,18 @@
 /* eslint-disable */
 export declare function deviceName(): string
 
-export declare function evalGraph(graphJson: string, leaves: Float32Array, seed: number): Readback
+export declare function evalGraph(
+  graphJson: string,
+  leaves: Float32Array,
+  seed: number
+): Readback
 
 /** Evaluate a plan created by `prepareGraph`. */
-export declare function evalPrepared(handle: number, leaves: Float32Array, seed: number): Readback
+export declare function evalPrepared(
+  handle: number,
+  leaves: Float32Array,
+  seed: number
+): Readback
 
 /**
  * How many prepared-graph handles are currently held. Used by tests to
@@ -14,7 +22,9 @@ export declare function evalPrepared(handle: number, leaves: Float32Array, seed:
 export declare function preparedGraphCount(): number
 
 /** Parse and plan a graph once, returning a handle for `evalPrepared`. */
-export declare function prepareGraph(graphJson: string): number
+export declare function prepareGraph(
+  graphJson: string
+): number
 
 /** Drop a plan created by `prepareGraph`. */
 export declare function releaseGraph(handle: number): void

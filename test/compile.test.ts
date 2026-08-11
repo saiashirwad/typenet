@@ -253,7 +253,9 @@ describe.skipIf(!available)("compile (native)", () => {
     for (let i = 0; i < 16; i++) {
       // Distinct graphs so each prepare allocates its own handle.
       const scale = i + 1
-      const fn = compile((x: AnyTensor) => x.mul(scale).sum())
+      const fn = compile((x: AnyTensor) =>
+        x.mul(scale).sum()
+      )
       fn(tensor([1, 2, 3, 4]))
       compiled.push(fn)
     }

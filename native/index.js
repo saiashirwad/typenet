@@ -1,1 +1,1 @@
-module.exports = require('./typenet-native.node')
+module.exports = require("./typenet-native.node")

@@ -103,7 +103,8 @@ their 6–23x; grad parity tests still green.
    demand: Metal-side kernel fusion for large graphs.
 
 Gate: compiled ≤ eager ~3.5ms/200 steps — passed with margin: compiled
-+ native XOR is 1.6ms, the fastest mode overall (eager 2.1ms).
+
+- native XOR is 1.6ms, the fastest mode overall (eager 2.1ms).
 
 ## Suggested commit cadence
 

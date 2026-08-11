@@ -304,10 +304,9 @@ describe("compiled training step (forward + backward + optimizer)", () => {
       const norm = clipGradNorm(reference.params, 1)
       expect(norm).toBeGreaterThan(1) // clipping really engaged
       refOpt.step()
-      expect(step(compiled.x, compiled.y).item()).toBeCloseTo(
-        refLoss.item(),
-        2
-      )
+      expect(
+        step(compiled.x, compiled.y).item()
+      ).toBeCloseTo(refLoss.item(), 2)
     }
     configure({ lazy: false })
     reference.params.forEach((p, i) =>
@@ -351,7 +350,9 @@ describe("clipGradNorm", () => {
 
   it("matches eager in lazy mode", () => {
     const build = () => {
-      const a = Tensor.of([1, 2, 3]).requires_grad() as AnyTensor
+      const a = Tensor.of([
+        1, 2, 3
+      ]).requires_grad() as AnyTensor
       a.pow(3).sum().mul(10).backward()
       clipGradNorm([a], 2)
       return a
@@ -431,7 +432,9 @@ describe.skipIf(!available)(
     it("matches eager for compiled Adam with clipping", () => {
       const reference = makeNet()
       const compiled = makeNet()
-      const refOpt = new Adam(reference.params, { lr: 0.05 })
+      const refOpt = new Adam(reference.params, {
+        lr: 0.05
+      })
       const opt = new Adam(compiled.params, { lr: 0.05 })
       const step = compile((x: AnyTensor, y: AnyTensor) => {
         const h = x

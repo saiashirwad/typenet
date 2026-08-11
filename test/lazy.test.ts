@@ -49,7 +49,10 @@ function expectGradsClose(
   tolerance = 1e-6
 ): void {
   eager.forEach((p, i) => {
-    expect(lazy[i]!.grad, `grad for param ${i}`).not.toBeNull()
+    expect(
+      lazy[i]!.grad,
+      `grad for param ${i}`
+    ).not.toBeNull()
     expectClose(p.grad!, lazy[i]!.grad!, tolerance)
   })
 }
@@ -200,9 +203,7 @@ describe("lazy mode", () => {
   it("forces at data and item()", () => {
     configure({ lazy: true })
     const a = tensor([2, 3]).mul(4)
-    expect(a.data).toEqual(
-      Float32Array.from([8, 12])
-    )
+    expect(a.data).toEqual(Float32Array.from([8, 12]))
     const s = tensor([5]).add(1)
     expect(s.item()).toBe(6)
   })

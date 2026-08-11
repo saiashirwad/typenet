@@ -64,14 +64,22 @@ import {
   reshapeRaw,
   sumTo
 } from "./eager.ts"
-import { eagerly, force, forceMany, lazyMode } from "./lazy.ts"
+import {
+  eagerly,
+  force,
+  forceMany,
+  lazyMode
+} from "./lazy.ts"
 import {
   noGrad,
   tapeOrder,
   withGrad,
   type GradNode
 } from "./autograd.ts"
-import { _activeUpdateTrace, tensorNames } from "./compile.ts"
+import {
+  _activeUpdateTrace,
+  tensorNames
+} from "./compile.ts"
 
 export type TensorParams = {
   requires_grad: boolean
@@ -100,7 +108,6 @@ export type NestedNumbers =
   number | readonly NestedNumbers[]
 
 export type AnyTensor = Tensor<any, any>
-
 
 // --- construction primitives --------------------------------------
 // INTERNAL gates the constructor so callers go through the factories

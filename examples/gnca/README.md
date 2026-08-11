@@ -15,7 +15,7 @@ pnpm vite-node examples/gnca/bench.ts
 ```
 
 Every probe writes a checkpoint and a picture: `runs/gnca-<target>.json`
-holds the weights *and* the graph they were trained on (the same rule on a
+holds the weights _and_ the graph they were trained on (the same rule on a
 different graph is a different model), and `runs/gnca-<target>.svg` shows
 target, grown and healed side by side, which is the fastest way to tell
 whether a run is working.
@@ -23,7 +23,7 @@ whether a run is working.
 `--init-from` warm-starts from a checkpoint, zero-padding the first
 layer's input columns if the saved percept was narrower. That padding is
 what makes the reference's ablation ladder work: the loaded rule is
-*functionally identical* to begin with, since a zero column contributes
+_functionally identical_ to begin with, since a zero column contributes
 nothing, so adding a percept feature measures the feature rather than a
 fresh initialisation.
 
@@ -56,7 +56,7 @@ each step.
 
 Three details carry most of the weight, and all three are the reference's:
 
-- The **degree scalar** restores the neighbour *count* that mean
+- The **degree scalar** restores the neighbour _count_ that mean
   aggregation erases.
 - The **gate** is per edge and per channel (Perona-Malik style), so the
   rule can turn diffusion off across a pattern boundary instead of
@@ -74,7 +74,7 @@ there are many more edges than nodes.
 
 A sample pool, so most steps start from a state some earlier rollout left
 behind rather than from the bare seed — that is what teaches the rule to
-*hold* a pattern rather than draw one. Each batch is ranked worst-first
+_hold_ a pattern rather than draw one. Each batch is ranked worst-first
 and damage lands on the best-formed samples, because healing a grown
 pattern is the behaviour wanted and gradient spent on an already-broken
 state is spent twice over. Every eighth step trains one sample from the
@@ -86,18 +86,18 @@ while regeneration stays broken.
 
 ## Files
 
-| file         | contents                                                    |
-| ------------ | ----------------------------------------------------------- |
-| `model.ts`   | the update rule, the alive mask, the seed state             |
-| `graphs.ts`  | k-NN, random geometric and Watts-Strogatz graph builders     |
-| `targets.ts` | the eight patterns, 2-d and 3-d, sampled at node positions  |
-| `pointclouds.ts` | mesh surface clouds as targets, with a small .npz reader |
-| `damage.ts`  | ways to break a grown pattern: balls, scatter, bands, cuts   |
-| `train.ts`   | the training loop                                           |
-| `bench.ts`   | where the time goes, per rolled-out step and per graph size  |
-| `checkpoint.ts` | saving, resuming, and the zero-padded warm start          |
-| `render.ts`  | node states as an SVG, so a run is inspectable               |
-| `rng.ts`     | seeded host-side sampling                                   |
+| file             | contents                                                    |
+| ---------------- | ----------------------------------------------------------- |
+| `model.ts`       | the update rule, the alive mask, the seed state             |
+| `graphs.ts`      | k-NN, random geometric and Watts-Strogatz graph builders    |
+| `targets.ts`     | the eight patterns, 2-d and 3-d, sampled at node positions  |
+| `pointclouds.ts` | mesh surface clouds as targets, with a small .npz reader    |
+| `damage.ts`      | ways to break a grown pattern: balls, scatter, bands, cuts  |
+| `train.ts`       | the training loop                                           |
+| `bench.ts`       | where the time goes, per rolled-out step and per graph size |
+| `checkpoint.ts`  | saving, resuming, and the zero-padded warm start            |
+| `render.ts`      | node states as an SVG, so a run is inspectable              |
+| `rng.ts`         | seeded host-side sampling                                   |
 
 ## Checked against the original
 

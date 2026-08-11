@@ -22,7 +22,11 @@ import {
   serializeLazyGraph,
   topoOrder
 } from "./lazy.ts"
-import { makeRaw, Tensor, type AnyTensor } from "./tensor.ts"
+import {
+  makeRaw,
+  Tensor,
+  type AnyTensor
+} from "./tensor.ts"
 
 // --- optimizer in the graph (phase B task 4) ----------------------
 // In lazy mode an optimizer step builds its parameter/state updates

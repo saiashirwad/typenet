@@ -550,7 +550,15 @@ export function forceMany(ts: AnyTensor[]): void {
   for (const t of ts) force(t)
 }
 
-export { force, eagerly, lazily, topoOrder, serializeLazyGraph, makeLazy, lazyMode }
+export {
+  force,
+  eagerly,
+  lazily,
+  topoOrder,
+  serializeLazyGraph,
+  makeLazy,
+  lazyMode
+}
 // CpuStorage/LazyStorage are re-exported so compile.ts can narrow
 // storages without a second import hop back through tensor.ts.
 export type { CpuStorage, LazyStorage, TensorStorage }

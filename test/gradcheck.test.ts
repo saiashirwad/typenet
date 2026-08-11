@@ -377,31 +377,46 @@ const CASES: Case[] = [
     name: "indexSelect(dim 0), repeated indices",
     shapes: [[4, 3]],
     build: ([a]) =>
-      a!.indexSelect(index([2, 0, 0, 3, 1])).pow(3).sum()
+      a!
+        .indexSelect(index([2, 0, 0, 3, 1]))
+        .pow(3)
+        .sum()
   },
   {
     name: "indexSelect(dim 1)",
     shapes: [[2, 4]],
     build: ([a]) =>
-      a!.indexSelect(index([3, 1, 1]), 1).pow(3).sum()
+      a!
+        .indexSelect(index([3, 1, 1]), 1)
+        .pow(3)
+        .sum()
   },
   {
     name: "indexSelect, some rows unused",
     shapes: [[5, 2]],
     build: ([a]) =>
-      a!.indexSelect(index([1, 1, 4])).pow(3).sum()
+      a!
+        .indexSelect(index([1, 1, 4]))
+        .pow(3)
+        .sum()
   },
   {
     name: "scatterAdd(dim 0), colliding indices",
     shapes: [[5, 3]],
     build: ([a]) =>
-      a!.scatterAdd(index([2, 0, 0, 1, 1]), 3).pow(3).sum()
+      a!
+        .scatterAdd(index([2, 0, 0, 1, 1]), 3)
+        .pow(3)
+        .sum()
   },
   {
     name: "scatterAdd(dim 1), empty output rows",
     shapes: [[2, 3]],
     build: ([a]) =>
-      a!.scatterAdd(index([3, 0, 3]), 4, 1).pow(3).sum()
+      a!
+        .scatterAdd(index([3, 0, 3]), 4, 1)
+        .pow(3)
+        .sum()
   },
   {
     // the message-passing shape: gather over an edge list, aggregate back
