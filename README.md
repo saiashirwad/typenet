@@ -7,19 +7,19 @@ Includes autograd, layers, and optimizers.
 Operators (`+ - * / **`) work on tensors via [tsover](https://tsover.swmansion.com), a TypeScript fork with operator overloading.
 
 ```ts
-"use tsover"
-import { randn } from "typenet"
+"use tsover";
+import { randn } from "typenet";
 
-const a = randn([2, 3]) // Tensor<[2, 3]>
-const w = randn([3, 4]) // Tensor<[3, 4]>
+const a = randn([2, 3]); // Tensor<[2, 3]>
+const w = randn([3, 4]); // Tensor<[3, 4]>
 
-const h = a.matmul(w) // Tensor<[2, 4]>
-const s = h + randn([4]) // Tensor<[2, 4]>, broadcast
-const l = ((s - 1) ** 2).mean() // Tensor<[]>
+const h = a.matmul(w); // Tensor<[2, 4]>
+const s = h + randn([4]); // Tensor<[2, 4]>, broadcast
+const l = ((s - 1) ** 2).mean(); // Tensor<[]>
 
-const m = randn([2, 1]) + randn([1, 3]) // Tensor<[2, 3]>
+const m = randn([2, 1]) + randn([1, 3]); // Tensor<[2, 3]>
 
-a.matmul(randn([5, 4]))
+a.matmul(randn([5, 4]));
 // compile error: matmul: inner dimensions do not match
 ```
 
@@ -28,33 +28,36 @@ a.matmul(randn([5, 4]))
 Feature dimensions are literal, the batch dimension stays generic:
 
 ```ts
-"use tsover"
-import { tensor, Tensor, Linear, Module, SGD } from "typenet"
-import type { TensorParams } from "typenet"
+"use tsover";
+import { tensor, Tensor, Linear, Module, SGD } from "typenet";
+import type { TensorParams } from "typenet";
 
 class XorNet extends Module {
-  hidden = new Linear(2, 8)
-  out = new Linear(8, 1)
+  hidden = new Linear(2, 8);
+  out = new Linear(8, 1);
 
-  forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, 2], P>
-  ): Tensor<[B, 1], P> {
-    const h = this.hidden.forward(x).tanh() // Tensor<[B, 8]>
-    return this.out.forward(h).sigmoid() // Tensor<[B, 1]>
+  forward<B extends number, P extends TensorParams>(x: Tensor<[B, 2], P>): Tensor<[B, 1], P> {
+    const h = this.hidden.forward(x).tanh(); // Tensor<[B, 8]>
+    return this.out.forward(h).sigmoid(); // Tensor<[B, 1]>
   }
 }
 
-const X = tensor([[0, 0], [0, 1], [1, 0], [1, 1]]) // Tensor<[4, 2]>
-const Y = tensor([[0], [1], [1], [0]]) // Tensor<[4, 1]>
+const X = tensor([
+  [0, 0],
+  [0, 1],
+  [1, 0],
+  [1, 1],
+]); // Tensor<[4, 2]>
+const Y = tensor([[0], [1], [1], [0]]); // Tensor<[4, 1]>
 
-const net = new XorNet()
-const optim = new SGD(net.parameters(), { lr: 0.5, momentum: 0.9 })
+const net = new XorNet();
+const optim = new SGD(net.parameters(), { lr: 0.5, momentum: 0.9 });
 
 for (let epoch = 0; epoch < 1500; epoch++) {
-  const loss = ((net.forward(X) - Y) ** 2).mean()
-  optim.zeroGrad()
-  loss.backward()
-  optim.step()
+  const loss = ((net.forward(X) - Y) ** 2).mean();
+  optim.zeroGrad();
+  loss.backward();
+  optim.step();
 }
 ```
 
@@ -68,12 +71,12 @@ pnpm example:gat      # graph attention network
 
 ## What the type system tracks
 
-| Property        | Mechanism                                                          |
-| --------------- | ------------------------------------------------------------------ |
-| shape           | tuple of literals: `Tensor<[32, 784]>`                             |
-| dynamic dims    | `number` is a wildcard: `Tensor<[number, 784]>` takes any batch    |
-| dtype           | `"float32"` (default) or `"float64"`, via `.to("float64")`         |
-| `requires_grad` | `.requires_grad()` flips the type-level flag and enables autograd  |
+| Property        | Mechanism                                                         |
+| --------------- | ----------------------------------------------------------------- |
+| shape           | tuple of literals: `Tensor<[32, 784]>`                            |
+| dynamic dims    | `number` is a wildcard: `Tensor<[number, 784]>` takes any batch   |
+| dtype           | `"float32"` (default) or `"float64"`, via `.to("float64")`        |
+| `requires_grad` | `.requires_grad()` flips the type-level flag and enables autograd |
 
 The shape algebra lives in `src/shape.ts` (types only): `Broadcast`, `MatMul` (dot, mat-vec, vec-mat, batched), `ResolveView` (reshape with `-1`), `Transpose`/`Permute`/`Squeeze`/`Unsqueeze`, `ReduceDim`, `Stack`, `Cat`. Errors say what went wrong: `Cannot view tensor of shape [2, 3] as [7, 2] (6 vs 14 elements)`.
 
@@ -92,10 +95,10 @@ For editor support, point your editor at the workspace TypeScript — in VS Code
 Reverse-mode, tape-based:
 
 ```ts
-const x = tensor([1, 2]).requires_grad()
-const y = tensor([3, 4]).requires_grad()
-x.mul(y).add(x).pow(2).sum().backward()
-x.grad // Tensor<[2]>
+const x = tensor([1, 2]).requires_grad();
+const y = tensor([3, 4]).requires_grad();
+x.mul(y).add(x).pow(2).sum().backward();
+x.grad; // Tensor<[2]>
 ```
 
 Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, `matmul`, reductions, shape ops, and gather/scatter; broadcasts are reduced correctly. `noGrad(fn)` disables taping, `.detach()` cuts the graph. Every backward rule is checked against central finite differences in `test/gradcheck.test.ts`, in both eager and lazy modes.
@@ -106,17 +109,17 @@ Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, 
 
 ```ts
 const step = compile((x: Tensor<[B, 2]>, y: Tensor<[B, 1]>) => {
-  const loss = ((net.forward(x) - y) ** 2).mean()
-  optim.zeroGrad()
-  loss.backward()
-  clipGradNorm(net.parameters(), 1)
-  optim.step()
-  return loss
-})
-for (let i = 0; i < 1000; i++) step(X, Y)
+  const loss = ((net.forward(x) - y) ** 2).mean();
+  optim.zeroGrad();
+  loss.backward();
+  clipGradNorm(net.parameters(), 1);
+  optim.step();
+  return loss;
+});
+for (let i = 0; i < 1000; i++) step(X, Y);
 ```
 
-The graph can be deep: a cellular automaton rolled out over dozens of time steps and differentiated end to end is tens of thousands of nodes, which is fine. Two limits follow from tracing once: JavaScript control flow that depends on tensor *values* cannot be captured (shape-dependent control flow is fine, shapes are known at trace time), and the graph has a fixed depth, so a variable-length loop needs one compiled graph per length.
+The graph can be deep: a cellular automaton rolled out over dozens of time steps and differentiated end to end is tens of thousands of nodes, which is fine. Two limits follow from tracing once: JavaScript control flow that depends on tensor _values_ cannot be captured (shape-dependent control flow is fine, shapes are known at trace time), and the graph has a fixed depth, so a variable-length loop needs one compiled graph per length.
 
 ## API sketch
 
@@ -168,8 +171,8 @@ gathering is "read each edge's source node" and scattering is "sum each
 node's incoming messages":
 
 ```ts
-const messages = x.indexSelect(src).sub(x.indexSelect(dst)).tanh()
-const aggregated = messages.scatterAdd(dst, nodes).mul(invDegree)
+const messages = x.indexSelect(src).sub(x.indexSelect(dst)).tanh();
+const aggregated = messages.scatterAdd(dst, nodes).mul(invDegree);
 ```
 
 Index tensors hold integral values in `float32` — there is no integer
@@ -196,8 +199,8 @@ pnpm build:native            # needs a Rust toolchain
 ```
 
 ```ts
-useNative()                    // candle on the CPU device
-useNative({ device: "gpu" })   // the best accelerator available
+useNative(); // candle on the CPU device
+useNative({ device: "gpu" }); // the best accelerator available
 ```
 
 CPU is the default, which is not the obvious choice. Measured on an Apple
