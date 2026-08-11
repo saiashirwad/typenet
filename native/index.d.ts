@@ -12,3 +12,6 @@ export declare function prepareGraph(graphJson: string): number
 
 /** Drop a plan created by `prepareGraph`. */
 export declare function releaseGraph(handle: number): void
+
+/** Op-kind timings gathered since the last call, as a text table. */
+export declare function takeProfile(): string

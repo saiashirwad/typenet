@@ -1,6 +1,7 @@
 use candle_core::{DType, Device, Tensor};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -365,24 +366,19 @@ fn eval_binary(kind: &str, parameter: f64, a: &Tensor, b: &Tensor) -> candle_cor
         "eq" => elementwise(a, b, |x, y| mask_f32(&x.eq(y)?)),
         "negDiv" => elementwise(a, b, |x, y| x.neg()? / y),
         "halfDiv" => elementwise(a, b, |x, y| (x * 0.5)? / y),
-        "mulSign" => elementwise(a, b, |x, y| {
-            // sign(y) = (y > 0) - (y < 0)
-            let zeros = y.zeros_like()?;
-            let pos = mask_f32(&y.gt(&zeros)?)?;
-            let neg = mask_f32(&y.lt(&zeros)?)?;
-            x * &(pos - neg)?
-        }),
-        "reluGrad" => elementwise(a, b, |x, y| {
-            x * &mask_f32(&y.gt(&y.zeros_like()?)?)?
-        }),
+        "mulSign" => elementwise(a, b, |x, y| x * &y.sign()?),
+        // sign(y).relu() is 1 where y > 0 and 0 elsewhere, without the
+        // separate comparison and dtype cast a mask would need.
+        "reluGrad" => elementwise(a, b, |x, y| x * &y.sign()?.relu()?),
         "leakyReluGrad" => elementwise(a, b, |x, y| {
             // where y > 0: x, else parameter * x  ==  x * (m + (1-m)*p)
             let m = mask_f32(&y.gt(&y.zeros_like()?)?)?;
             let weights = (&m + &(m.ones_like()? - &m)? * parameter)?;
             x * &weights
         }),
-        "sigmoidGrad" => elementwise(a, b, |x, y| (x * y)? * &(y.ones_like()? - y)?),
-        "tanhGrad" => elementwise(a, b, |x, y| x * &(y.ones_like()? - &y.sqr()?)?),
+        // affine(-1, 1) is 1 - y in one kernel, with nothing allocated.
+        "sigmoidGrad" => elementwise(a, b, |x, y| (x * y)? * &y.affine(-1.0, 1.0)?),
+        "tanhGrad" => elementwise(a, b, |x, y| x * &y.sqr()?.affine(-1.0, 1.0)?),
         other => Err(candle_core::Error::Msg(format!(
             "unknown binary op: {other}"
         ))),
@@ -398,18 +394,12 @@ fn eval_unary(kind: &str, parameter: f64, a: &Tensor) -> candle_core::Result<Ten
         "sqrt" => a.sqrt(),
         "abs" => a.abs(),
         "relu" => a.relu(),
-        "leakyRelu" => {
-            // max(x, 0) + parameter * min(x, 0)
-            let zeros = a.zeros_like()?;
-            let pos = a.maximum(&zeros)?;
-            let neg = a.minimum(&zeros)?;
-            pos + (neg * parameter)?
-        }
-        "sigmoid" => {
-            // 1 / (1 + exp(-x))
-            let ones = a.ones_like()?;
-            &ones / &(&ones + &a.neg()?.exp()?)?
-        }
+        // relu(x) - p*relu(-x)
+        "leakyRelu" => a.relu()? - (a.neg()?.relu()? * parameter)?,
+        // sigmoid(x) = (tanh(x/2) + 1)/2. Three kernels against the five
+        // that 1/(1 + exp(-x)) needs here, and it does not overflow for
+        // large negative x either.
+        "sigmoid" => a.affine(0.5, 0.0)?.tanh()?.affine(0.5, 0.5),
         "tanh" => a.tanh(),
         "scalePowGrad" => a.powf(parameter - 1.0)? * parameter,
         other => Err(candle_core::Error::Msg(format!(
@@ -423,81 +413,189 @@ fn eval_unary(kind: &str, parameter: f64, a: &Tensor) -> candle_core::Result<Ten
 // by the CPU fusion pass; must mirror eval_binary / eval_unary exactly.
 // ---------------------------------------------------------------------------
 
-fn scalar_binary(kind: &str, parameter: f64, a: f32, b: f32) -> candle_core::Result<f32> {
-    let p = parameter as f32;
-    Ok(match kind {
-        "add" => a + b,
-        "sub" => a - b,
-        "mul" => a * b,
-        "div" => a / b,
+/// Elementwise op kinds, resolved from their JSON names once when a graph
+/// is prepared. The evaluator's inner loop runs per element, so matching
+/// on a string there — which is what it used to do — cost more than the
+/// arithmetic it was dispatching.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Bin {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Maximum,
+    Minimum,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Eq,
+    NegDiv,
+    HalfDiv,
+    MulSign,
+    ReluGrad,
+    LeakyReluGrad,
+    SigmoidGrad,
+    TanhGrad,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Un {
+    Pow,
+    Neg,
+    Exp,
+    Log,
+    Sqrt,
+    Abs,
+    Relu,
+    LeakyRelu,
+    Sigmoid,
+    Tanh,
+    ScalePowGrad,
+}
+
+impl Bin {
+    fn parse(kind: &str) -> candle_core::Result<Self> {
+        Ok(match kind {
+            "add" => Bin::Add,
+            "sub" => Bin::Sub,
+            "mul" => Bin::Mul,
+            "div" => Bin::Div,
+            "maximum" => Bin::Maximum,
+            "minimum" => Bin::Minimum,
+            "gt" => Bin::Gt,
+            "ge" => Bin::Ge,
+            "lt" => Bin::Lt,
+            "le" => Bin::Le,
+            "eq" => Bin::Eq,
+            "negDiv" => Bin::NegDiv,
+            "halfDiv" => Bin::HalfDiv,
+            "mulSign" => Bin::MulSign,
+            "reluGrad" => Bin::ReluGrad,
+            "leakyReluGrad" => Bin::LeakyReluGrad,
+            "sigmoidGrad" => Bin::SigmoidGrad,
+            "tanhGrad" => Bin::TanhGrad,
+            other => {
+                return Err(candle_core::Error::Msg(format!(
+                    "unknown binary op: {other}"
+                )))
+            }
+        })
+    }
+}
+
+impl Un {
+    fn parse(kind: &str) -> candle_core::Result<Self> {
+        Ok(match kind {
+            "pow" => Un::Pow,
+            "neg" => Un::Neg,
+            "exp" => Un::Exp,
+            "log" => Un::Log,
+            "sqrt" => Un::Sqrt,
+            "abs" => Un::Abs,
+            "relu" => Un::Relu,
+            "leakyRelu" => Un::LeakyRelu,
+            "sigmoid" => Un::Sigmoid,
+            "tanh" => Un::Tanh,
+            "scalePowGrad" => Un::ScalePowGrad,
+            other => {
+                return Err(candle_core::Error::Msg(format!(
+                    "unknown unary op: {other}"
+                )))
+            }
+        })
+    }
+}
+
+/// One resolved elementwise operation: which op, and its scalar parameter
+/// (the exponent of `pow`, the slope of `leakyRelu`).
+#[derive(Clone, Copy)]
+enum Op {
+    Bin(Bin, f32),
+    Un(Un, f32),
+}
+
+impl Op {
+    fn of(node: &Node) -> candle_core::Result<Self> {
+        match node {
+            Node::Binary {
+                kind, parameter, ..
+            } => Ok(Op::Bin(Bin::parse(kind)?, *parameter as f32)),
+            Node::Unary {
+                kind, parameter, ..
+            } => Ok(Op::Un(Un::parse(kind)?, *parameter as f32)),
+            _ => Err(candle_core::Error::Msg(
+                "elementwise plans only contain elementwise nodes".into(),
+            )),
+        }
+    }
+}
+
+#[inline(always)]
+fn apply_bin(kind: Bin, p: f32, a: f32, b: f32) -> f32 {
+    match kind {
+        Bin::Add => a + b,
+        Bin::Sub => a - b,
+        Bin::Mul => a * b,
+        Bin::Div => a / b,
         // f32::max/min return the non-NaN operand; candle and JS both
         // propagate NaN, so compare explicitly.
-        "maximum" => {
+        Bin::Maximum => {
             if a >= b {
                 a
             } else {
                 b
             }
         }
-        "minimum" => {
+        Bin::Minimum => {
             if a <= b {
                 a
             } else {
                 b
             }
         }
-        "gt" => (a > b) as u8 as f32,
-        "ge" => (a >= b) as u8 as f32,
-        "lt" => (a < b) as u8 as f32,
-        "le" => (a <= b) as u8 as f32,
-        "eq" => (a == b) as u8 as f32,
-        "negDiv" => -a / b,
-        "halfDiv" => 0.5 * a / b,
-        "mulSign" => a * ((b > 0.0) as u8 as f32 - (b < 0.0) as u8 as f32),
-        "reluGrad" => {
+        Bin::Gt => (a > b) as u8 as f32,
+        Bin::Ge => (a >= b) as u8 as f32,
+        Bin::Lt => (a < b) as u8 as f32,
+        Bin::Le => (a <= b) as u8 as f32,
+        Bin::Eq => (a == b) as u8 as f32,
+        Bin::NegDiv => -a / b,
+        Bin::HalfDiv => 0.5 * a / b,
+        Bin::MulSign => a * ((b > 0.0) as u8 as f32 - (b < 0.0) as u8 as f32),
+        Bin::ReluGrad => {
             if b > 0.0 {
                 a
             } else {
                 0.0
             }
         }
-        "leakyReluGrad" => a * if b > 0.0 { 1.0 } else { p },
-        "sigmoidGrad" => a * b * (1.0 - b),
-        "tanhGrad" => a * (1.0 - b * b),
-        other => {
-            return Err(candle_core::Error::Msg(format!(
-                "unknown binary op: {other}"
-            )))
-        }
-    })
+        Bin::LeakyReluGrad => a * if b > 0.0 { 1.0 } else { p },
+        Bin::SigmoidGrad => a * b * (1.0 - b),
+        Bin::TanhGrad => a * (1.0 - b * b),
+    }
 }
 
-fn scalar_unary(kind: &str, parameter: f64, x: f32) -> candle_core::Result<f32> {
-    let p = parameter as f32;
-    Ok(match kind {
-        "pow" => x.powf(p),
-        "neg" => -x,
-        "exp" => x.exp(),
-        "log" => x.ln(),
-        "sqrt" => x.sqrt(),
-        "abs" => x.abs(),
-        "relu" => x.max(0.0),
-        "leakyRelu" => {
+#[inline(always)]
+fn apply_un(kind: Un, p: f32, x: f32) -> f32 {
+    match kind {
+        Un::Pow => x.powf(p),
+        Un::Neg => -x,
+        Un::Exp => x.exp(),
+        Un::Log => x.ln(),
+        Un::Sqrt => x.sqrt(),
+        Un::Abs => x.abs(),
+        Un::Relu => x.max(0.0),
+        Un::LeakyRelu => {
             if x > 0.0 {
                 x
             } else {
                 p * x
             }
         }
-        "sigmoid" => 1.0 / (1.0 + (-x).exp()),
-        "tanh" => x.tanh(),
-        "scalePowGrad" => p * x.powf(p - 1.0),
-        other => {
-            return Err(candle_core::Error::Msg(format!(
-                "unknown unary op: {other}"
-            )))
-        }
-    })
+        Un::Sigmoid => 1.0 / (1.0 + (-x).exp()),
+        Un::Tanh => x.tanh(),
+        Un::ScalePowGrad => p * x.powf(p - 1.0),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -665,31 +763,33 @@ struct ChildRef {
     same_shape: bool,
 }
 
+/// One elementwise operation with its inputs fully resolved: a fused
+/// group's member, or a standalone node that fusion left on its own.
 struct MemberPlan {
-    /// Node index in the graph (op kind/parameter read from there).
-    node: usize,
-    /// Shape this member's pass produces (the group output shape for
-    /// main members; the member's own smaller shape for small members).
+    /// The resolved elementwise operation.
+    op: Op,
+    /// Shape this pass produces (the group output shape for main members;
+    /// the member's own smaller shape for small members).
     out_shape: Vec<usize>,
     /// Fully resolved inputs (1 for unary, 2 for binary).
     inputs: Vec<ChildRef>,
+    /// Every input already has the output shape, so the pass needs no
+    /// coordinate arithmetic.
+    all_same: bool,
 }
 
 struct GroupPlan {
     leader: usize,
     out_shape: Vec<usize>,
+    /// True when no member reads a broadcast input, so the pass can index
+    /// buffers directly instead of decomposing a flat index into coords.
+    all_same: bool,
     /// Members smaller than the output shape, topo order; temp index =
     /// position. Their inputs can only be Buffer or earlier Temps.
     small_members: Vec<MemberPlan>,
     /// Same-shape-as-output members, topo order; scratch slot = position;
     /// the leader is last.
     main_members: Vec<MemberPlan>,
-}
-
-/// Standalone (ungrouped) elementwise node: resolved Buffer inputs.
-struct EwisePlan {
-    out_shape: Vec<usize>,
-    inputs: Vec<ChildRef>,
 }
 
 struct PreparedGraph {
@@ -710,7 +810,7 @@ struct PreparedGraph {
     group_of: Vec<Option<usize>>,
     groups: Vec<GroupPlan>,
     /// Per-node plans for standalone elementwise nodes.
-    ewise: Vec<Option<EwisePlan>>,
+    ewise: Vec<Option<MemberPlan>>,
     /// Which evaluator this graph runs on, chosen by the JS side.
     target: Target,
 }
@@ -757,7 +857,7 @@ impl PreparedGraph {
                 let inputs = node_inputs(&graph.nodes[m]);
                 if shapes[m] == out_shape {
                     slot_of[m] = Some(main_members.len());
-                    let inputs = inputs
+                    let inputs: Vec<ChildRef> = inputs
                         .iter()
                         .map(|&c| {
                             if let Some(slot) = slot_of[c] {
@@ -778,15 +878,16 @@ impl PreparedGraph {
                         })
                         .collect();
                     main_members.push(MemberPlan {
-                        node: m,
+                        op: Op::of(&graph.nodes[m])?,
                         out_shape: out_shape.clone(),
+                        all_same: inputs.iter().all(|c| c.same_shape),
                         inputs,
                     });
                 } else {
                     // Small members can only read buffers or earlier temps.
                     temp_of[m] = Some(small_members.len());
                     let target = shapes[m].clone();
-                    let inputs = inputs
+                    let inputs: Vec<ChildRef> = inputs
                         .iter()
                         .map(|&c| {
                             if let Some(t) = temp_of[c] {
@@ -801,31 +902,39 @@ impl PreparedGraph {
                         })
                         .collect();
                     small_members.push(MemberPlan {
-                        node: m,
+                        op: Op::of(&graph.nodes[m])?,
                         out_shape: target,
+                        all_same: inputs.iter().all(|c| c.same_shape),
                         inputs,
                     });
                 }
             }
+            let all_same = main_members
+                .iter()
+                .all(|m| m.inputs.iter().all(|c| c.same_shape));
             groups.push(GroupPlan {
                 leader,
                 out_shape,
+                all_same,
                 small_members,
                 main_members,
             });
         }
 
-        let mut ewise: Vec<Option<EwisePlan>> = (0..n).map(|_| None).collect();
+        let mut ewise: Vec<Option<MemberPlan>> = (0..n).map(|_| None).collect();
         for (idx, node) in graph.nodes.iter().enumerate() {
             if !live[idx] || fusion.group_of[idx].is_some() || !is_elementwise(node) {
                 continue;
             }
             let target = shapes[idx].clone();
-            ewise[idx] = Some(EwisePlan {
-                inputs: node_inputs(node)
-                    .iter()
-                    .map(|&c| buffer_child(c, &target))
-                    .collect(),
+            let inputs: Vec<ChildRef> = node_inputs(node)
+                .iter()
+                .map(|&c| buffer_child(c, &target))
+                .collect();
+            ewise[idx] = Some(MemberPlan {
+                op: Op::of(node)?,
+                all_same: inputs.iter().all(|c| c.same_shape),
+                inputs,
                 out_shape: target,
             });
         }
@@ -956,89 +1065,165 @@ fn read_ref(
     }
 }
 
-/// One elementwise member (op from `graph.nodes[mp.node]`) as a single
-/// pass over `target_shape`.
-fn exec_member(
-    node: &Node,
-    inputs: &[ChildRef],
-    target_shape: &[usize],
+/// `read_ref` for a group where nothing broadcasts: the flat index is the
+/// only index there is.
+#[inline]
+fn read_flat(
+    cr: &ChildRef,
+    i: usize,
     buffers: &[Option<Vec<f32>>],
     temps: &[Vec<f32>],
-    coords: &mut [usize],
-) -> candle_core::Result<Vec<f32>> {
-    let n = prod(target_shape);
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        flat_to_coords(i, target_shape, coords);
-        let value = match node {
-            Node::Binary {
-                kind, parameter, ..
-            } => scalar_binary(
-                kind,
-                *parameter,
-                read_ref(&inputs[0], i, coords, buffers, temps, &[]),
-                read_ref(&inputs[1], i, coords, buffers, temps, &[]),
-            )?,
-            Node::Unary {
-                kind, parameter, ..
-            } => scalar_unary(
-                kind,
-                *parameter,
-                read_ref(&inputs[0], i, coords, buffers, temps, &[]),
-            )?,
-            _ => unreachable!("elementwise plans only contain elementwise nodes"),
-        };
-        out.push(value);
+    scratch: &[f32],
+) -> f32 {
+    match cr.source {
+        ChildSource::Slot(slot) => scratch[slot],
+        ChildSource::Temp(t) => temps[t][i],
+        ChildSource::Buffer(b) => buffers[b].as_deref().unwrap_or(&[])[i],
     }
-    Ok(out)
 }
 
-fn exec_group(
-    plan: &GroupPlan,
-    graph: &Graph,
+/// How many elements one thread takes at a time. Small enough that a big
+/// pass spreads over the cores, large enough that rayon's bookkeeping and
+/// the per-chunk scratch allocation stay noise.
+const CHUNK: usize = 8192;
+
+/// Below this many elements a pass runs on the calling thread: the work is
+/// smaller than the cost of handing it out.
+const PARALLEL_MIN: usize = 16384;
+
+/// Run `body` over `out` in parallel chunks (or in place if it is small),
+/// giving it each chunk together with the flat index the chunk starts at.
+fn over_chunks(out: &mut [f32], body: impl Fn(usize, &mut [f32]) + Send + Sync) {
+    if out.len() < PARALLEL_MIN {
+        body(0, out);
+        return;
+    }
+    out.par_chunks_mut(CHUNK)
+        .enumerate()
+        .for_each(|(c, slice)| body(c * CHUNK, slice));
+}
+
+/// One elementwise op over its own output shape, into a fresh buffer.
+fn exec_member(
+    plan: &MemberPlan,
     buffers: &[Option<Vec<f32>>],
-) -> candle_core::Result<Vec<f32>> {
-    let mut temps: Vec<Vec<f32>> = Vec::with_capacity(plan.small_members.len());
-    let mut coords = vec![0usize; plan.out_shape.len()];
-    for sm in &plan.small_members {
-        temps.push(exec_member(
-            &graph.nodes[sm.node],
-            &sm.inputs,
-            &sm.out_shape,
-            buffers,
-            &temps,
-            &mut coords,
-        )?);
+    temps: &[Vec<f32>],
+) -> Vec<f32> {
+    let mut out = vec![0f32; prod(&plan.out_shape)];
+    let shape = &plan.out_shape;
+    let inputs = &plan.inputs;
+    if plan.all_same {
+        over_chunks(&mut out, |base, slice| {
+            for (k, dst) in slice.iter_mut().enumerate() {
+                let i = base + k;
+                *dst = match plan.op {
+                    Op::Bin(kind, p) => apply_bin(
+                        kind,
+                        p,
+                        read_flat(&inputs[0], i, buffers, temps, &[]),
+                        read_flat(&inputs[1], i, buffers, temps, &[]),
+                    ),
+                    Op::Un(kind, p) => apply_un(
+                        kind,
+                        p,
+                        read_flat(&inputs[0], i, buffers, temps, &[]),
+                    ),
+                };
+            }
+        });
+        return out;
     }
-    let n = prod(&plan.out_shape);
-    let mut scratch = vec![0f32; plan.main_members.len()];
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        flat_to_coords(i, &plan.out_shape, &mut coords);
-        for (slot, mm) in plan.main_members.iter().enumerate() {
-            let value = match &graph.nodes[mm.node] {
-                Node::Binary {
-                    kind, parameter, ..
-                } => scalar_binary(
+    over_chunks(&mut out, |base, slice| {
+        let mut coords = vec![0usize; shape.len()];
+        for (k, dst) in slice.iter_mut().enumerate() {
+            let i = base + k;
+            flat_to_coords(i, shape, &mut coords);
+            *dst = match plan.op {
+                Op::Bin(kind, p) => apply_bin(
                     kind,
-                    *parameter,
-                    read_ref(&mm.inputs[0], i, &coords, buffers, &temps, &scratch),
-                    read_ref(&mm.inputs[1], i, &coords, buffers, &temps, &scratch),
-                )?,
-                Node::Unary {
-                    kind, parameter, ..
-                } => scalar_unary(
+                    p,
+                    read_ref(&inputs[0], i, &coords, buffers, temps, &[]),
+                    read_ref(&inputs[1], i, &coords, buffers, temps, &[]),
+                ),
+                Op::Un(kind, p) => apply_un(
                     kind,
-                    *parameter,
-                    read_ref(&mm.inputs[0], i, &coords, buffers, &temps, &scratch),
-                )?,
-                _ => unreachable!("fusion groups only contain elementwise nodes"),
+                    p,
+                    read_ref(&inputs[0], i, &coords, buffers, temps, &[]),
+                ),
             };
-            scratch[slot] = value;
         }
-        out.push(scratch[plan.main_members.len() - 1]);
+    });
+    out
+}
+
+/// A whole fused group in one pass over the output: every member is
+/// evaluated per element into a scratch slot, so the intermediate values
+/// of a chain of elementwise ops never reach memory. Only the leader's
+/// value is written out.
+fn exec_group(plan: &GroupPlan, buffers: &[Option<Vec<f32>>]) -> Vec<f32> {
+    // Members smaller than the output shape are evaluated first, into
+    // temps: their inputs can only be external buffers or earlier temps.
+    let mut temps: Vec<Vec<f32>> = Vec::with_capacity(plan.small_members.len());
+    for sm in &plan.small_members {
+        temps.push(exec_member(sm, buffers, &temps));
     }
-    Ok(out)
+    let members = &plan.main_members;
+    let last = members.len() - 1;
+    let shape = &plan.out_shape;
+    let mut out = vec![0f32; prod(shape)];
+    // With no broadcast inputs anywhere in the group, the flat index is
+    // the only index anyone needs — worth its own loop, since decomposing
+    // an index into coordinates costs more than the arithmetic it feeds.
+    if plan.all_same {
+        over_chunks(&mut out, |base, slice| {
+            let mut scratch = vec![0f32; members.len()];
+            for (k, dst) in slice.iter_mut().enumerate() {
+                let i = base + k;
+                for (slot, mm) in members.iter().enumerate() {
+                    scratch[slot] = match mm.op {
+                        Op::Bin(kind, p) => apply_bin(
+                            kind,
+                            p,
+                            read_flat(&mm.inputs[0], i, buffers, &temps, &scratch),
+                            read_flat(&mm.inputs[1], i, buffers, &temps, &scratch),
+                        ),
+                        Op::Un(kind, p) => apply_un(
+                            kind,
+                            p,
+                            read_flat(&mm.inputs[0], i, buffers, &temps, &scratch),
+                        ),
+                    };
+                }
+                *dst = scratch[last];
+            }
+        });
+        return out;
+    }
+    over_chunks(&mut out, |base, slice| {
+        let mut scratch = vec![0f32; members.len()];
+        let mut coords = vec![0usize; shape.len()];
+        for (k, dst) in slice.iter_mut().enumerate() {
+            let i = base + k;
+            flat_to_coords(i, shape, &mut coords);
+            for (slot, mm) in members.iter().enumerate() {
+                scratch[slot] = match mm.op {
+                    Op::Bin(kind, p) => apply_bin(
+                        kind,
+                        p,
+                        read_ref(&mm.inputs[0], i, &coords, buffers, &temps, &scratch),
+                        read_ref(&mm.inputs[1], i, &coords, buffers, &temps, &scratch),
+                    ),
+                    Op::Un(kind, p) => apply_un(
+                        kind,
+                        p,
+                        read_ref(&mm.inputs[0], i, &coords, buffers, &temps, &scratch),
+                    ),
+                };
+            }
+            *dst = scratch[last];
+        }
+    });
+    out
 }
 
 /// Whole-graph execution from a prepared plan: leaf copies + raw loops,
@@ -1047,17 +1232,21 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
     let graph = &prep.graph;
     let n = graph.nodes.len();
     let mut buffers: Vec<Option<Vec<f32>>> = (0..n).map(|_| None).collect();
-    let mut coords: Vec<usize> = Vec::new();
     for (idx, node) in graph.nodes.iter().enumerate() {
         if !prep.live[idx] {
             continue;
         }
         if let Some(g) = prep.group_of[idx] {
             if prep.groups[g].leader == idx {
-                buffers[idx] = Some(exec_group(&prep.groups[g], graph, &buffers)?);
+                buffers[idx] = Some(exec_group(&prep.groups[g], &buffers));
             }
             continue;
         }
+        let started = if profiling() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         let get = |i: usize| -> candle_core::Result<&[f32]> {
             buffers.get(i).and_then(|b| b.as_deref()).ok_or_else(|| {
                 candle_core::Error::Msg(format!("node references future index {i}"))
@@ -1081,12 +1270,10 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
                     .to_vec()
             }
             Node::Binary { .. } | Node::Unary { .. } => {
-                let plan = prep.ewise[idx].as_ref().unwrap();
-                coords.resize(plan.out_shape.len(), 0);
-                exec_member(node, &plan.inputs, &plan.out_shape, &buffers, &[], &mut coords)?
+                exec_member(prep.ewise[idx].as_ref().unwrap(), &buffers, &[])
             }
             Node::Matmul { a, b } => {
-                tiny_matmul(get(*a)?, &prep.shapes[*a], get(*b)?, &prep.shapes[*b])?
+                cpu_matmul(get(*a)?, &prep.shapes[*a], get(*b)?, &prep.shapes[*b])?
             }
             Node::Reduce {
                 kind,
@@ -1137,6 +1324,13 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
                 shape,
             } => random_data(kind, prod(shape), *stream, seed)?,
         };
+        if let Some(started) = started {
+            record(
+                op_kind(node),
+                started.elapsed().as_secs_f64(),
+                prod(&prep.shapes[idx]),
+            );
+        }
         buffers[idx] = Some(out);
     }
     let mut out = Vec::new();
@@ -1148,9 +1342,90 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
     Ok(out)
 }
 
-/// Naive matmul with typenet's batch-dim broadcasting, on Vecs. Only used
-/// for tiny graphs, where this beats one candle dispatch.
-fn tiny_matmul(
+// Accelerate's BLAS, for the one op where a hand loop cannot compete.
+// candle links the same framework; declaring sgemm directly lets the CPU
+// evaluator use it without going through a candle tensor.
+#[cfg(target_os = "macos")]
+#[link(name = "Accelerate", kind = "framework")]
+extern "C" {
+    fn cblas_sgemm(
+        order: i32,
+        transa: i32,
+        transb: i32,
+        m: i32,
+        n: i32,
+        k: i32,
+        alpha: f32,
+        a: *const f32,
+        lda: i32,
+        b: *const f32,
+        ldb: i32,
+        beta: f32,
+        c: *mut f32,
+        ldc: i32,
+    );
+}
+
+const CBLAS_ROW_MAJOR: i32 = 101;
+const CBLAS_NO_TRANS: i32 = 111;
+
+/// Row-major C = A·B for contiguous slices. Rows of A are handed out in
+/// blocks so the work spreads over cores whatever BLAS decides to do.
+#[cfg(target_os = "macos")]
+fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
+    let block = ((m + rayon::current_num_threads() - 1)
+        / rayon::current_num_threads())
+    .max(64);
+    let run = |rows: usize, a: &[f32], c: &mut [f32]| unsafe {
+        cblas_sgemm(
+            CBLAS_ROW_MAJOR,
+            CBLAS_NO_TRANS,
+            CBLAS_NO_TRANS,
+            rows as i32,
+            n as i32,
+            k as i32,
+            1.0,
+            a.as_ptr(),
+            k as i32,
+            b.as_ptr(),
+            n as i32,
+            0.0,
+            c.as_mut_ptr(),
+            n as i32,
+        );
+    };
+    if m <= block {
+        run(m, a, c);
+        return;
+    }
+    c.par_chunks_mut(block * n)
+        .zip(a.par_chunks(block * k))
+        .for_each(|(c, a)| run(a.len() / k.max(1), a, c));
+}
+
+/// Everywhere without Accelerate: a cache-friendly triple loop.
+#[cfg(not(target_os = "macos"))]
+fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
+    let block = ((m + rayon::current_num_threads() - 1)
+        / rayon::current_num_threads())
+    .max(64);
+    c.par_chunks_mut(block * n)
+        .zip(a.par_chunks(block * k))
+        .for_each(|(c, a)| {
+            for i in 0..a.len() / k.max(1) {
+                for l in 0..k {
+                    let av = a[i * k + l];
+                    for j in 0..n {
+                        c[i * n + j] += av * b[l * n + j];
+                    }
+                }
+            }
+        });
+}
+
+/// Matmul with typenet's batch-dim broadcasting (candle does not do it
+/// either), each batch cell going through `gemm`.
+fn cpu_matmul(
     adata: &[f32],
     ashape: &[usize],
     bdata: &[f32],
@@ -1173,14 +1448,14 @@ fn tiny_matmul(
         }
         let (ao, bo) = (ao * m * k, bo * k * n);
         let oo = bi * m * n;
-        for i in 0..m {
-            for l in 0..k {
-                let av = adata[ao + i * k + l];
-                for j in 0..n {
-                    out[oo + i * n + j] += av * bdata[bo + l * n + j];
-                }
-            }
-        }
+        gemm(
+            &adata[ao..ao + m * k],
+            &bdata[bo..bo + k * n],
+            &mut out[oo..oo + m * n],
+            m,
+            k,
+            n,
+        );
     }
     Ok(out)
 }
@@ -1211,14 +1486,18 @@ fn tiny_index_select(
     let inner = row_major_strides(shape)[dim];
     let outer = prod(&shape[..dim]);
     let mut out = vec![0f32; outer * indices.len() * inner];
-    let mut o = 0usize;
-    for i in 0..outer {
-        for &row in &indices {
-            let base = (i * rows + row) * inner;
-            out[o..o + inner].copy_from_slice(&data[base..base + inner]);
-            o += inner;
-        }
-    }
+    let picked = indices.len();
+    // Output rows are independent, so hand them out in blocks.
+    out.par_chunks_mut(inner.max(1) * 64)
+        .enumerate()
+        .for_each(|(c, slice)| {
+            let start = c * 64;
+            for (r, dst) in slice.chunks_mut(inner).enumerate() {
+                let flat = start + r;
+                let base = (flat / picked * rows + indices[flat % picked]) * inner;
+                dst.copy_from_slice(&data[base..base + inner]);
+            }
+        });
     Ok(out)
 }
 
@@ -1230,19 +1509,51 @@ fn tiny_scatter_add(
     length: usize,
 ) -> candle_core::Result<Vec<f32>> {
     let indices = read_indices(index, length, "scatterAdd")?;
-    let inner = row_major_strides(shape)[dim];
+    let inner = row_major_strides(shape)[dim].max(1);
     let outer = prod(&shape[..dim]);
     let src_rows = shape[dim];
     let mut out = vec![0f32; outer * length * inner];
-    for i in 0..outer {
-        for (j, &row) in indices.iter().enumerate() {
-            let to = (i * length + row) * inner;
-            let from = (i * src_rows + j) * inner;
-            for k in 0..inner {
-                out[to + k] += data[from + k];
+    let slice = length * inner;
+
+    // Colliding indices make this the one op whose writes cannot simply be
+    // split by output range. But slices along the dims *outside* `dim` are
+    // fully independent, so when there is more than one of them they are
+    // the natural unit of work.
+    if outer > 1 {
+        out.par_chunks_mut(slice).enumerate().for_each(|(i, out)| {
+            for (j, &row) in indices.iter().enumerate() {
+                let to = row * inner;
+                let from = (i * src_rows + j) * inner;
+                for k in 0..inner {
+                    out[to + k] += data[from + k];
+                }
             }
-        }
+        });
+        return Ok(out);
     }
+
+    // A single slice — the usual dim-0 aggregation over an edge list. Give
+    // each thread a block of output rows and let it scan the index for the
+    // entries landing in its block: an index entry is 8 bytes against the
+    // `inner` floats a hit copies, so re-reading it per thread beats
+    // coordinating the writes.
+    let per = (length / rayon::current_num_threads().max(1)).max(1);
+    out.par_chunks_mut(per * inner)
+        .enumerate()
+        .for_each(|(c, out)| {
+            let lo = c * per;
+            let hi = lo + out.len() / inner;
+            for (j, &row) in indices.iter().enumerate() {
+                if row < lo || row >= hi {
+                    continue;
+                }
+                let to = (row - lo) * inner;
+                let from = j * inner;
+                for k in 0..inner {
+                    out[to + k] += data[from + k];
+                }
+            }
+        });
     Ok(out)
 }
 
@@ -1263,59 +1574,81 @@ fn tiny_reduce(
     }
     let n_out = prod(&out_shape);
     let step = strides[dim];
-    let mut coords = vec![0usize; shape.len()];
-    let mut out = Vec::with_capacity(n_out);
-    for i in 0..n_out {
-        // Output element i -> input coords with the reduced coord at 0.
-        let mut rem = i;
-        for j in (0..shape.len()).rev() {
-            let size = if j == dim { 1 } else { shape[j] };
-            coords[j] = rem % size;
-            rem /= size;
-        }
-        let mut base = 0usize;
-        for j in 0..shape.len() {
-            base += coords[j] * strides[j];
-        }
-        match kind {
-            "sum" => {
-                let mut acc = 0f32;
-                for dd in 0..d {
-                    acc += data[base + dd * step];
-                }
-                out.push(acc);
+    let rank = shape.len();
+    let kind = Reduce::parse(kind)?;
+    let mut out = vec![0f32; n_out];
+    over_chunks(&mut out, |base_i, slice| {
+        let mut coords = vec![0usize; rank];
+        for (k, dst) in slice.iter_mut().enumerate() {
+            // Output element i maps to the input coords with the reduced
+            // coordinate pinned at 0; walking `step` from there sweeps it.
+            let mut rem = base_i + k;
+            for j in (0..rank).rev() {
+                let size = if j == dim { 1 } else { shape[j] };
+                coords[j] = rem % size;
+                rem /= size;
             }
-            "max" => {
-                let mut acc = data[base];
-                for dd in 1..d {
-                    let v = data[base + dd * step];
-                    if v > acc {
-                        acc = v;
+            let mut base = 0usize;
+            for j in 0..rank {
+                base += coords[j] * strides[j];
+            }
+            *dst = match kind {
+                Reduce::Sum => {
+                    let mut acc = 0f32;
+                    for dd in 0..d {
+                        acc += data[base + dd * step];
                     }
+                    acc
                 }
-                out.push(acc);
-            }
-            // First index wins on ties, matching the CPU kernel.
-            "argmax" => {
-                let mut best = 0usize;
-                let mut acc = data[base];
-                for dd in 1..d {
-                    let v = data[base + dd * step];
-                    if v > acc {
-                        acc = v;
-                        best = dd;
+                Reduce::Max => {
+                    let mut acc = data[base];
+                    for dd in 1..d {
+                        let v = data[base + dd * step];
+                        if v > acc {
+                            acc = v;
+                        }
                     }
+                    acc
                 }
-                out.push(best as f32);
-            }
+                // First index wins on ties, matching the eager kernel.
+                Reduce::Argmax => {
+                    let mut best = 0usize;
+                    let mut acc = data[base];
+                    for dd in 1..d {
+                        let v = data[base + dd * step];
+                        if v > acc {
+                            acc = v;
+                            best = dd;
+                        }
+                    }
+                    best as f32
+                }
+            };
+        }
+    });
+    Ok(out)
+}
+
+#[derive(Clone, Copy)]
+enum Reduce {
+    Sum,
+    Max,
+    Argmax,
+}
+
+impl Reduce {
+    fn parse(kind: &str) -> candle_core::Result<Self> {
+        Ok(match kind {
+            "sum" => Reduce::Sum,
+            "max" => Reduce::Max,
+            "argmax" => Reduce::Argmax,
             other => {
                 return Err(candle_core::Error::Msg(format!(
                     "unknown reduce op: {other}"
                 )))
             }
-        }
+        })
     }
-    Ok(out)
 }
 
 fn tiny_reduce_all(kind: &str, data: &[f32]) -> candle_core::Result<Vec<f32>> {
@@ -1512,6 +1845,29 @@ fn index_u32(index: &Tensor) -> candle_core::Result<Tensor> {
     index.contiguous()?.flatten_all()?.to_dtype(DType::U32)
 }
 
+/// Label a node by op kind for the profile table; binary and unary nodes
+/// report their specific kind, which is where the interesting differences
+/// between them show up.
+fn op_kind(node: &Node) -> &str {
+    match node {
+        Node::Leaf { .. } => "leaf",
+        Node::Binary { kind, .. } => kind,
+        Node::Unary { kind, .. } => kind,
+        Node::Matmul { .. } => "matmul",
+        Node::Reduce { .. } => "reduce",
+        Node::ReduceAll { .. } => "reduceAll",
+        Node::BroadcastTo { .. } => "broadcastTo",
+        Node::Permute { .. } => "permute",
+        Node::View { .. } => "view",
+        Node::Narrow { .. } => "narrow",
+        Node::Cat { .. } => "cat",
+        Node::OneHot { .. } => "oneHot",
+        Node::IndexSelect { .. } => "indexSelect",
+        Node::ScatterAdd { .. } => "scatterAdd",
+        Node::Random { kind, .. } => kind,
+    }
+}
+
 /// The u32 form of an index node, converted on first use and kept.
 fn cached_index(
     cache: &mut [Option<Tensor>],
@@ -1551,6 +1907,11 @@ fn run_graph(
                     "node {i} was already released or never computed"
                 ))
             })
+        };
+        let started = if profiling() {
+            Some(std::time::Instant::now())
+        } else {
+            None
         };
         let out = match node {
             Node::Leaf {
@@ -1597,9 +1958,26 @@ fn run_graph(
                 a_shape.extend([m, k]);
                 let mut b_shape = batch.dims().to_vec();
                 b_shape.extend([k, n]);
-                let a = a.broadcast_as(a_shape)?.contiguous()?;
-                let b = b.broadcast_as(b_shape)?.contiguous()?;
-                a.matmul(&b)?
+                // Only materialize an operand when its batch dims actually
+                // need broadcasting. candle's matmul reads strides itself,
+                // and every backward pass transposes one operand — making
+                // those contiguous first meant copying both matrices on
+                // the way into every gradient matmul.
+                let owned_a;
+                let a = if a.dims() == a_shape.as_slice() {
+                    a
+                } else {
+                    owned_a = a.broadcast_as(a_shape)?.contiguous()?;
+                    &owned_a
+                };
+                let owned_b;
+                let b = if b.dims() == b_shape.as_slice() {
+                    b
+                } else {
+                    owned_b = b.broadcast_as(b_shape)?.contiguous()?;
+                    &owned_b
+                };
+                a.matmul(b)?
             }
             Node::Reduce {
                 kind,
@@ -1666,6 +2044,13 @@ fn run_graph(
                 device,
             )?,
         };
+        if let Some(started) = started {
+            record(
+                op_kind(node),
+                started.elapsed().as_secs_f64(),
+                prod(&prep.shapes[idx]),
+            );
+        }
         outputs[idx] = Some(out);
         // Release every input nothing else will read. On a rolled-out
         // automaton this is the difference between holding one activation
@@ -1762,6 +2147,60 @@ fn vec_readback(mut vec: Vec<f32>) -> Readback {
 pub fn eval_graph(graph_json: String, leaves: Float32Array, seed: u32) -> Result<Readback> {
     let prep = prepared(&graph_json)?;
     evaluate(&prep, &leaves, seed)
+}
+
+// ---------------------------------------------------------------------------
+// Op-kind profiling, off unless TYPENET_PROFILE is set. Wall time and
+// element counts per op kind, accumulated across evaluations and drained
+// by takeProfile() — enough to tell a bandwidth problem from a dispatch
+// problem without a sampling profiler.
+// ---------------------------------------------------------------------------
+
+static PROFILE: Mutex<Option<Vec<(String, f64, u64, u64)>>> = Mutex::new(None);
+
+fn profiling() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("TYPENET_PROFILE").is_ok())
+}
+
+fn record(kind: &str, seconds: f64, elements: usize) {
+    let mut guard = PROFILE.lock().unwrap();
+    let rows = guard.get_or_insert_with(Vec::new);
+    match rows.iter_mut().find(|(name, ..)| name == kind) {
+        Some(row) => {
+            row.1 += seconds;
+            row.2 += elements as u64;
+            row.3 += 1;
+        }
+        None => rows.push((kind.to_string(), seconds, elements as u64, 1)),
+    }
+}
+
+/// Op-kind timings gathered since the last call, as a text table.
+#[napi(js_name = "takeProfile")]
+pub fn take_profile() -> String {
+    let mut guard = PROFILE.lock().unwrap();
+    let Some(mut rows) = guard.take() else {
+        return String::new();
+    };
+    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    let total: f64 = rows.iter().map(|r| r.1).sum();
+    let mut out = format!(
+        "{:<16}{:>10}{:>8}{:>12}{:>12}\n",
+        "op", "ms", "share", "calls", "M elem/s"
+    );
+    for (kind, seconds, elements, calls) in &rows {
+        out += &format!(
+            "{:<16}{:>10.1}{:>7.1}%{:>12}{:>12.0}\n",
+            kind,
+            seconds * 1000.0,
+            100.0 * seconds / total.max(1e-12),
+            calls,
+            *elements as f64 / seconds.max(1e-12) / 1e6
+        );
+    }
+    out += &format!("{:<16}{:>10.1}\n", "total", total * 1000.0);
+    out
 }
 
 /// Overrides the JS side's evaluator choice, for measuring one against

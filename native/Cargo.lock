@@ -1400,6 +1400,7 @@ dependencies = [
  "napi",
  "napi-build 1.2.1",
  "napi-derive",
+ "rayon",
  "serde",
  "serde_json",
 ]
