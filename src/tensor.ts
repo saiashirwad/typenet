@@ -14,6 +14,7 @@ import type {
   Permute,
   PermuteCheck,
   ReduceDim,
+  ResizeDim,
   ResolveView,
   Shape,
   Squeeze,
@@ -47,6 +48,13 @@ export type BinaryOp =
   | "sub"
   | "mul"
   | "div"
+  | "maximum"
+  | "minimum"
+  | "gt"
+  | "ge"
+  | "lt"
+  | "le"
+  | "eq"
   | "negDiv"
   | "halfDiv"
   | "mulSign"
@@ -126,6 +134,19 @@ type LazyNodeBody =
     }
   | { op: "cat"; a: AnyTensor; b: AnyTensor; dim: number }
   | { op: "oneHot"; classes: number; input: AnyTensor }
+  | {
+      op: "indexSelect"
+      dim: number
+      input: AnyTensor
+      index: AnyTensor
+    }
+  | {
+      op: "scatterAdd"
+      dim: number
+      length: number
+      input: AnyTensor
+      index: AnyTensor
+    }
 
 type LazyNode = LazyNodeBody & {
   shape: number[]
@@ -314,6 +335,20 @@ function applyBinary(
       return x * y
     case "div":
       return x / y
+    case "maximum":
+      return Math.max(x, y)
+    case "minimum":
+      return Math.min(x, y)
+    case "gt":
+      return x > y ? 1 : 0
+    case "ge":
+      return x >= y ? 1 : 0
+    case "lt":
+      return x < y ? 1 : 0
+    case "le":
+      return x <= y ? 1 : 0
+    case "eq":
+      return x === y ? 1 : 0
     case "negDiv":
       return -x / y
     case "halfDiv":
@@ -718,6 +753,95 @@ function rawCat(
   return makeRaw(out, outShape, dtype)
 }
 
+// --- gather / scatter ---------------------------------------------
+// The two ops message passing on a graph is built from, and each
+// other's gradient: indexSelect reads row index[j] of the input into
+// row j of the output, scatterAdd sums row j of the input into row
+// index[j] of the output. `index` holds integral values in a float
+// tensor — typenet has no integer dtype, and a float32 mantissa
+// addresses 16.7M rows exactly.
+
+function checkIndex(
+  value: number,
+  limit: number,
+  what: string
+): number {
+  if (!Number.isInteger(value) || value < 0 || value >= limit)
+    throw new Error(
+      `${what}: index ${value} out of range for ${limit} rows`
+    )
+  return value
+}
+
+function rawIndexSelect(
+  a: AnyTensor,
+  index: AnyTensor,
+  dim: number
+): AnyTensor {
+  const length = index.numel
+  const outShape = a.shape.map((s: number, i: number) =>
+    i === dim ? length : s
+  )
+  if (lazyMode)
+    return makeLazy(
+      { op: "indexSelect", dim, input: a, index },
+      outShape,
+      a.dtype
+    )
+  const strides = contiguousStrides(a.shape)
+  const outer = prod(a.shape.slice(0, dim))
+  const inner = strides[dim]!
+  const dimSize = a.shape[dim]!
+  const out = new (arrayCtor(a.dtype))(prod(outShape))
+  const ad = a.data
+  const id = index.data
+  let o = 0
+  for (let i = 0; i < outer; i++)
+    for (let j = 0; j < length; j++) {
+      const base =
+        (i * dimSize +
+          checkIndex(id[j]!, dimSize, "indexSelect")) *
+        inner
+      for (let k = 0; k < inner; k++) out[o++] = ad[base + k]!
+    }
+  return makeRaw(out, outShape, a.dtype)
+}
+
+function rawScatterAdd(
+  a: AnyTensor,
+  index: AnyTensor,
+  dim: number,
+  length: number
+): AnyTensor {
+  const outShape = a.shape.map((s: number, i: number) =>
+    i === dim ? length : s
+  )
+  if (lazyMode)
+    return makeLazy(
+      { op: "scatterAdd", dim, length, input: a, index },
+      outShape,
+      a.dtype
+    )
+  const strides = contiguousStrides(a.shape)
+  const outer = prod(a.shape.slice(0, dim))
+  const inner = strides[dim]!
+  const srcLength = a.shape[dim]!
+  const out = new (arrayCtor(a.dtype))(prod(outShape))
+  const ad = a.data
+  const id = index.data
+  for (let i = 0; i < outer; i++)
+    for (let j = 0; j < srcLength; j++) {
+      const to =
+        (i * length +
+          checkIndex(id[j]!, length, "scatterAdd")) *
+        inner
+      const from = (i * srcLength + j) * inner
+      for (let k = 0; k < inner; k++)
+        out[to + k]! += ad[from + k]!
+    }
+  return makeRaw(out, outShape, a.dtype)
+}
+
 function makeLazy(
   body: LazyNodeBody,
   shape: readonly number[],
@@ -778,6 +902,19 @@ function evalNode(node: LazyNode): AnyTensor {
       return rawCat(force(node.a), force(node.b), node.dim)
     case "oneHot":
       return rawOneHot(force(node.input), node.classes)
+    case "indexSelect":
+      return rawIndexSelect(
+        force(node.input),
+        force(node.index),
+        node.dim
+      )
+    case "scatterAdd":
+      return rawScatterAdd(
+        force(node.input),
+        force(node.index),
+        node.dim,
+        node.length
+      )
   }
 }
 
@@ -1006,6 +1143,23 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           input: ref(node.input)
         })
         break
+      case "indexSelect":
+        nodes.push({
+          op: "indexSelect",
+          dim: node.dim,
+          input: ref(node.input),
+          index: ref(node.index)
+        })
+        break
+      case "scatterAdd":
+        nodes.push({
+          op: "scatterAdd",
+          dim: node.dim,
+          length: node.length,
+          input: ref(node.input),
+          index: ref(node.index)
+        })
+        break
     }
   }
 
@@ -1151,6 +1305,9 @@ function nodeInputs(node: LazyNode): AnyTensor[] {
     case "narrow":
     case "oneHot":
       return [node.input]
+    case "indexSelect":
+    case "scatterAdd":
+      return [node.input, node.index]
   }
 }
 
@@ -1254,6 +1411,17 @@ export function printGraph(
         case "oneHot":
           return `${lhs} = oneHot(${arg(node.input)})${attrs(
             [["classes", node.classes]]
+          )} ${tail}`
+        case "indexSelect":
+          return `${lhs} = indexSelect(${arg(node.input)}, ${arg(node.index)})${attrs(
+            [["dim", node.dim]]
+          )} ${tail}`
+        case "scatterAdd":
+          return `${lhs} = scatterAdd(${arg(node.input)}, ${arg(node.index)})${attrs(
+            [
+              ["dim", node.dim],
+              ["length", node.length]
+            ]
           )} ${tail}`
       }
     })
@@ -2028,6 +2196,106 @@ export class Tensor<
     ])
   }
 
+  /**
+   * Elementwise maximum. Gradient goes wholly to whichever operand won;
+   * ties go to the left one.
+   */
+  maximum(other: number): Tensor<S, P>
+  maximum<S2 extends Shape>(
+    other: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
+  maximum(other: AnyTensor | number): AnyTensor {
+    const b = coerce(other, this)
+    const out = rawBinary(this, b, "maximum")
+    return withGrad(out, "maximum", [this, b], g => [
+      sumTo(
+        rawBinary(g, rawBinary(this, b, "ge"), "mul"),
+        this.shape
+      ),
+      sumTo(
+        rawBinary(g, rawBinary(this, b, "lt"), "mul"),
+        b.shape
+      )
+    ])
+  }
+
+  /** Elementwise minimum; ties go to the left operand. */
+  minimum(other: number): Tensor<S, P>
+  minimum<S2 extends Shape>(
+    other: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
+  minimum(other: AnyTensor | number): AnyTensor {
+    const b = coerce(other, this)
+    const out = rawBinary(this, b, "minimum")
+    return withGrad(out, "minimum", [this, b], g => [
+      sumTo(
+        rawBinary(g, rawBinary(this, b, "le"), "mul"),
+        this.shape
+      ),
+      sumTo(
+        rawBinary(g, rawBinary(this, b, "gt"), "mul"),
+        b.shape
+      )
+    ])
+  }
+
+  /**
+   * Clamp into `[min, max]`; pass `null` for an open end. Gradient is 1
+   * inside the range and 0 outside, since this is `maximum` composed
+   * with `minimum`.
+   */
+  clamp(
+    min: number | null,
+    max: number | null = null
+  ): Tensor<S, P> {
+    let out = this as AnyTensor
+    if (min !== null) out = out.maximum(min)
+    if (max !== null) out = out.minimum(max)
+    return out as any
+  }
+
+  // Comparisons produce 1.0 / 0.0 masks and stop gradients: a step
+  // function has zero derivative wherever it is differentiable.
+  gt(other: number): Tensor<S, P>
+  gt<S2 extends Shape>(
+    other: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
+  gt(other: AnyTensor | number): AnyTensor {
+    return rawBinary(this, coerce(other, this), "gt")
+  }
+
+  ge(other: number): Tensor<S, P>
+  ge<S2 extends Shape>(
+    other: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
+  ge(other: AnyTensor | number): AnyTensor {
+    return rawBinary(this, coerce(other, this), "ge")
+  }
+
+  lt(other: number): Tensor<S, P>
+  lt<S2 extends Shape>(
+    other: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
+  lt(other: AnyTensor | number): AnyTensor {
+    return rawBinary(this, coerce(other, this), "lt")
+  }
+
+  le(other: number): Tensor<S, P>
+  le<S2 extends Shape>(
+    other: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
+  le(other: AnyTensor | number): AnyTensor {
+    return rawBinary(this, coerce(other, this), "le")
+  }
+
+  eq(other: number): Tensor<S, P>
+  eq<S2 extends Shape>(
+    other: Tensor<S2, any> & BroadcastCheck<S, S2>
+  ): Tensor<Broadcast<S, S2>, P>
+  eq(other: AnyTensor | number): AnyTensor {
+    return rawBinary(this, coerce(other, this), "eq")
+  }
+
   pow(exponent: number): Tensor<S, P> {
     const out = rawUnary(this, "pow", exponent)
     return withGrad(out, "pow", [this], g => [
@@ -2220,6 +2488,78 @@ export class Tensor<
         `oneHot() requires a positive class count, got ${classes}`
       )
     return rawOneHot(this, classes) as any
+  }
+
+  /**
+   * Gather rows along `dim`: row `j` of the result is row `index[j]` of
+   * this tensor. `index` is a rank-1 tensor of integral values (typenet
+   * has no integer dtype); its length becomes the size of `dim`.
+   *
+   * The workhorse of graph message passing: with `index` an edge list,
+   * `x.indexSelect(src)` is "the state of each edge's source node".
+   * Gradients flow to the gathered tensor, never to the index.
+   */
+  indexSelect<E extends number>(
+    index: Tensor<[E], any>
+  ): Tensor<ResizeDim<S, 0, E>, P>
+  indexSelect<E extends number, D extends number>(
+    index: Tensor<[E], any>,
+    dim: D & DimCheck<S, D>
+  ): Tensor<ResizeDim<S, D, E>, P>
+  indexSelect(index: AnyTensor, dim = 0): AnyTensor {
+    if (index.rank !== 1)
+      throw new Error(
+        `indexSelect() requires a rank-1 index, got ${showShape(index.shape)}`
+      )
+    const d = normalizeDim(dim, this.shape.length)
+    const rows = this.shape[d]!
+    const out = rawIndexSelect(this, index, d)
+    return withGrad(out, "indexSelect", [this], g => [
+      rawScatterAdd(g, index, d, rows)
+    ])
+  }
+
+  /**
+   * Scatter-add rows along `dim` into an output of `length` rows: row
+   * `j` of this tensor is *added into* row `index[j]` of the result.
+   * Rows no index points at stay zero. This is `index_add_` on a zero
+   * tensor, and the exact reverse of {@link indexSelect}.
+   *
+   * The aggregation half of message passing: with `index` the
+   * destination side of an edge list, `messages.scatterAdd(dst, n)`
+   * sums each node's incoming messages.
+   */
+  scatterAdd<L extends number>(
+    index: Tensor<[Dim0<S>], any>,
+    length: L
+  ): Tensor<ResizeDim<S, 0, L>, P>
+  scatterAdd<L extends number, D extends number>(
+    index: Tensor<[number], any>,
+    length: L,
+    dim: D & DimCheck<S, D>
+  ): Tensor<ResizeDim<S, D, L>, P>
+  scatterAdd(
+    index: AnyTensor,
+    length: number,
+    dim = 0
+  ): AnyTensor {
+    if (index.rank !== 1)
+      throw new Error(
+        `scatterAdd() requires a rank-1 index, got ${showShape(index.shape)}`
+      )
+    if (!Number.isInteger(length) || length < 0)
+      throw new Error(
+        `scatterAdd() requires a non-negative integer length, got ${length}`
+      )
+    const d = normalizeDim(dim, this.shape.length)
+    if (index.numel !== this.shape[d])
+      throw new Error(
+        `scatterAdd(): ${index.numel} indices for ${this.shape[d]} rows along dim ${d}`
+      )
+    const out = rawScatterAdd(this, index, d, length)
+    return withGrad(out, "scatterAdd", [this], g => [
+      rawIndexSelect(g, index, d)
+    ])
   }
 
   view<const V extends number[]>(

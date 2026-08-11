@@ -481,6 +481,22 @@ export type ReduceDim<
     : RemoveAt<S, I>
   : never
 
+/**
+ * Shape of the gather/scatter pair: dim `D` is resized to `L` and every
+ * other dim survives. `indexSelect` sets `L` to the index length,
+ * `scatterAdd` to the requested output length.
+ */
+export type ResizeDim<
+  S extends Shape,
+  D extends number,
+  L extends number
+> =
+  IsDynamic<S> extends true ? number[]
+  : NormalizeDim<S, D> extends infer I extends number ?
+    number extends I ? number[]
+    : ReplaceAt<S, I, L>
+  : never
+
 export type Stack<
   S extends Shape,
   N extends number,

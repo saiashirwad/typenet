@@ -354,3 +354,52 @@ function _noInfer<P extends TensorParams>(
 
   return ok
 }
+
+// gather / scatter: the index length flows into the output shape, and a
+// dim-0 scatter index must have one entry per source row.
+
+function _gatherScatter<
+  N extends number,
+  P extends TensorParams
+>(x: Tensor<[N, 16], P>, nodes: Tensor<[1024, 16], P>) {
+  const src = zeros([4096])
+  const gathered = nodes.indexSelect(src)
+  type _1 = Expect<Equal<typeof gathered.shape, [4096, 16]>>
+
+  const aggregated = gathered.scatterAdd(src, 1024)
+  type _2 = Expect<Equal<typeof aggregated.shape, [1024, 16]>>
+
+  // an inner dim keeps the outer ones
+  const channels = nodes.indexSelect(zeros([3]), 1)
+  type _3 = Expect<Equal<typeof channels.shape, [1024, 3]>>
+
+  // a generic row count stays generic
+  const generic = x.indexSelect(src)
+  type _4 = Expect<Equal<typeof generic.shape, [4096, 16]>>
+
+  // @ts-expect-error dim 2 does not exist on a rank-2 tensor
+  nodes.indexSelect(src, 2)
+
+  // @ts-expect-error one index per source row: 4096 rows, not 8
+  gathered.scatterAdd(zeros([8]), 1024)
+
+  return { gathered, aggregated }
+}
+
+// comparisons and clamp keep the operand shape; broadcasts still apply.
+
+function _compare(a: Tensor<[2, 3]>, b: Tensor<[3]>) {
+  const mask = a.gt(b)
+  type _1 = Expect<Equal<typeof mask.shape, [2, 3]>>
+
+  const limited = a.clamp(-1, 1)
+  type _2 = Expect<Equal<typeof limited.shape, [2, 3]>>
+
+  const outer = zeros([2, 1]).maximum(zeros([1, 3]))
+  type _3 = Expect<Equal<typeof outer.shape, [2, 3]>>
+
+  // @ts-expect-error [2, 3] and [4] do not broadcast
+  a.maximum(zeros([4]))
+
+  return { mask, limited, outer }
+}

@@ -50,6 +50,16 @@ const awayFromZero = (rand: () => number): number =>
 // positive only, for log/sqrt
 const positive = (rand: () => number): number =>
   0.5 + rand() * 2
+// |x| in [0.2, 0.7] or [1.5, 2.5] — never within EPS of ±1, so the
+// corners of clamp/maximum/minimum stay outside the difference window
+const awayFromUnit = (rand: () => number): number =>
+  (rand() > 0.5 ? 1 : -1) *
+  (rand() > 0.5 ? 0.2 + rand() * 0.5 : 1.5 + rand())
+
+// Index tensors are exact integers, not sampled inputs, so they are
+// built inside `build` rather than coming from `shapes`.
+const index = (values: number[]): AnyTensor =>
+  Tensor.of(values) as AnyTensor
 
 function checkCase(c: Case, seed: number): void {
   const values = c.shapes.map((shape, i) => {
@@ -359,6 +369,100 @@ const CASES: Case[] = [
         .mul(2)
         .sum(),
     tol: 2e-3
+  },
+
+  // Gather/scatter. Repeated indices are the interesting part: they make
+  // indexSelect's backward accumulate and scatterAdd's forward sum.
+  {
+    name: "indexSelect(dim 0), repeated indices",
+    shapes: [[4, 3]],
+    build: ([a]) =>
+      a!.indexSelect(index([2, 0, 0, 3, 1])).pow(3).sum()
+  },
+  {
+    name: "indexSelect(dim 1)",
+    shapes: [[2, 4]],
+    build: ([a]) =>
+      a!.indexSelect(index([3, 1, 1]), 1).pow(3).sum()
+  },
+  {
+    name: "indexSelect, some rows unused",
+    shapes: [[5, 2]],
+    build: ([a]) =>
+      a!.indexSelect(index([1, 1, 4])).pow(3).sum()
+  },
+  {
+    name: "scatterAdd(dim 0), colliding indices",
+    shapes: [[5, 3]],
+    build: ([a]) =>
+      a!.scatterAdd(index([2, 0, 0, 1, 1]), 3).pow(3).sum()
+  },
+  {
+    name: "scatterAdd(dim 1), empty output rows",
+    shapes: [[2, 3]],
+    build: ([a]) =>
+      a!.scatterAdd(index([3, 0, 3]), 4, 1).pow(3).sum()
+  },
+  {
+    // the message-passing shape: gather over an edge list, aggregate back
+    name: "message passing: gather, scale, scatter",
+    shapes: [
+      [4, 3],
+      [4, 3]
+    ],
+    build: ([x, w]) => {
+      const src = index([0, 1, 1, 2, 3, 0])
+      const dst = index([1, 0, 2, 3, 0, 3])
+      const messages = x!
+        .indexSelect(src)
+        .sub(x!.indexSelect(dst))
+        .tanh()
+      return messages.scatterAdd(dst, 4).mul(w!).sum()
+    }
+  },
+
+  // Kinked ops: `awayFromUnit` keeps every sample clear of ±1 by more
+  // than EPS, so the finite difference never straddles a corner.
+  {
+    name: "maximum(a, -1)",
+    shapes: [[5]],
+    build: ([a]) => a!.maximum(-1).pow(3).sum(),
+    sample: awayFromUnit
+  },
+  {
+    name: "minimum(a, 1)",
+    shapes: [[5]],
+    build: ([a]) => a!.minimum(1).pow(3).sum(),
+    sample: awayFromUnit
+  },
+  {
+    name: "maximum(a, b)",
+    shapes: [[5], [5]],
+    build: ([a, b]) => a!.maximum(b!).pow(3).sum(),
+    sample: awayFromUnit
+  },
+  {
+    name: "minimum(a, b) broadcast [2,1] vs [1,3]",
+    shapes: [
+      [2, 1],
+      [1, 3]
+    ],
+    build: ([a, b]) => a!.minimum(b!).pow(3).sum(),
+    sample: awayFromUnit
+  },
+  {
+    name: "clamp(-1, 1)",
+    shapes: [[6]],
+    build: ([a]) => a!.clamp(-1, 1).pow(3).sum(),
+    sample: awayFromUnit
+  },
+  {
+    // the overflow penalty the graph CA trains with
+    name: "overflow penalty (x - clamp(x)).abs().mean()",
+    shapes: [[6]],
+    build: ([a]) =>
+      a!.sub(a!.clamp(-1, 1)).abs().mean() as AnyTensor,
+    sample: awayFromUnit
   }
 ]
 

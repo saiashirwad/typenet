@@ -102,6 +102,20 @@ enum Node {
         classes: usize,
         input: usize,
     },
+    /// Gather rows: out[j] = input[index[j]] along `dim`.
+    IndexSelect {
+        dim: usize,
+        input: usize,
+        index: usize,
+    },
+    /// Scatter-add rows into a zero tensor of `length` rows along `dim`:
+    /// out[index[j]] += input[j].
+    ScatterAdd {
+        dim: usize,
+        length: usize,
+        input: usize,
+        index: usize,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +154,8 @@ fn node_inputs(node: &Node) -> Vec<usize> {
         Node::Narrow { input, .. } => vec![*input],
         Node::Cat { a, b, .. } => vec![*a, *b],
         Node::OneHot { input, .. } => vec![*input],
+        Node::IndexSelect { input, index, .. } => vec![*input, *index],
+        Node::ScatterAdd { input, index, .. } => vec![*input, *index],
     }
 }
 
@@ -213,6 +229,18 @@ fn node_shapes(graph: &Graph) -> candle_core::Result<Vec<Vec<usize>>> {
                 s
             }
             Node::OneHot { classes, input } => vec![prod(&shapes[*input]), *classes],
+            Node::IndexSelect { dim, input, index } => {
+                let mut s = shapes[*input].clone();
+                s[*dim] = prod(&shapes[*index]);
+                s
+            }
+            Node::ScatterAdd {
+                dim, length, input, ..
+            } => {
+                let mut s = shapes[*input].clone();
+                s[*dim] = *length;
+                s
+            }
         };
         shapes.push(shape);
     }
@@ -250,6 +278,13 @@ fn eval_binary(kind: &str, parameter: f64, a: &Tensor, b: &Tensor) -> candle_cor
         "sub" => a.broadcast_sub(b),
         "mul" => a.broadcast_mul(b),
         "div" => a.broadcast_div(b),
+        "maximum" => elementwise(a, b, |x, y| x.maximum(y)),
+        "minimum" => elementwise(a, b, |x, y| x.minimum(y)),
+        "gt" => elementwise(a, b, |x, y| mask_f32(&x.gt(y)?)),
+        "ge" => elementwise(a, b, |x, y| mask_f32(&x.ge(y)?)),
+        "lt" => elementwise(a, b, |x, y| mask_f32(&x.lt(y)?)),
+        "le" => elementwise(a, b, |x, y| mask_f32(&x.le(y)?)),
+        "eq" => elementwise(a, b, |x, y| mask_f32(&x.eq(y)?)),
         "negDiv" => elementwise(a, b, |x, y| x.neg()? / y),
         "halfDiv" => elementwise(a, b, |x, y| (x * 0.5)? / y),
         "mulSign" => elementwise(a, b, |x, y| {
@@ -317,6 +352,27 @@ fn scalar_binary(kind: &str, parameter: f64, a: f32, b: f32) -> candle_core::Res
         "sub" => a - b,
         "mul" => a * b,
         "div" => a / b,
+        // f32::max/min return the non-NaN operand; candle and JS both
+        // propagate NaN, so compare explicitly.
+        "maximum" => {
+            if a >= b {
+                a
+            } else {
+                b
+            }
+        }
+        "minimum" => {
+            if a <= b {
+                a
+            } else {
+                b
+            }
+        }
+        "gt" => (a > b) as u8 as f32,
+        "ge" => (a >= b) as u8 as f32,
+        "lt" => (a < b) as u8 as f32,
+        "le" => (a <= b) as u8 as f32,
+        "eq" => (a == b) as u8 as f32,
         "negDiv" => -a / b,
         "halfDiv" => 0.5 * a / b,
         "mulSign" => a * ((b > 0.0) as u8 as f32 - (b < 0.0) as u8 as f32),
@@ -898,6 +954,24 @@ fn execute(prep: &PreparedGraph, leaves: &[f32]) -> candle_core::Result<Vec<f32>
                 tiny_cat(get(*a)?, &prep.shapes[*a], get(*b)?, &prep.shapes[*b], *dim)
             }
             Node::OneHot { classes, input } => tiny_one_hot(*classes, get(*input)?)?,
+            Node::IndexSelect { dim, input, index } => tiny_index_select(
+                get(*input)?,
+                &prep.shapes[*input],
+                get(*index)?,
+                *dim,
+            )?,
+            Node::ScatterAdd {
+                dim,
+                length,
+                input,
+                index,
+            } => tiny_scatter_add(
+                get(*input)?,
+                &prep.shapes[*input],
+                get(*index)?,
+                *dim,
+                *length,
+            )?,
         };
         buffers[idx] = Some(out);
     }
@@ -941,6 +1015,67 @@ fn tiny_matmul(
                 for j in 0..n {
                     out[oo + i * n + j] += av * bdata[bo + l * n + j];
                 }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Read an index buffer of integral f32s, bounds-checked against `rows`.
+fn read_indices(index: &[f32], rows: usize, what: &str) -> candle_core::Result<Vec<usize>> {
+    index
+        .iter()
+        .map(|&v| {
+            if v.fract() != 0.0 || v < 0.0 || v as usize >= rows {
+                return Err(candle_core::Error::Msg(format!(
+                    "{what}: index {v} out of range for {rows} rows"
+                )));
+            }
+            Ok(v as usize)
+        })
+        .collect()
+}
+
+fn tiny_index_select(
+    data: &[f32],
+    shape: &[usize],
+    index: &[f32],
+    dim: usize,
+) -> candle_core::Result<Vec<f32>> {
+    let rows = shape[dim];
+    let indices = read_indices(index, rows, "indexSelect")?;
+    let inner = row_major_strides(shape)[dim];
+    let outer = prod(&shape[..dim]);
+    let mut out = vec![0f32; outer * indices.len() * inner];
+    let mut o = 0usize;
+    for i in 0..outer {
+        for &row in &indices {
+            let base = (i * rows + row) * inner;
+            out[o..o + inner].copy_from_slice(&data[base..base + inner]);
+            o += inner;
+        }
+    }
+    Ok(out)
+}
+
+fn tiny_scatter_add(
+    data: &[f32],
+    shape: &[usize],
+    index: &[f32],
+    dim: usize,
+    length: usize,
+) -> candle_core::Result<Vec<f32>> {
+    let indices = read_indices(index, length, "scatterAdd")?;
+    let inner = row_major_strides(shape)[dim];
+    let outer = prod(&shape[..dim]);
+    let src_rows = shape[dim];
+    let mut out = vec![0f32; outer * length * inner];
+    for i in 0..outer {
+        for (j, &row) in indices.iter().enumerate() {
+            let to = (i * length + row) * inner;
+            let from = (i * src_rows + j) * inner;
+            for k in 0..inner {
+                out[to + k] += data[from + k];
             }
         }
     }
@@ -1207,6 +1342,12 @@ fn eval_one_hot(classes: usize, a: &Tensor) -> candle_core::Result<Tensor> {
     targets.eq(&range)?.to_dtype(DType::F32)
 }
 
+/// typenet has no integer dtype, so index tensors arrive as f32 holding
+/// integral values. candle's gather/scatter kernels want U32.
+fn index_u32(index: &Tensor) -> candle_core::Result<Tensor> {
+    index.contiguous()?.flatten_all()?.to_dtype(DType::U32)
+}
+
 fn run_graph(
     graph: &Graph,
     leaves: &[f32],
@@ -1327,6 +1468,26 @@ fn run_graph(
                 Tensor::cat(&[&a, &b], *dim)?
             }
             Node::OneHot { classes, input } => eval_one_hot(*classes, get(*input)?)?,
+            Node::IndexSelect { dim, input, index } => {
+                get(*input)?
+                    .contiguous()?
+                    .index_select(&index_u32(get(*index)?)?, *dim)?
+            }
+            Node::ScatterAdd {
+                dim,
+                length,
+                input,
+                index,
+            } => {
+                let src = get(*input)?.contiguous()?;
+                let mut shape = src.dims().to_vec();
+                shape[*dim] = *length;
+                Tensor::zeros(shape, DType::F32, device)?.index_add(
+                    &index_u32(get(*index)?)?,
+                    &src,
+                    *dim,
+                )?
+            }
         };
         outputs[idx] = Some(out);
     }

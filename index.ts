@@ -66,6 +66,7 @@ export type {
   Squeeze,
   Unsqueeze,
   ReduceDim,
+  ResizeDim,
   ResolveView,
   Stack,
   Cat,
