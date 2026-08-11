@@ -33,32 +33,12 @@ import { type Edges, inDegrees } from "./graphs.ts"
  * gated difference mean, and one degree scalar.
  */
 export type Percept<C extends number> = DimAdd<
-  DimMul<3, C>,
+  DimAdd<DimAdd<C, C>, C>,
   1
 >
 
 /** The three channel blocks the gate is linear in. */
 export type GateIn<C extends number> = DimMul<3, C>
-
-/**
- * Assert a shape the algebra will not derive.
- *
- * Every dim asserted below is right, and the runtime checks it. But
- * composing broadcasts over an *unresolved generic* dim leaves TypeScript
- * holding expressions like `BroadcastDim<C, C>` that it will not simplify
- * back to `C` — so a chain of ops on a `Tensor<[N, C]>` stops matching
- * `[N, C]` even though that is exactly what it is. (Each dim rule resolves
- * on its own; it is the composition that does not.)
- *
- * This appears only inside the generic kernel below. Every public
- * signature in this file is exact, so every *call site* is fully checked —
- * which is the part that catches mistakes.
- */
-function shaped<S extends Shape>(
-  t: Tensor<any, any>
-): Tensor<S> {
-  return t as Tensor<S>
-}
 
 /**
  * Everything about the graph the rule needs, as tensors. The graph never
@@ -106,14 +86,20 @@ export function graphTensors<
   }
 }
 
-/** A tensor of the given shape holding `data`. */
+/**
+ * A tensor of the given shape holding `data`.
+ *
+ * The shape is asserted because it comes from runtime values — an edge
+ * count, a node count — that the type system cannot read off a
+ * `number[]`. Everything downstream of here is inferred.
+ */
 function fromData<S extends Shape>(
   data: Float32Array,
   shape: number[]
 ): Tensor<S> {
   const t = Tensor.zeros(shape)
   ;(t.data as Float32Array).set(data)
-  return shaped<S>(t)
+  return t as unknown as Tensor<S>
 }
 
 /**
@@ -183,15 +169,15 @@ export class GraphNCA<
     const { src, dst, nodes, invDegree } = graph
 
     // Gather each edge's endpoints once; both terms below need them.
-    const fromNode: Tensor<[E, C]> = x.indexSelect(src)
-    const toNode: Tensor<[E, C]> = x.indexSelect(dst)
-    const difference: Tensor<[E, C]> = fromNode.sub(toNode)
+    const fromNode = x.indexSelect(src)
+    const toNode = x.indexSelect(dst)
+    const difference = fromNode.sub(toNode)
 
     /** Sum per-edge messages onto their destination node, and average. */
     const aggregate = (
       messages: Tensor<[E, C]>
     ): Tensor<[N, C]> =>
-      shaped(messages.scatterAdd(dst, nodes).mul(invDegree))
+      messages.scatterAdd(dst, nodes).mul(invDegree)
 
     // The gate is linear in [x_src, x_dst, |x_src - x_dst|], so its two
     // endpoint terms are one matmul over nodes, then gathered per edge. As
@@ -201,45 +187,46 @@ export class GraphNCA<
     const endpoints = x.matmul(
       cat(weight.narrow(0, 0, c), weight.narrow(0, c, c), 1)
     )
-    const gate: Tensor<[E, C]> = shaped(
-      endpoints
-        .narrow(1, 0, c)
-        .indexSelect(src)
-        .add(endpoints.narrow(1, c, c).indexSelect(dst))
-        .add(
-          difference
-            .abs()
-            .matmul(weight.narrow(0, 2 * c, c))
-            .add(this.gate.bias!)
-        )
-        .sigmoid()
-        .mul(2)
-    )
+    // The only shape written down in this method, and it is a check
+    // rather than a cast: broadcasting the bias over the edge tensor leaves
+    // TypeScript holding `Broadcast<..., BroadcastDim<C, C>>`, which is
+    // equal to [E, C] and assignable to it, but is not *syntactically* it —
+    // so it no longer unifies with a generic parameter downstream. Naming
+    // the shape here re-anchors it. Everything else in this method is
+    // inferred.
+    const gate: Tensor<[E, C]> = endpoints
+      .narrow(1, 0, c)
+      .indexSelect(src)
+      .add(endpoints.narrow(1, c, c).indexSelect(dst))
+      .add(
+        difference
+          .abs()
+          .matmul(weight.narrow(0, 2 * c, c))
+          .add(this.gate.bias!)
+      )
+      .sigmoid()
+      .mul(2)
 
     // log1p(degree) goes LAST, so warm-starting from a checkpoint whose
     // perception lacked it is a plain zero-column pad of the first layer.
-    const perception: Tensor<[N, Percept<C>]> = shaped(
+    const perception = cat(
       cat(
-        cat(
-          cat(x, aggregate(fromNode), 1),
-          aggregate(shaped<[E, C]>(gate.mul(difference))),
-          1
-        ),
-        graph.logDegree,
+        cat(x, aggregate(fromNode), 1),
+        aggregate(gate.mul(difference)),
         1
-      )
+      ),
+      graph.logDegree,
+      1
     )
-    const increment: Tensor<[N, C]> = this.outer.forward(
+    const increment = this.outer.forward(
       this.inner.forward(perception).relu()
     )
 
     // Stochastic per-node update: the classic NCA trick for robustness to
     // an asynchronous update order. uniform() is a graph node, so a
     // compiled step redraws this mask on every call.
-    const mask: Tensor<[N, 1]> = shaped(
-      uniform([nodes, 1]).lt(updateRate)
-    )
-    return shaped(x.add(increment.mul(mask)))
+    const mask = uniform([nodes, 1]).lt(updateRate)
+    return x.add(increment.mul(mask))
   }
 }
 
@@ -260,13 +247,11 @@ export function aliveMask<
   graph: GraphTensors<NoInfer<N>, E>,
   threshold = 0.1
 ): Tensor<[N, 1]> {
-  const live: Tensor<[N, 1]> = x
-    .narrow(1, 3, 1)
-    .gt(threshold)
+  const live = x.narrow(1, 3, 1).gt(threshold)
   const liveNeighbours = live
     .indexSelect(graph.src)
     .scatterAdd(graph.dst, graph.nodes)
-  return shaped(live.add(liveNeighbours).gt(0))
+  return live.add(liveNeighbours).gt(0)
 }
 
 /**

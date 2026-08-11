@@ -150,10 +150,18 @@ type IsExact<X, Y> =
     true
   : false
 
+// The size-1 cases come first, deliberately. IsExact compares invariantly,
+// which TypeScript cannot decide while either side is an unresolved
+// generic, so it defers the conditional into a union of the branches.
+// Leading with `IsExact<X, Y>` leaves `BroadcastDim<C, 1>` unresolved, and
+// `Tensor<[N, C]>.mul(column)` then stops having type `Tensor<[N, C]>` —
+// multiplying by a column being the commonest thing a graph rule does.
+// Leading with the 1-cases costs nothing: when the other dim is also a
+// generic, every branch of the deferred chain yields the same dim anyway.
 type BroadcastDim<X extends number, Y extends number> =
-  IsExact<X, Y> extends true ? X
+  IsExact<Y, 1> extends true ? X
   : IsExact<X, 1> extends true ? Y
-  : IsExact<Y, 1> extends true ? X
+  : IsExact<X, Y> extends true ? X
   : IsExact<X, number> extends true ? Y
   : IsExact<Y, number> extends true ? X
   : X extends Y ? X
