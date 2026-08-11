@@ -96,7 +96,8 @@ export function star(pos: Points, arms = 5): Target {
   return paint(pos, i => {
     const { r, h } = polar(pos, i)
     return {
-      inside: r < 0.2 + 0.13 * Math.cos(arms * h * 2 * Math.PI),
+      inside:
+        r < 0.2 + 0.13 * Math.cos(arms * h * 2 * Math.PI),
       colour: hueRgb(h)
     }
   })
@@ -110,7 +111,10 @@ export function star(pos: Points, arms = 5): Target {
 export function annulus(pos: Points): Target {
   return paint(pos, i => {
     const { r, h } = polar(pos, i)
-    return { inside: r > 0.17 && r < 0.33, colour: hueRgb(h) }
+    return {
+      inside: r > 0.17 && r < 0.33,
+      colour: hueRgb(h)
+    }
   })
 }
 
@@ -209,7 +213,10 @@ export function jack(
     const d = [0, 1, 2].map(k => point(pos, i, k) - 0.5)
     for (let axis = 0; axis < 3; axis++) {
       const others = [0, 1, 2].filter(k => k !== axis)
-      const radial = Math.hypot(d[others[0]!]!, d[others[1]!]!)
+      const radial = Math.hypot(
+        d[others[0]!]!,
+        d[others[1]!]!
+      )
       if (Math.abs(d[axis]!) < half && radial < thick)
         return { inside: true, colour: arms[axis]! }
     }

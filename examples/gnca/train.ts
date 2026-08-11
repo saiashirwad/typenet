@@ -59,7 +59,10 @@ const options = {
   /** Samples per batch to damage; the best-scoring ones are hit. */
   damage: number("damage", 3),
   /** Rollout length range. Healing needs longer than growing. */
-  horizon: [number("horizon-min", 48), number("horizon-max", 80)],
+  horizon: [
+    number("horizon-min", 48),
+    number("horizon-max", 80)
+  ],
   /**
    * How many distinct rollout lengths to draw from. Each gets its own
    * compiled graph, since a graph traced once has a fixed depth — see
@@ -101,7 +104,9 @@ function number(name: string, fallback: number): number {
   if (raw === undefined || raw === "") return fallback
   const value = Number(raw)
   if (!Number.isFinite(value))
-    throw new Error(`--${name} expects a number, got ${raw}`)
+    throw new Error(
+      `--${name} expects a number, got ${raw}`
+    )
   return value
 }
 
@@ -165,10 +170,13 @@ console.log(
 const single = graphTensors(edges, N)
 const batched = graphTensors(batchEdges(edges, B, N), B * N)
 
-// Target as a tensor, once for a single copy and once tiled over the
-// batch, so the loss is a plain subtraction.
-const target = tensorFrom(targetData, [N, 4])
-const targetTiled = tensorFrom(tile(targetData, B), [B * N, 4])
+// The target tiled over the batch, so the loss is a plain subtraction.
+// The heal probe scores on the host instead, since it reads the state
+// back anyway.
+const targetTiled = tensorFrom(tile(targetData, B), [
+  B * N,
+  4
+])
 
 function tensorFrom(
   data: Float32Array,
@@ -179,9 +187,13 @@ function tensorFrom(
   return t
 }
 
-function tile(data: Float32Array, times: number): Float32Array {
+function tile(
+  data: Float32Array,
+  times: number
+): Float32Array {
   const out = new Float32Array(data.length * times)
-  for (let i = 0; i < times; i++) out.set(data, i * data.length)
+  for (let i = 0; i < times; i++)
+    out.set(data, i * data.length)
   return out
 }
 
@@ -203,7 +215,9 @@ function rollout(
   let x = x0
   for (let i = 0; i < steps; i++) {
     const alive = aliveMask(x, graph)
-    x = model.forward(x, graph, options.updateRate).mul(alive)
+    x = model
+      .forward(x, graph, options.updateRate)
+      .mul(alive)
   }
   return x
 }
@@ -243,9 +257,12 @@ function trainStep(
       const noised =
         options.noise > 0 ?
           input.add(
-            (normal([B * N, C] as [number, number]) as AnyTensor).mul(
-              options.noise
-            )
+            (
+              normal([B * N, C] as [
+                number,
+                number
+              ]) as AnyTensor
+            ).mul(options.noise)
           )
         : input
       const x = rollout(noised, steps, batched)
@@ -255,7 +272,11 @@ function trainStep(
       const loss =
         options.overflow > 0 ?
           mse.add(
-            x.sub(x.clamp(-1, 1)).abs().mean().mul(options.overflow)
+            x
+              .sub(x.clamp(-1, 1))
+              .abs()
+              .mean()
+              .mul(options.overflow)
           )
         : mse
       optimizer.zeroGrad()
@@ -279,12 +300,14 @@ function trainStep(
   }
 }
 
-const horizons = Array.from({ length: options.buckets }, (_, i) =>
-  Math.round(
-    options.horizon[0]! +
-      ((options.horizon[1]! - options.horizon[0]!) * i) /
-        Math.max(options.buckets - 1, 1)
-  )
+const horizons = Array.from(
+  { length: options.buckets },
+  (_, i) =>
+    Math.round(
+      options.horizon[0]! +
+        ((options.horizon[1]! - options.horizon[0]!) * i) /
+          Math.max(options.buckets - 1, 1)
+    )
 )
 
 // ------------------------------------------------------------- the pool ---
@@ -307,7 +330,8 @@ function sampleError(
   for (let node = 0; node < N; node++)
     for (let c = 0; c < 4; c++) {
       const delta =
-        state[offset + node * C + c]! - targetData[node * 4 + c]!
+        state[offset + node * C + c]! -
+        targetData[node * 4 + c]!
       total += delta * delta
     }
   return total / (N * 4)
@@ -382,10 +406,14 @@ let lastReport = Date.now()
 
 for (let step = 1; step <= options.steps; step++) {
   // Draw a batch from the pool.
-  for (let b = 0; b < B; b++) chosen[b] = random.int(options.pool)
+  for (let b = 0; b < B; b++)
+    chosen[b] = random.int(options.pool)
   for (let b = 0; b < B; b++)
     batchState.set(
-      pool.subarray(chosen[b]! * N * C, (chosen[b]! + 1) * N * C),
+      pool.subarray(
+        chosen[b]! * N * C,
+        (chosen[b]! + 1) * N * C
+      ),
       b * N * C
     )
 
@@ -432,7 +460,10 @@ for (let step = 1; step <= options.steps; step++) {
   }
 
   const horizon = horizons[random.int(horizons.length)]!
-  const { loss, mse, state } = trainStep(batchState, horizon)
+  const { loss, mse, state } = trainStep(
+    batchState,
+    horizon
+  )
 
   // Write the rollout back into the pool, and reset the worst sample to
   // a fresh seed so the pool never fills with dead ends.
@@ -456,9 +487,10 @@ for (let step = 1; step <= options.steps; step++) {
   if (step % options.report === 0 || step === 1) {
     const now = Date.now()
     const rate =
-      step === 1 ?
-        0
-      : (options.report * 1000) / Math.max(now - lastReport, 1)
+      step === 1 ? 0 : (
+        (options.report * 1000) /
+        Math.max(now - lastReport, 1)
+      )
     lastReport = now
     console.log(
       `step ${String(step).padStart(6)}  loss ${loss.toFixed(6)}  ` +

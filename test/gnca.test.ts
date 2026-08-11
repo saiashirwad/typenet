@@ -40,7 +40,10 @@ type AnyTensor = Tensor<any, any>
 
 const reference = JSON.parse(
   readFileSync(
-    new URL("./fixtures/gnca-reference.json", import.meta.url),
+    new URL(
+      "./fixtures/gnca-reference.json",
+      import.meta.url
+    ),
     "utf8"
   )
 ) as {
@@ -91,7 +94,9 @@ function expectClose(
   tolerance: number,
   label: string
 ): void {
-  expect(actual.length, `${label}: length`).toBe(expected.length)
+  expect(actual.length, `${label}: length`).toBe(
+    expected.length
+  )
   let worst = 0
   let at = -1
   for (let i = 0; i < expected.length; i++) {
@@ -128,10 +133,9 @@ function buildModel(): {
   const params = model.parameters()
   params.forEach((p, i) => {
     const values = reference.weights[PARAM_NAMES[i]!]!
-    expect(
-      p.numel,
-      `${PARAM_NAMES[i]} element count`
-    ).toBe(values.length)
+    expect(p.numel, `${PARAM_NAMES[i]} element count`).toBe(
+      values.length
+    )
     ;(p.data as Float32Array).set(values)
   })
   return { model, params }
@@ -163,8 +167,12 @@ function rollout(
 describe("graph cellular automaton, against PyTorch", () => {
   it("rebuilds the same k-NN graph from the same positions", () => {
     expect(edges.count).toBe(reference.edges.src.length)
-    expect(Array.from(edges.src)).toEqual(reference.edges.src)
-    expect(Array.from(edges.dst)).toEqual(reference.edges.dst)
+    expect(Array.from(edges.src)).toEqual(
+      reference.edges.src
+    )
+    expect(Array.from(edges.dst)).toEqual(
+      reference.edges.dst
+    )
   })
 
   it("has the parameter shapes PyTorch has, transposed", () => {
@@ -180,14 +188,21 @@ describe("graph cellular automaton, against PyTorch", () => {
 
   it.each([
     { label: "eager", lazy: false, native: false },
-    { label: "lazy interpreter", lazy: true, native: false },
+    {
+      label: "lazy interpreter",
+      lazy: true,
+      native: false
+    },
     { label: "native", lazy: true, native: true }
   ])(
     "matches the forward rollout and every gradient ($label)",
     ({ lazy, native }) => {
       if (native && !isNativeAvailable()) return
       const { model, params } = buildModel()
-      const graph = graphTensors(batchEdges(edges, B, N), B * N)
+      const graph = graphTensors(
+        batchEdges(edges, B, N),
+        B * N
+      )
       const x0 = tensorFrom(reference.x0, [
         B * N,
         C
@@ -200,10 +215,30 @@ describe("graph cellular automaton, against PyTorch", () => {
       // rolled-out steps of matmuls, gathers and scatter-adds: the
       // measured worst case is 8e-6 relative, and the fixture itself is
       // rounded to seven digits.
-      expectClose([mse.item()], [reference.mse], 1e-5, "mse")
-      expectClose([loss.item()], [reference.loss], 1e-5, "loss")
-      expectClose(state.data, reference.state, 3e-5, "state")
-      expectClose(x0.grad!.data, reference.xGrad, 3e-5, "grad of x0")
+      expectClose(
+        [mse.item()],
+        [reference.mse],
+        1e-5,
+        "mse"
+      )
+      expectClose(
+        [loss.item()],
+        [reference.loss],
+        1e-5,
+        "loss"
+      )
+      expectClose(
+        state.data,
+        reference.state,
+        3e-5,
+        "state"
+      )
+      expectClose(
+        x0.grad!.data,
+        reference.xGrad,
+        3e-5,
+        "grad of x0"
+      )
       params.forEach((p, i) => {
         const name = PARAM_NAMES[i]!
         expect(p.grad, `${name}: gradient`).not.toBeNull()
@@ -221,7 +256,10 @@ describe("graph cellular automaton, against PyTorch", () => {
     // compile() traces the same rollout and replays it, so the loss it
     // returns has to be the reference's on the first call.
     const { model, params } = buildModel()
-    const graph = graphTensors(batchEdges(edges, B, N), B * N)
+    const graph = graphTensors(
+      batchEdges(edges, B, N),
+      B * N
+    )
     if (isNativeAvailable()) useNative()
     const step = compile((input: AnyTensor) => {
       const { loss } = rollout(
@@ -235,7 +273,12 @@ describe("graph cellular automaton, against PyTorch", () => {
     const value = step(
       tensorFrom(reference.x0, [B * N, C])
     ).item()
-    expectClose([value], [reference.loss], 1e-5, "compiled loss")
+    expectClose(
+      [value],
+      [reference.loss],
+      1e-5,
+      "compiled loss"
+    )
     params.forEach((p, i) =>
       expectClose(
         p.grad!.data,
@@ -254,9 +297,16 @@ describe("graph cellular automaton, against PyTorch", () => {
     const batch = 2
     const channels = 8
     const steps = 6
-    const built = randomGeometricGraph({ nodes, dim: 2, seed: 3 })
+    const built = randomGeometricGraph({
+      nodes,
+      dim: 2,
+      seed: 3
+    })
     const targetData = TARGETS.heart!.build(built.pos)
-    const center = nearestNode(built.pos, TARGETS.heart!.seedAt)
+    const center = nearestNode(
+      built.pos,
+      TARGETS.heart!.seedAt
+    )
     const graph = graphTensors(
       batchEdges(built.edges, batch, nodes),
       batch * nodes
@@ -277,7 +327,9 @@ describe("graph cellular automaton, against PyTorch", () => {
         (normal([rows, channels]) as AnyTensor).mul(0.02)
       )
       for (let i = 0; i < steps; i++)
-        x = model.forward(x, graph, 0.5).mul(aliveMask(x, graph))
+        x = model
+          .forward(x, graph, 0.5)
+          .mul(aliveMask(x, graph))
       const loss = x
         .narrow(1, 0, 4)
         .sub(target)
@@ -296,11 +348,14 @@ describe("graph cellular automaton, against PyTorch", () => {
       [rows, channels]
     )
     const losses: number[] = []
-    for (let i = 0; i < 40; i++) losses.push(step(seed).item())
+    for (let i = 0; i < 40; i++)
+      losses.push(step(seed).item())
     const first = losses[0]!
     const last = losses[losses.length - 1]!
     expect(Number.isFinite(last)).toBe(true)
-    expect(last, `${first} -> ${last}`).toBeLessThan(first * 0.7)
+    expect(last, `${first} -> ${last}`).toBeLessThan(
+      first * 0.7
+    )
     // and the parameters actually moved
     expect(
       Array.from(params[2]!.data).some(v => v !== 0)
@@ -311,7 +366,10 @@ describe("graph cellular automaton, against PyTorch", () => {
     // With updateRate 0.5 the mask gates about half the nodes, so two
     // calls of the same compiled step must not agree.
     const { model } = buildModel()
-    const graph = graphTensors(batchEdges(edges, B, N), B * N)
+    const graph = graphTensors(
+      batchEdges(edges, B, N),
+      B * N
+    )
     if (isNativeAvailable()) useNative()
     const step = compile((input: AnyTensor) =>
       model.forward(input, graph, 0.5)

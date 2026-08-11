@@ -19,7 +19,8 @@ export function rng(seed: number): Rng {
     /** Integer in [0, n). */
     int: (n: number) => Math.floor(next() * n),
     /** Uniform in [lo, hi). */
-    range: (lo: number, hi: number) => lo + next() * (hi - lo),
+    range: (lo: number, hi: number) =>
+      lo + next() * (hi - lo),
     /** Integer in [lo, hi], both ends included. */
     intRange: (lo: number, hi: number) =>
       lo + Math.floor(next() * (hi - lo + 1)),

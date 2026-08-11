@@ -493,7 +493,8 @@ export type ResizeDim<
 > =
   IsDynamic<S> extends true ? number[]
   : NormalizeDim<S, D> extends infer I extends number ?
-    number extends I ? number[]
+    number extends I ?
+      number[]
     : ReplaceAt<S, I, L>
   : never
 

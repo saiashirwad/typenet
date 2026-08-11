@@ -21,10 +21,7 @@ import {
   cat,
   uniform
 } from "../../index.ts"
-import {
-  type Edges,
-  inDegrees
-} from "./graphs.ts"
+import { type Edges, inDegrees } from "./graphs.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -77,8 +74,13 @@ function fromData(
 }
 
 /** Concatenate several tensors along `dim`; typenet's cat is binary. */
-function concat(parts: AnyTensor[], dim: number): AnyTensor {
-  return parts.reduce((a, b) => cat(a, b, dim as any) as AnyTensor)
+function concat(
+  parts: AnyTensor[],
+  dim: number
+): AnyTensor {
+  return parts.reduce(
+    (a, b) => cat(a, b, dim as any) as AnyTensor
+  )
 }
 
 export class GraphNCA extends Module {
@@ -96,7 +98,9 @@ export class GraphNCA extends Module {
     this.channels = channels
     this.hidden = hidden
     this.inner = new Linear(3 * channels + 1, hidden)
-    this.outer = new Linear(hidden, channels, { bias: false })
+    this.outer = new Linear(hidden, channels, {
+      bias: false
+    })
     // Zero the last layer: the initial rule is the identity, so growth
     // starts from a standing seed rather than from noise.
     ;(this.outer.weight.data as Float32Array).fill(0)

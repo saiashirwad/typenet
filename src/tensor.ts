@@ -754,7 +754,11 @@ function rawCat(
       "float64"
     : "float32"
   if (lazyMode)
-    return makeLazy({ op: "cat", a, b, dim }, outShape, dtype)
+    return makeLazy(
+      { op: "cat", a, b, dim },
+      outShape,
+      dtype
+    )
   const strides = contiguousStrides(outShape)
   const outer = prod(outShape.slice(0, dim))
   const inner = strides[dim]!
@@ -796,9 +800,16 @@ function hash32(x: number): number {
 }
 
 /** Uniform in [0, 1) from 24 mantissa bits of a hashed counter. */
-function unitFloat(seed: number, stream: number, i: number) {
+function unitFloat(
+  seed: number,
+  stream: number,
+  i: number
+) {
   return (
-    (hash32((hash32(seed ^ Math.imul(stream, 0x9e3779b9)) ^ i) >>> 0) >>>
+    (hash32(
+      (hash32(seed ^ Math.imul(stream, 0x9e3779b9)) ^ i) >>>
+        0
+    ) >>>
       8) *
     2 ** -24
   )
@@ -826,9 +837,19 @@ function rawRandom(
   dtype: DType
 ): AnyTensor {
   if (lazyMode)
-    return makeLazy({ op: "random", kind, stream }, shape, dtype)
+    return makeLazy(
+      { op: "random", kind, stream },
+      shape,
+      dtype
+    )
   return makeRaw(
-    randomData(kind, prod(shape), stream, activeSeed, dtype),
+    randomData(
+      kind,
+      prod(shape),
+      stream,
+      activeSeed,
+      dtype
+    ),
     shape,
     dtype
   )
@@ -852,7 +873,8 @@ function randomData(
       const u = 1 - unitFloat(seed, stream, 2 * i)
       const v = unitFloat(seed, stream, 2 * i + 1)
       out[i] =
-        Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
+        Math.sqrt(-2 * Math.log(u)) *
+        Math.cos(2 * Math.PI * v)
     }
   return out
 }
@@ -903,7 +925,11 @@ function checkIndex(
   limit: number,
   what: string
 ): number {
-  if (!Number.isInteger(value) || value < 0 || value >= limit)
+  if (
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value >= limit
+  )
     throw new Error(
       `${what}: index ${value} out of range for ${limit} rows`
     )
@@ -939,7 +965,8 @@ function rawIndexSelect(
         (i * dimSize +
           checkIndex(id[j]!, dimSize, "indexSelect")) *
         inner
-      for (let k = 0; k < inner; k++) out[o++] = ad[base + k]!
+      for (let k = 0; k < inner; k++)
+        out[o++] = ad[base + k]!
     }
   return makeRaw(out, outShape, a.dtype)
 }
@@ -1204,7 +1231,10 @@ function serializeLazyGraph(roots: AnyTensor[]): {
       // buffer. Anything the native bridge cannot take (float64,
       // non-CPU storage) aborts serialization so the caller falls
       // back to the interpreter.
-      if (t._storage.kind !== "cpu" || t.dtype !== "float32")
+      if (
+        t._storage.kind !== "cpu" ||
+        t.dtype !== "float32"
+      )
         return null
       const data = t._storage.data as Float32Array
       nodes.push({
@@ -1849,9 +1879,7 @@ export function compile<
     }
     const outputs = native.rootShapes
       .slice(0, state.outputs.length)
-      .map(shape =>
-        makeRaw(take(shape), shape, "float32")
-      )
+      .map(shape => makeRaw(take(shape), shape, "float32"))
     // Root order: outputs, update expressions, grads (see trace()).
     for (const u of state.updates)
       applyUpdate(u, take([...u.expr.shape]))
@@ -2000,7 +2028,8 @@ export class Tensor<
         "Use Tensor.of / zeros / ones / randn to create tensors"
       )
     const length =
-      storage.kind === "cpu" ? storage.data.length
+      storage.kind === "cpu" ?
+        storage.data.length
       : prod(storage.node.shape)
     if (length !== prod(shape))
       throw new Error(

@@ -32,7 +32,11 @@ export function patternNodes(
 export function ball(
   pos: Points,
   pattern: Int32Array,
-  options: { frac?: number; center?: number; random?: Rng } = {}
+  options: {
+    frac?: number
+    center?: number
+    random?: Rng
+  } = {}
 ): Int32Array {
   const { frac = 0.25, random = rng(0) } = options
   const center =
@@ -62,7 +66,10 @@ export function scatter(
   options: { frac?: number; random?: Rng } = {}
 ): Int32Array {
   const { frac = 0.25, random = rng(0) } = options
-  const count = Math.max(1, Math.floor(frac * pattern.length))
+  const count = Math.max(
+    1,
+    Math.floor(frac * pattern.length)
+  )
   return Int32Array.from(random.sample(pattern, count))
 }
 
@@ -108,10 +115,12 @@ export function cutAcross(
   const keep = new Uint8Array(edges.count)
   for (let i = 0; i < edges.count; i++)
     keep[i] =
-      point(pos, edges.src[i]!, 1) < y ===
-      point(pos, edges.dst[i]!, 1) < y
-        ? 1
-        : 0
+      (
+        point(pos, edges.src[i]!, 1) < y ===
+        point(pos, edges.dst[i]!, 1) < y
+      ) ?
+        1
+      : 0
   return keep
 }
 

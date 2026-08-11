@@ -41,14 +41,19 @@ function allPaths(fn: () => AnyTensor): {
   return { eager, lazy, native }
 }
 
-function expectAgree(fn: () => AnyTensor, tolerance = 1e-5): void {
+function expectAgree(
+  fn: () => AnyTensor,
+  tolerance = 1e-5
+): void {
   const { eager, lazy, native } = allPaths(fn)
   for (const [label, other] of [
     ["lazy", lazy],
     ["native", native]
   ] as const) {
     if (!other) continue
-    expect(other.shape, `${label} shape`).toEqual(eager.shape)
+    expect(other.shape, `${label} shape`).toEqual(
+      eager.shape
+    )
     const a = eager.data
     const b = other.data
     for (let i = 0; i < a.length; i++)
@@ -70,7 +75,9 @@ const rows = () =>
 describe("indexSelect", () => {
   it("gathers rows, repeats included", () => {
     expect(
-      rows().indexSelect(tensor([2, 0, 2])).toArray()
+      rows()
+        .indexSelect(tensor([2, 0, 2]))
+        .toArray()
     ).toEqual([
       [5, 6],
       [1, 2],
@@ -80,7 +87,9 @@ describe("indexSelect", () => {
 
   it("gathers along an inner dim", () => {
     expect(
-      rows().indexSelect(tensor([1, 0]), 1).toArray()
+      rows()
+        .indexSelect(tensor([1, 0]), 1)
+        .toArray()
     ).toEqual([
       [2, 1],
       [4, 3],
@@ -105,13 +114,17 @@ describe("indexSelect", () => {
 
   it("rejects an out-of-range index", () => {
     expect(() =>
-      rows().indexSelect(tensor([0, 9])).toArray()
+      rows()
+        .indexSelect(tensor([0, 9]))
+        .toArray()
     ).toThrow(/index 9 out of range for 4 rows/)
   })
 
   it("rejects a fractional index", () => {
     expect(() =>
-      rows().indexSelect(tensor([0.5])).toArray()
+      rows()
+        .indexSelect(tensor([0.5]))
+        .toArray()
     ).toThrow(/out of range/)
   })
 
@@ -179,7 +192,9 @@ describe("scatterAdd", () => {
 
   it("rejects an out-of-range index", () => {
     expect(() =>
-      rows().scatterAdd(tensor([0, 1, 2, 9]), 4).toArray()
+      rows()
+        .scatterAdd(tensor([0, 1, 2, 9]), 4)
+        .toArray()
     ).toThrow(/index 9 out of range for 4 rows/)
   })
 
@@ -205,14 +220,18 @@ describe("narrow", () => {
   })
 
   it("agrees across eager, lazy and native", () => {
-    expectAgree(() => rows().narrow(0, 1, 3).narrow(1, 0, 1).mul(3))
+    expectAgree(() =>
+      rows().narrow(0, 1, 3).narrow(1, 0, 1).mul(3)
+    )
   })
 
   it("rejects a window past the end", () => {
     expect(() => rows().narrow(0, 3, 2)).toThrow(
       /narrow\(0, 3, 2\) is out of range for \[4, 2\]/
     )
-    expect(() => rows().narrow(0, -1, 2)).toThrow(/out of range/)
+    expect(() => rows().narrow(0, -1, 2)).toThrow(
+      /out of range/
+    )
   })
 })
 
@@ -229,7 +248,9 @@ describe("comparisons", () => {
 
   it("broadcast", () => {
     expect(
-      tensor([[1], [3]]).gt(tensor([0, 2, 4])).toArray()
+      tensor([[1], [3]])
+        .gt(tensor([0, 2, 4]))
+        .toArray()
     ).toEqual([
       [1, 0, 0],
       [1, 1, 0]
@@ -253,12 +274,18 @@ describe("comparisons", () => {
 describe("maximum, minimum and clamp", () => {
   it("take the elementwise extreme", () => {
     expect(
-      tensor([1, 5]).maximum(tensor([4, 2])).toArray()
+      tensor([1, 5])
+        .maximum(tensor([4, 2]))
+        .toArray()
     ).toEqual([4, 5])
     expect(
-      tensor([1, 5]).minimum(tensor([4, 2])).toArray()
+      tensor([1, 5])
+        .minimum(tensor([4, 2]))
+        .toArray()
     ).toEqual([1, 2])
-    expect(tensor([1, 5]).maximum(3).toArray()).toEqual([3, 5])
+    expect(tensor([1, 5]).maximum(3).toArray()).toEqual([
+      3, 5
+    ])
   })
 
   it("clamp into a range, either end open", () => {

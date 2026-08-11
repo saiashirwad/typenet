@@ -52,14 +52,20 @@ describe("uniform", () => {
   it("draws different values for different streams", () => {
     const a = uniform([64]) as AnyTensor
     const b = uniform([64]) as AnyTensor
-    expect(Array.from(a.data)).not.toEqual(Array.from(b.data))
+    expect(Array.from(a.data)).not.toEqual(
+      Array.from(b.data)
+    )
   })
 
   it("repeats exactly for a given seed", () => {
     configure({ seed: 7 })
-    const first = Array.from((uniform([32]) as AnyTensor).data)
+    const first = Array.from(
+      (uniform([32]) as AnyTensor).data
+    )
     configure({ seed: 7 })
-    const second = Array.from((uniform([32]) as AnyTensor).data)
+    const second = Array.from(
+      (uniform([32]) as AnyTensor).data
+    )
     expect(second).toEqual(first)
   })
 
@@ -89,7 +95,9 @@ describe("random nodes in a graph", () => {
   it("print as sources with a stream id", () => {
     configure({ lazy: true })
     const out = (uniform([4]) as AnyTensor).add(1)
-    expect(printGraph(out)).toMatch(/random\.uniform\(\) \{stream=\d+\}/)
+    expect(printGraph(out)).toMatch(
+      /random\.uniform\(\) \{stream=\d+\}/
+    )
   })
 
   it("stop gradients", () => {
@@ -127,7 +135,9 @@ describe("random nodes in a graph", () => {
     const step = compile(() =>
       (uniform([4096]) as AnyTensor).lt(0.5).sum()
     )
-    const counts = [step(), step(), step()].map(t => t.item())
+    const counts = [step(), step(), step()].map(t =>
+      t.item()
+    )
     for (const c of counts) {
       expect(c).toBeGreaterThan(1900)
       expect(c).toBeLessThan(2200)
@@ -144,46 +154,51 @@ describe("random nodes in a graph", () => {
   })
 })
 
-describe.skipIf(!isNativeAvailable())("random nodes, native", () => {
-  it("match the interpreter draw for draw", () => {
-    // uniform() is pure integer mixing on both sides, so the values are
-    // identical rather than merely similarly distributed.
-    configure({ lazy: true, seed: 99 })
-    const interpreted = Array.from(
-      (uniform([1024]) as AnyTensor).data
-    )
-    useNative()
-    configure({ lazy: true, seed: 99 })
-    const native = Array.from((uniform([1024]) as AnyTensor).data)
-    expect(native).toEqual(interpreted)
-  })
-
-  it("match for normal within f32 rounding", () => {
-    configure({ lazy: true, seed: 41 })
-    const interpreted = (normal([1024]) as AnyTensor).data
-    useNative()
-    configure({ lazy: true, seed: 41 })
-    const native = (normal([1024]) as AnyTensor).data
-    let worst = 0
-    for (let i = 0; i < interpreted.length; i++)
-      worst = Math.max(
-        worst,
-        Math.abs(interpreted[i]! - native[i]!)
+describe.skipIf(!isNativeAvailable())(
+  "random nodes, native",
+  () => {
+    it("match the interpreter draw for draw", () => {
+      // uniform() is pure integer mixing on both sides, so the values are
+      // identical rather than merely similarly distributed.
+      configure({ lazy: true, seed: 99 })
+      const interpreted = Array.from(
+        (uniform([1024]) as AnyTensor).data
       )
-    expect(worst).toBeLessThan(1e-5)
-  })
+      useNative()
+      configure({ lazy: true, seed: 99 })
+      const native = Array.from(
+        (uniform([1024]) as AnyTensor).data
+      )
+      expect(native).toEqual(interpreted)
+    })
 
-  it("redraw per call in a compiled native step", () => {
-    useNative()
-    const step = compile((x: Tensor<[4096]>) =>
-      (x as AnyTensor).add(uniform([4096])).sum()
-    )
-    const zeros = Tensor.zeros([4096])
-    const first = step(zeros).item()
-    const second = step(zeros).item()
-    expect(first).not.toBe(second)
-    // mean 0.5 over 4096 draws
-    expect(first / 4096).toBeCloseTo(0.5, 1)
-    expect(second / 4096).toBeCloseTo(0.5, 1)
-  })
-})
+    it("match for normal within f32 rounding", () => {
+      configure({ lazy: true, seed: 41 })
+      const interpreted = (normal([1024]) as AnyTensor).data
+      useNative()
+      configure({ lazy: true, seed: 41 })
+      const native = (normal([1024]) as AnyTensor).data
+      let worst = 0
+      for (let i = 0; i < interpreted.length; i++)
+        worst = Math.max(
+          worst,
+          Math.abs(interpreted[i]! - native[i]!)
+        )
+      expect(worst).toBeLessThan(1e-5)
+    })
+
+    it("redraw per call in a compiled native step", () => {
+      useNative()
+      const step = compile((x: Tensor<[4096]>) =>
+        (x as AnyTensor).add(uniform([4096])).sum()
+      )
+      const zeros = Tensor.zeros([4096])
+      const first = step(zeros).item()
+      const second = step(zeros).item()
+      expect(first).not.toBe(second)
+      // mean 0.5 over 4096 draws
+      expect(first / 4096).toBeCloseTo(0.5, 1)
+      expect(second / 4096).toBeCloseTo(0.5, 1)
+    })
+  }
+)

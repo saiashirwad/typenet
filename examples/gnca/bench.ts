@@ -40,9 +40,16 @@ function time(label: string, runs: number, fn: () => void) {
   return ms
 }
 
-function bench(nodes: number, batch: number, horizons: number[]) {
+function bench(
+  nodes: number,
+  batch: number,
+  horizons: number[]
+) {
   const C = 16
-  const { pos, edges } = randomGeometricGraph({ nodes, dim: 2 })
+  const { pos, edges } = randomGeometricGraph({
+    nodes,
+    dim: 2
+  })
   const graph = graphTensors(
     batchEdges(edges, batch, nodes),
     batch * nodes
@@ -50,7 +57,10 @@ function bench(nodes: number, batch: number, horizons: number[]) {
   const model = new GraphNCA(C)
   const params = model.parameters()
   const optimizer = new Adam(params, { lr: 5e-4 })
-  const target = Tensor.rand([batch * nodes, 4]) as AnyTensor
+  const target = Tensor.rand([
+    batch * nodes,
+    4
+  ]) as AnyTensor
   const x0 = Tensor.zeros([batch * nodes, C]) as AnyTensor
   ;(x0.data as Float32Array).set(
     seedState(batch, nodes, C, 0)
@@ -67,7 +77,11 @@ function bench(nodes: number, batch: number, horizons: number[]) {
   }
   for (const steps of horizons) {
     const forward = compile((input: AnyTensor) =>
-      rollout(input, steps).narrow(1, 0, 4).sub(target).pow(2).mean()
+      rollout(input, steps)
+        .narrow(1, 0, 4)
+        .sub(target)
+        .pow(2)
+        .mean()
     )
     const full = compile((input: AnyTensor) => {
       const loss = rollout(input, steps)
@@ -84,8 +98,10 @@ function bench(nodes: number, batch: number, horizons: number[]) {
     const f = time(`forward only, ${steps} steps`, 3, () =>
       forward(x0).item()
     )
-    const t = time(`forward + backward + Adam, ${steps} steps`, 3, () =>
-      full(x0).item()
+    const t = time(
+      `forward + backward + Adam, ${steps} steps`,
+      3,
+      () => full(x0).item()
     )
     console.log(
       `  ${"per rolled-out step".padEnd(38)} ` +
@@ -106,6 +122,8 @@ bench(1024, 8, [8, 16])
 
 if (isNativeAvailable()) {
   disableNative()
-  console.log("\nbackend: interpreter (same shapes, for comparison)")
+  console.log(
+    "\nbackend: interpreter (same shapes, for comparison)"
+  )
   bench(256, 4, [8, 16])
 }

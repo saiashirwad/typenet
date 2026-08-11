@@ -116,15 +116,11 @@ export function randomGeometricGraph(options: {
   seed?: number
   dim?: number
 }): { pos: Points; edges: Edges } {
-  const {
-    nodes = 1024,
-    k = 8,
-    seed = 0,
-    dim = 2
-  } = options
+  const { nodes = 1024, k = 8, seed = 0, dim = 2 } = options
   const random = rng(seed)
   const data = new Float32Array(nodes * dim)
-  for (let i = 0; i < data.length; i++) data[i] = random.next()
+  for (let i = 0; i < data.length; i++)
+    data[i] = random.next()
   const pos: Points = { data, n: nodes, dim }
   return { pos, edges: knnGraph(pos, k) }
 }
@@ -140,7 +136,12 @@ export function wattsStrogatzGraph(options: {
   beta?: number
   seed?: number
 }): { pos: Points; edges: Edges } {
-  const { nodes = 1024, k = 8, beta = 0.05, seed = 0 } = options
+  const {
+    nodes = 1024,
+    k = 8,
+    beta = 0.05,
+    seed = 0
+  } = options
   if (k % 2 !== 0)
     throw new Error(
       `wattsStrogatzGraph: k must be even, got ${k}`
@@ -203,7 +204,8 @@ export function inDegrees(
   nodes: number
 ): Float32Array {
   const degrees = new Float32Array(nodes)
-  for (let i = 0; i < edges.count; i++) degrees[edges.dst[i]!]!++
+  for (let i = 0; i < edges.count; i++)
+    degrees[edges.dst[i]!]!++
   return degrees
 }
 

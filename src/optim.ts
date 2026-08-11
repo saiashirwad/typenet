@@ -89,7 +89,8 @@ export function clipGradNorm(
   if (scale < 1)
     for (const p of withGrads) {
       const data = p.grad!.data
-      for (let i = 0; i < data.length; i++) data[i]! *= scale
+      for (let i = 0; i < data.length; i++)
+        data[i]! *= scale
     }
   return norm
 }

@@ -44,14 +44,18 @@ describe("deep graphs", () => {
   it("differentiates a deep chain", () => {
     configure({ lazy: true })
     const x = tensor([1, 2]).requires_grad()
-    chain(x as AnyTensor, DEPTH).sum().backward()
+    chain(x as AnyTensor, DEPTH)
+      .sum()
+      .backward()
     const expected = 1.0001 ** DEPTH
     expect(x.grad!.get(0)).toBeCloseTo(expected, 2)
   })
 
   it("differentiates a deep chain eagerly too", () => {
     const x = tensor([1, 2]).requires_grad()
-    chain(x as AnyTensor, DEPTH).sum().backward()
+    chain(x as AnyTensor, DEPTH)
+      .sum()
+      .backward()
     expect(x.grad!.get(0)).toBeCloseTo(1.0001 ** DEPTH, 2)
   })
 
@@ -75,11 +79,14 @@ describe("deep graphs", () => {
   })
 })
 
-describe.skipIf(!isNativeAvailable())("deep graphs, native", () => {
-  it("evaluates a deep chain in one hop", () => {
-    useNative()
-    configure({ lazy: true })
-    const out = chain(tensor([1, 2]), 4000)
-    expect(out.get(0)).toBeCloseTo(1.0001 ** 4000, 3)
-  })
-})
+describe.skipIf(!isNativeAvailable())(
+  "deep graphs, native",
+  () => {
+    it("evaluates a deep chain in one hop", () => {
+      useNative()
+      configure({ lazy: true })
+      const out = chain(tensor([1, 2]), 4000)
+      expect(out.get(0)).toBeCloseTo(1.0001 ** 4000, 3)
+    })
+  }
+)
