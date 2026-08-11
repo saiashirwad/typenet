@@ -15,6 +15,7 @@ import {
   disableNative,
   isNativeAvailable,
   nativeDevice,
+  nativeDeviceMode,
   useNative
 } from "../../index.ts"
 import {
@@ -93,11 +94,11 @@ function bench(nodes: number, batch: number, horizons: number[]) {
   }
 }
 
+if (isNativeAvailable()) useNative()
 const label =
   isNativeAvailable() ?
-    `native (${nativeDevice()})`
+    `native, ${nativeDeviceMode()} device (accelerator: ${nativeDevice()})`
   : "interpreter"
-if (isNativeAvailable()) useNative()
 configure({ seed: 1 })
 console.log(`backend: ${label}`)
 bench(256, 4, [8, 16, 32])

@@ -21,6 +21,7 @@ import {
   configure,
   isNativeAvailable,
   nativeDevice,
+  nativeDeviceMode,
   normal,
   useNative
 } from "../../index.ts"
@@ -153,7 +154,8 @@ console.log(
 console.log(
   `backend: ${
     isNativeAvailable() && options.native ?
-      `native (${nativeDevice()})`
+      `native, ${nativeDeviceMode()} device ` +
+      `(accelerator available: ${nativeDevice()})`
     : "interpreter"
   }`
 )

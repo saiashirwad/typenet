@@ -1670,13 +1670,15 @@ fn tiny_reduce_all(kind: &str, data: &[f32]) -> candle_core::Result<Vec<f32>> {
 fn tiny_broadcast_to(data: &[f32], from: &[usize], to: &[usize]) -> Vec<f32> {
     let strides = broadcast_strides(from, to);
     let same = from == to;
-    let n = prod(to);
-    let mut coords = vec![0usize; to.len()];
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        flat_to_coords(i, to, &mut coords);
-        out.push(read_bcast(data, &strides, same, i, &coords));
-    }
+    let mut out = vec![0f32; prod(to)];
+    over_chunks(&mut out, |base, slice| {
+        let mut coords = vec![0usize; to.len()];
+        for (k, dst) in slice.iter_mut().enumerate() {
+            let i = base + k;
+            flat_to_coords(i, to, &mut coords);
+            *dst = read_bcast(data, &strides, same, i, &coords);
+        }
+    });
     out
 }
 
@@ -1685,38 +1687,48 @@ fn tiny_permute(data: &[f32], shape: &[usize], order: &[usize]) -> Vec<f32> {
     let out_shape: Vec<usize> = order.iter().map(|&d| shape[d]).collect();
     // Output coords -> input index via the permuted input strides.
     let strides: Vec<usize> = order.iter().map(|&d| in_strides[d]).collect();
-    let n = prod(&out_shape);
-    let mut coords = vec![0usize; out_shape.len()];
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        flat_to_coords(i, &out_shape, &mut coords);
-        let mut idx = 0usize;
-        for j in 0..coords.len() {
-            idx += coords[j] * strides[j];
+    let mut out = vec![0f32; prod(&out_shape)];
+    over_chunks(&mut out, |base, slice| {
+        let mut coords = vec![0usize; out_shape.len()];
+        for (k, dst) in slice.iter_mut().enumerate() {
+            let i = base + k;
+            flat_to_coords(i, &out_shape, &mut coords);
+            let mut idx = 0usize;
+            for j in 0..coords.len() {
+                idx += coords[j] * strides[j];
+            }
+            *dst = data[idx];
         }
-        out.push(data[idx]);
-    }
+    });
     out
 }
 
+/// A window along one dim is a run of contiguous blocks, so this is a
+/// series of copies rather than a per-element index computation.
 fn tiny_narrow(data: &[f32], shape: &[usize], dim: usize, start: usize, length: usize) -> Vec<f32> {
-    let strides = row_major_strides(shape);
-    let mut out_shape = shape.to_vec();
-    out_shape[dim] = length;
-    let n = prod(&out_shape);
-    let mut coords = vec![0usize; shape.len()];
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        flat_to_coords(i, &out_shape, &mut coords);
-        let mut idx = start * strides[dim];
-        for j in 0..shape.len() {
-            idx += coords[j] * strides[j];
-        }
-        out.push(data[idx]);
+    let inner = row_major_strides(shape)[dim];
+    let outer = prod(&shape[..dim]);
+    let rows = shape[dim];
+    let block = length * inner;
+    let mut out = vec![0f32; outer * block];
+    let copy = |i: usize, out: &mut [f32]| {
+        let from = (i * rows + start) * inner;
+        out.copy_from_slice(&data[from..from + block]);
+    };
+    if out.len() < PARALLEL_MIN {
+        out.chunks_mut(block.max(1))
+            .enumerate()
+            .for_each(|(i, out)| copy(i, out));
+    } else {
+        out.par_chunks_mut(block.max(1))
+            .enumerate()
+            .for_each(|(i, out)| copy(i, out));
     }
     out
 }
 
+/// Likewise a concatenation: each output slice along `dim` is one block
+/// from each side, copied whole.
 fn tiny_cat(
     adata: &[f32],
     ashape: &[usize],
@@ -1724,30 +1736,22 @@ fn tiny_cat(
     bshape: &[usize],
     dim: usize,
 ) -> Vec<f32> {
-    let astr = row_major_strides(ashape);
-    let bstr = row_major_strides(bshape);
-    let mut out_shape = ashape.to_vec();
-    out_shape[dim] += bshape[dim];
-    let n = prod(&out_shape);
-    let mut coords = vec![0usize; out_shape.len()];
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        flat_to_coords(i, &out_shape, &mut coords);
-        let value = if coords[dim] < ashape[dim] {
-            let mut idx = 0usize;
-            for j in 0..coords.len() {
-                idx += coords[j] * astr[j];
-            }
-            adata[idx]
-        } else {
-            coords[dim] -= ashape[dim];
-            let mut idx = 0usize;
-            for j in 0..coords.len() {
-                idx += coords[j] * bstr[j];
-            }
-            bdata[idx]
-        };
-        out.push(value);
+    let inner = row_major_strides(ashape)[dim];
+    let outer = prod(&ashape[..dim]);
+    let (arows, brows) = (ashape[dim], bshape[dim]);
+    let (ablock, bblock) = (arows * inner, brows * inner);
+    let mut out = vec![0f32; outer * (ablock + bblock)];
+    let copy = |i: usize, out: &mut [f32]| {
+        out[..ablock].copy_from_slice(&adata[i * ablock..(i + 1) * ablock]);
+        out[ablock..].copy_from_slice(&bdata[i * bblock..(i + 1) * bblock]);
+    };
+    let block = (ablock + bblock).max(1);
+    if out.len() < PARALLEL_MIN {
+        out.chunks_mut(block).enumerate().for_each(|(i, out)| copy(i, out));
+    } else {
+        out.par_chunks_mut(block)
+            .enumerate()
+            .for_each(|(i, out)| copy(i, out));
     }
     out
 }
