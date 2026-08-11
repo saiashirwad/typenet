@@ -44,7 +44,12 @@ export {
   crossEntropy
 } from "./src/nn.ts"
 export type { Layer } from "./src/nn.ts"
-export { Optimizer, SGD, Adam } from "./src/optim.ts"
+export {
+  Optimizer,
+  SGD,
+  Adam,
+  clipGradNorm
+} from "./src/optim.ts"
 export type {
   SGDOptions,
   AdamOptions

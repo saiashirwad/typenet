@@ -46,6 +46,54 @@ function useGraphStep(p: AnyTensor): boolean {
   )
 }
 
+/**
+ * Scale every gradient down so their combined L2 norm is at most
+ * `maxNorm`, leaving them alone when it already is. The standard fix for
+ * a training run that diverges on the occasional huge gradient.
+ *
+ * Call it between `backward()` and `step()`. Gradients are rewritten in
+ * place, so a following `step()` sees the clipped values — and in
+ * lazy/compiled mode the rewrite is a graph expression, so a compiled
+ * training step clips with the rest of the step in one pass.
+ *
+ * Returns the pre-clipping norm in eager mode, where it is known
+ * without forcing anything, and `null` otherwise.
+ */
+export function clipGradNorm(
+  params: AnyTensor[],
+  maxNorm: number
+): number | null {
+  if (!(maxNorm > 0))
+    throw new Error(
+      `clipGradNorm: maxNorm must be positive, got ${maxNorm}`
+    )
+  const withGrads = params.filter(p => p.grad)
+  if (withGrads.length === 0) return null
+  if (withGrads.every(useGraphStep))
+    return noGrad(() => {
+      let total = withGrads[0]!.grad!.pow(2).sum()
+      for (const p of withGrads.slice(1))
+        total = total.add(p.grad!.pow(2).sum())
+      // maxNorm / (norm + 1e-6), never scaling up
+      const scale = Tensor.scalar(maxNorm)
+        .div(total.sqrt().add(1e-6))
+        .minimum(1)
+      for (const p of withGrads) p.grad = p.grad!.mul(scale)
+      return null
+    })
+  let total = 0
+  for (const p of withGrads)
+    for (const g of p.grad!.data) total += g * g
+  const norm = Math.sqrt(total)
+  const scale = Math.min(maxNorm / (norm + 1e-6), 1)
+  if (scale < 1)
+    for (const p of withGrads) {
+      const data = p.grad!.data
+      for (let i = 0; i < data.length; i++) data[i]! *= scale
+    }
+  return norm
+}
+
 export abstract class Optimizer {
   constructor(protected params: AnyTensor[]) {
     for (const p of params)
@@ -164,6 +212,12 @@ export class Adam extends Optimizer {
   // First/second moments for the in-graph path, as CPU leaf tensors.
   private graphM: AnyTensor[] | null = null
   private graphV: AnyTensor[] | null = null
+  // Step count for the in-graph path. It has to be a graph leaf rather
+  // than the host-side `t`: a compiled step is traced once, so a
+  // trace-time constant would freeze the bias correction at t = 1
+  // forever. As a leaf it is read and rewritten per step like any other
+  // optimizer state, and the correction is computed in the graph.
+  private graphT: AnyTensor | null = null
 
   constructor(
     params: AnyTensor[],
@@ -186,15 +240,31 @@ export class Adam extends Optimizer {
     const bc2 = 1 - this.beta2 ** this.t
     const updates: GraphUpdate[] = []
     const grads: AnyTensor[] = []
+    // Bias corrections as graph expressions of the step-count leaf.
+    // beta^t becomes exp(t·ln beta), the only way to raise a constant to
+    // a tensor power with the ops available. Built lazily, and only when
+    // some parameter actually takes the graph path.
+    let graphBc: { one: AnyTensor; two: AnyTensor } | null =
+      null
+    const corrections = () => {
+      if (graphBc) return graphBc
+      if (!this.graphT)
+        this.graphT = Tensor.zeros([]) as AnyTensor
+      const next = this.graphT.add(1)
+      updates.push({ target: this.graphT, expr: next })
+      const correct = (beta: number) =>
+        next.mul(Math.log(beta)).exp().neg().add(1)
+      graphBc = {
+        one: correct(this.beta1),
+        two: correct(this.beta2)
+      }
+      return graphBc
+    }
     noGrad(() => {
       this.params.forEach((p, pi) => {
         const g = p.grad
         if (!g) return
         if (useGraphStep(p)) {
-          if (_activeUpdateTrace())
-            throw new Error(
-              "Adam.step() inside compile() is not supported: bias correction depends on the host-side step count, which a compiled graph cannot carry — use SGD in compiled training steps"
-            )
           if (!this.graphM)
             this.graphM = this.params.map(
               q => Tensor.zeros(q.shape) as AnyTensor
@@ -214,8 +284,9 @@ export class Adam extends Optimizer {
           const nextV = v
             .mul(this.beta2)
             .add(grad.mul(grad).mul(1 - this.beta2))
-          const mHat = nextM.mul(1 / bc1)
-          const vHat = nextV.mul(1 / bc2)
+          const bc = corrections()
+          const mHat = nextM.div(bc.one)
+          const vHat = nextV.div(bc.two)
           updates.push({ target: m, expr: nextM })
           updates.push({ target: v, expr: nextV })
           updates.push({
@@ -256,5 +327,8 @@ export class Adam extends Optimizer {
   override dispose(): void {
     this.m = []
     this.v = []
+    this.graphM = null
+    this.graphV = null
+    this.graphT = null
   }
 }

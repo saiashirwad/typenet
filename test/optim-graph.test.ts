@@ -5,7 +5,7 @@ import {
   configure,
   tensor
 } from "../src/tensor.ts"
-import { Adam, SGD } from "../src/optim.ts"
+import { Adam, SGD, clipGradNorm } from "../src/optim.ts"
 import {
   disableNative,
   isNativeAvailable,
@@ -224,17 +224,24 @@ describe("compiled training step (forward + backward + optimizer)", () => {
     expect(losses[losses.length - 1]!).toBeLessThan(0.05)
   })
 
-  it("rejects Adam inside compile() with a clear error", () => {
-    const net = makeNet()
-    const opt = new Adam(net.params, {})
+  // Adam's bias correction depends on the step count, which a graph
+  // traced once cannot hold as a constant. It rides along as a leaf
+  // instead, so a compiled Adam step has to advance in lockstep with an
+  // eager one — including over the first few steps, where the
+  // corrections are furthest from 1.
+  it("tracks eager Adam step by step when compiled", () => {
+    const reference = makeNet()
+    const compiled = makeNet()
+    const refOpt = new Adam(reference.params, { lr: 0.05 })
+    const opt = new Adam(compiled.params, { lr: 0.05 })
     const step = compile((x: AnyTensor, y: AnyTensor) => {
       const h = x
-        .matmul(net.params[0]!)
-        .add(net.params[1]!)
+        .matmul(compiled.params[0]!)
+        .add(compiled.params[1]!)
         .tanh()
       const out = h
-        .matmul(net.params[2]!)
-        .add(net.params[3]!)
+        .matmul(compiled.params[2]!)
+        .add(compiled.params[3]!)
         .sigmoid()
       const loss = out.sub(y).pow(2).mean()
       opt.zeroGrad()
@@ -242,8 +249,126 @@ describe("compiled training step (forward + backward + optimizer)", () => {
       opt.step()
       return loss
     })
-    expect(() => step(net.x, net.y)).toThrow(
-      /Adam\.step\(\) inside compile\(\) is not supported/
+    const losses: number[] = []
+    for (let i = 0; i < 40; i++) {
+      configure({ lazy: false })
+      const refLoss = reference.loss()
+      refOpt.zeroGrad()
+      refLoss.backward()
+      refOpt.step()
+      const loss = step(compiled.x, compiled.y).item()
+      expect(loss, `step ${i + 1}`).toBeCloseTo(
+        refLoss.item(),
+        4
+      )
+      losses.push(loss)
+    }
+    configure({ lazy: false })
+    reference.params.forEach((p, i) =>
+      expectClose(p, compiled.params[i]!, 1e-4)
+    )
+    expect(losses[losses.length - 1]!).toBeLessThan(
+      losses[0]!
+    )
+  })
+
+  it("clips gradients inside a compiled step", () => {
+    // A loss scaled up hard produces gradients far above the clip, so
+    // every step is clipped and the parameter moves by exactly
+    // lr * maxNorm / ||g|| along the gradient — matching eager.
+    const reference = makeNet()
+    const compiled = makeNet()
+    const refOpt = new SGD(reference.params, { lr: 0.1 })
+    const opt = new SGD(compiled.params, { lr: 0.1 })
+    const step = compile((x: AnyTensor, y: AnyTensor) => {
+      const h = x
+        .matmul(compiled.params[0]!)
+        .add(compiled.params[1]!)
+        .tanh()
+      const out = h
+        .matmul(compiled.params[2]!)
+        .add(compiled.params[3]!)
+        .sigmoid()
+      const loss = out.sub(y).pow(2).mean().mul(1000)
+      opt.zeroGrad()
+      loss.backward()
+      clipGradNorm(compiled.params, 1)
+      opt.step()
+      return loss
+    })
+    for (let i = 0; i < 10; i++) {
+      configure({ lazy: false })
+      const refLoss = reference.loss().mul(1000)
+      refOpt.zeroGrad()
+      refLoss.backward()
+      const norm = clipGradNorm(reference.params, 1)
+      expect(norm).toBeGreaterThan(1) // clipping really engaged
+      refOpt.step()
+      expect(step(compiled.x, compiled.y).item()).toBeCloseTo(
+        refLoss.item(),
+        2
+      )
+    }
+    configure({ lazy: false })
+    reference.params.forEach((p, i) =>
+      expectClose(p, compiled.params[i]!, 1e-3)
+    )
+  })
+})
+
+describe("clipGradNorm", () => {
+  it("scales to exactly maxNorm when over", () => {
+    const a = Tensor.of([3, 4]).requires_grad() as AnyTensor
+    a.mul(1).sum().backward()
+    ;(a.grad!.data as Float32Array).set([3, 4]) // norm 5
+    const norm = clipGradNorm([a], 1)
+    expect(norm).toBeCloseTo(5, 5)
+    expect(a.grad!.get(0)).toBeCloseTo(3 / 5, 5)
+    expect(a.grad!.get(1)).toBeCloseTo(4 / 5, 5)
+  })
+
+  it("leaves gradients alone when under", () => {
+    const a = Tensor.of([1, 1]).requires_grad() as AnyTensor
+    a.mul(1).sum().backward()
+    ;(a.grad!.data as Float32Array).set([0.3, 0.4])
+    clipGradNorm([a], 10)
+    expect(a.grad!.get(0)).toBeCloseTo(0.3, 6)
+    expect(a.grad!.get(1)).toBeCloseTo(0.4, 6)
+  })
+
+  it("takes the norm across all parameters jointly", () => {
+    const a = Tensor.of([0]).requires_grad() as AnyTensor
+    const b = Tensor.of([0]).requires_grad() as AnyTensor
+    a.mul(1).sum().backward()
+    b.mul(1).sum().backward()
+    ;(a.grad!.data as Float32Array).set([3])
+    ;(b.grad!.data as Float32Array).set([4])
+    expect(clipGradNorm([a, b], 5)).toBeCloseTo(5, 5)
+    // already at the limit, so unchanged bar the 1e-6 epsilon
+    expect(a.grad!.get(0)).toBeCloseTo(3, 4)
+    expect(b.grad!.get(0)).toBeCloseTo(4, 4)
+  })
+
+  it("matches eager in lazy mode", () => {
+    const build = () => {
+      const a = Tensor.of([1, 2, 3]).requires_grad() as AnyTensor
+      a.pow(3).sum().mul(10).backward()
+      clipGradNorm([a], 2)
+      return a
+    }
+    configure({ lazy: false })
+    const eager = build()
+    configure({ lazy: true })
+    const lazy = build()
+    configure({ lazy: false })
+    expectClose(eager.grad!, lazy.grad!, 1e-5)
+  })
+
+  it("rejects a non-positive maxNorm", () => {
+    const a = Tensor.of([1]).requires_grad() as AnyTensor
+    a.mul(1).sum().backward()
+    expect(() => clipGradNorm([a], 0)).toThrow(
+      /maxNorm must be positive/
     )
   })
 })
@@ -300,6 +425,48 @@ describe.skipIf(!available)(
           compiled.params[i]!.grad!,
           1e-3
         )
+      )
+    })
+
+    it("matches eager for compiled Adam with clipping", () => {
+      const reference = makeNet()
+      const compiled = makeNet()
+      const refOpt = new Adam(reference.params, { lr: 0.05 })
+      const opt = new Adam(compiled.params, { lr: 0.05 })
+      const step = compile((x: AnyTensor, y: AnyTensor) => {
+        const h = x
+          .matmul(compiled.params[0]!)
+          .add(compiled.params[1]!)
+          .tanh()
+        const out = h
+          .matmul(compiled.params[2]!)
+          .add(compiled.params[3]!)
+          .sigmoid()
+        const loss = out.sub(y).pow(2).mean()
+        opt.zeroGrad()
+        loss.backward()
+        clipGradNorm(compiled.params, 0.5)
+        opt.step()
+        return loss
+      })
+      for (let i = 0; i < 20; i++) {
+        configure({ lazy: false })
+        disableNative()
+        const refLoss = reference.loss()
+        refOpt.zeroGrad()
+        refLoss.backward()
+        clipGradNorm(reference.params, 0.5)
+        refOpt.step()
+        useNative()
+        expect(
+          step(compiled.x, compiled.y).item(),
+          `step ${i + 1}`
+        ).toBeCloseTo(refLoss.item(), 4)
+      }
+      disableNative()
+      configure({ lazy: false })
+      reference.params.forEach((p, i) =>
+        expectClose(p, compiled.params[i]!, 1e-4)
       )
     })
   }
