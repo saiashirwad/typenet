@@ -1373,6 +1373,9 @@ const CBLAS_NO_TRANS: i32 = 111;
 /// blocks so the work spreads over cores whatever BLAS decides to do.
 #[cfg(target_os = "macos")]
 fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
+    if c.is_empty() || k == 0 {
+        return;
+    }
     let block = ((m + rayon::current_num_threads() - 1)
         / rayon::current_num_threads())
     .max(64);
@@ -1398,19 +1401,22 @@ fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
         run(m, a, c);
         return;
     }
-    c.par_chunks_mut(block * n)
-        .zip(a.par_chunks(block * k))
+    c.par_chunks_mut((block * n).max(1))
+        .zip(a.par_chunks((block * k).max(1)))
         .for_each(|(c, a)| run(a.len() / k.max(1), a, c));
 }
 
 /// Everywhere without Accelerate: a cache-friendly triple loop.
 #[cfg(not(target_os = "macos"))]
 fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
+    if c.is_empty() || k == 0 {
+        return;
+    }
     let block = ((m + rayon::current_num_threads() - 1)
         / rayon::current_num_threads())
     .max(64);
-    c.par_chunks_mut(block * n)
-        .zip(a.par_chunks(block * k))
+    c.par_chunks_mut((block * n).max(1))
+        .zip(a.par_chunks((block * k).max(1)))
         .for_each(|(c, a)| {
             for i in 0..a.len() / k.max(1) {
                 for l in 0..k {
@@ -1492,7 +1498,7 @@ fn tiny_index_select(
         .enumerate()
         .for_each(|(c, slice)| {
             let start = c * 64;
-            for (r, dst) in slice.chunks_mut(inner).enumerate() {
+            for (r, dst) in slice.chunks_mut(inner.max(1)).enumerate() {
                 let flat = start + r;
                 let base = (flat / picked * rows + indices[flat % picked]) * inner;
                 dst.copy_from_slice(&data[base..base + inner]);
@@ -1520,7 +1526,7 @@ fn tiny_scatter_add(
     // fully independent, so when there is more than one of them they are
     // the natural unit of work.
     if outer > 1 {
-        out.par_chunks_mut(slice).enumerate().for_each(|(i, out)| {
+        out.par_chunks_mut(slice.max(1)).enumerate().for_each(|(i, out)| {
             for (j, &row) in indices.iter().enumerate() {
                 let to = row * inner;
                 let from = (i * src_rows + j) * inner;

@@ -380,3 +380,63 @@ describe.skipIf(!isNativeAvailable())(
     })
   }
 )
+
+// Degenerate shapes: a zero-length dim is legal and the parallel kernels
+// divide by it, so a chunk size of zero would panic inside the addon
+// rather than return an empty result.
+describe("empty dimensions", () => {
+  const each = (fn: () => AnyTensor) => {
+    for (const native of isNativeAvailable() ?
+      [false, true]
+    : [false]) {
+      configure({ lazy: false })
+      const eager = fn()
+      if (native) useNative()
+      configure({ lazy: true })
+      const other = fn()
+      expect(other.shape).toEqual(eager.shape)
+      expect(Array.from(other.data)).toEqual(
+        Array.from(eager.data)
+      )
+      disableNative()
+      configure({ lazy: false })
+    }
+  }
+
+  it("gathers nothing", () => {
+    each(() => rows().indexSelect(Tensor.zeros([0]) as any))
+  })
+
+  it("scatters into no rows along an inner dim", () => {
+    // outer > 1 with a zero-length scattered dim
+    each(() =>
+      (Tensor.zeros([3, 0]) as AnyTensor).scatterAdd(
+        Tensor.zeros([0]) as any,
+        0,
+        1
+      )
+    )
+  })
+
+  it("scatters an empty source into real rows", () => {
+    each(() =>
+      (Tensor.zeros([0, 2]) as AnyTensor)
+        .scatterAdd(Tensor.zeros([0]) as any, 3)
+        .add(1)
+    )
+  })
+
+  it("multiplies matrices with a zero inner dim", () => {
+    each(() =>
+      (Tensor.zeros([4, 0]) as AnyTensor).matmul(
+        Tensor.zeros([0, 3]) as any
+      )
+    )
+  })
+
+  it("narrows and cats an empty window", () => {
+    each(() =>
+      Tensor.cat(rows().narrow(1, 0, 0), rows(), 1)
+    )
+  })
+})
