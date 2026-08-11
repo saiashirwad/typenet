@@ -132,14 +132,35 @@ struct Graph {
     /// single-root graphs from older callers keep working.
     #[serde(default)]
     roots: Option<Vec<usize>>,
-    /// Device hint from the JS side: "cpu" pins evaluation to the
-    /// plan/exec CPU evaluator (tiny graphs, where per-kernel dispatch
-    /// dwarfs the compute); anything else uses the best available device.
-    /// Read only via the JSON suffix check in eval_graph, not after
-    /// deserialization.
+    /// Which evaluator the JS side picked for this graph — see `Target`.
     #[serde(default)]
-    #[allow(dead_code)]
     device: Option<String>,
+}
+
+/// Where a graph runs. The JS side chooses (see pickTarget in
+/// src/tensor.ts) because it knows the graph's total size before
+/// anything crosses the FFI boundary.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Target {
+    /// The fused loop evaluator: no candle, no dispatch, no BLAS. Wins
+    /// below a few tens of thousands of elements, where a kernel launch
+    /// costs more than the arithmetic.
+    Loops,
+    /// candle on the CPU device, which on macOS means Accelerate for
+    /// matmul. The default above the loop evaluator's range.
+    Cpu,
+    /// candle on the best accelerator (Metal where available).
+    Accelerator,
+}
+
+impl Target {
+    fn parse(hint: Option<&str>) -> Self {
+        match hint {
+            Some("loops") => Target::Loops,
+            Some("gpu") => Target::Accelerator,
+            _ => Target::Cpu,
+        }
+    }
 }
 
 fn prod(shape: &[usize]) -> usize {
@@ -676,12 +697,22 @@ struct PreparedGraph {
     shapes: Vec<Vec<usize>>,
     roots: Vec<usize>,
     live: Vec<bool>,
+    /// How many live nodes read each node. Both evaluators count down as
+    /// they go and drop a buffer once nothing else will read it, which is
+    /// what keeps a long rollout from holding every activation it ever
+    /// produced — and, on Metal, what lets candle's allocator hand the
+    /// same device buffers back out instead of asking for new ones.
+    consumers: Vec<usize>,
+    /// True for nodes whose value is returned, so they are never dropped.
+    is_root: Vec<bool>,
     /// group index per member node (skip during the main loop); leaders
     /// trigger execution.
     group_of: Vec<Option<usize>>,
     groups: Vec<GroupPlan>,
     /// Per-node plans for standalone elementwise nodes.
     ewise: Vec<Option<EwisePlan>>,
+    /// Which evaluator this graph runs on, chosen by the JS side.
+    target: Target,
 }
 
 impl PreparedGraph {
@@ -799,14 +830,32 @@ impl PreparedGraph {
             });
         }
 
+        // Consumer counts over live edges only. A node read twice by one
+        // consumer counts twice, which is what the countdown needs. Used
+        // by the candle evaluator, which has no fusion groups, so a
+        // node's readers are exactly the nodes listing it as an input.
+        let mut consumers = vec![0usize; n];
+        for (i, node) in graph.nodes.iter().enumerate() {
+            if !live[i] {
+                continue;
+            }
+            for input in node_inputs(node) {
+                consumers[input] += 1;
+            }
+        }
+        let target = Target::parse(graph.device.as_deref());
+
         Ok(PreparedGraph {
             graph,
             shapes,
             roots,
             live,
+            consumers,
+            is_root,
             group_of: fusion.group_of,
             groups,
             ewise,
+            target,
         })
     }
 }
@@ -830,6 +879,59 @@ fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
     }
     map.insert(graph_json.to_string(), prep.clone());
     Ok(prep)
+}
+
+// Prepared-plan handles. compile() replays one graph thousands of times,
+// and going through `prepared()` each time means shipping a JSON string
+// across the FFI boundary and hashing all of it just to find the plan
+// again — for a rolled-out automaton that string is hundreds of
+// kilobytes. prepareGraph() parses and plans once, returns a handle, and
+// evalPrepared() takes the handle instead.
+static PLAN_HANDLES: OnceLock<Mutex<HashMap<u32, Arc<PreparedGraph>>>> = OnceLock::new();
+static NEXT_HANDLE: Mutex<u32> = Mutex::new(1);
+
+fn handles() -> &'static Mutex<HashMap<u32, Arc<PreparedGraph>>> {
+    PLAN_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Parse and plan a graph once, returning a handle for `evalPrepared`.
+#[napi(js_name = "prepareGraph")]
+pub fn prepare_graph(graph_json: String) -> Result<u32> {
+    let graph: Graph = serde_json::from_str(&graph_json)
+        .map_err(|e| Error::new(Status::InvalidArg, format!("invalid graph JSON: {e}")))?;
+    let prep = Arc::new(PreparedGraph::prepare(graph).map_err(to_napi_err)?);
+    let mut next = NEXT_HANDLE.lock().unwrap();
+    let handle = *next;
+    *next += 1;
+    handles().lock().unwrap().insert(handle, prep);
+    Ok(handle)
+}
+
+/// Drop a plan created by `prepareGraph`.
+#[napi(js_name = "releaseGraph")]
+pub fn release_graph(handle: u32) {
+    handles().lock().unwrap().remove(&handle);
+}
+
+/// Evaluate a plan created by `prepareGraph`.
+#[napi(js_name = "evalPrepared")]
+pub fn eval_prepared(
+    handle: u32,
+    leaves: Float32Array,
+    seed: u32,
+) -> Result<Readback> {
+    let prep = handles()
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .cloned()
+        .ok_or_else(|| {
+            Error::new(
+                Status::InvalidArg,
+                format!("unknown prepared graph {handle}"),
+            )
+        })?;
+    evaluate(&prep, &leaves, seed)
 }
 
 #[inline]
@@ -1410,38 +1512,44 @@ fn index_u32(index: &Tensor) -> candle_core::Result<Tensor> {
     index.contiguous()?.flatten_all()?.to_dtype(DType::U32)
 }
 
+/// The u32 form of an index node, converted on first use and kept.
+fn cached_index(
+    cache: &mut [Option<Tensor>],
+    at: usize,
+    index: &Tensor,
+) -> candle_core::Result<Tensor> {
+    if cache[at].is_none() {
+        cache[at] = Some(index_u32(index)?);
+    }
+    Ok(cache[at].as_ref().unwrap().clone())
+}
+
 fn run_graph(
-    graph: &Graph,
+    prep: &PreparedGraph,
     leaves: &[f32],
     device: &Device,
     seed: u32,
 ) -> candle_core::Result<Vec<Tensor>> {
-    let roots: Vec<usize> = match &graph.roots {
-        Some(roots) => roots.clone(),
-        None => vec![graph.nodes.len().saturating_sub(1)],
-    };
-
-    // Dead-code elimination: mark everything reachable from the roots and
-    // never touch the rest (dead leaves aren't even copied to the device).
+    let graph = &prep.graph;
     let n = graph.nodes.len();
-    let mut live = vec![false; n];
-    let mut stack = roots.clone();
-    while let Some(i) = stack.pop() {
-        if live[i] {
-            continue;
-        }
-        live[i] = true;
-        stack.extend(node_inputs(&graph.nodes[i]));
-    }
-
+    // Liveness (dead nodes are never touched — a dead leaf is not even
+    // copied to the device) and consumer counts come from the plan.
+    let mut remaining = prep.consumers.clone();
     let mut outputs: Vec<Option<Tensor>> = (0..n).map(|_| None).collect();
+    // Index tensors are read several times per rolled-out step — once per
+    // gather or scatter — and each read would otherwise re-run the f32 to
+    // u32 cast. Convert once and keep it for as long as the f32 original
+    // is alive.
+    let mut indices: Vec<Option<Tensor>> = (0..n).map(|_| None).collect();
     for (idx, node) in graph.nodes.iter().enumerate() {
-        if !live[idx] {
+        if !prep.live[idx] {
             continue;
         }
         let get = |i: usize| -> candle_core::Result<&Tensor> {
             outputs.get(i).and_then(|t| t.as_ref()).ok_or_else(|| {
-                candle_core::Error::Msg(format!("node references future index {i}"))
+                candle_core::Error::Msg(format!(
+                    "node {i} was already released or never computed"
+                ))
             })
         };
         let out = match node {
@@ -1532,9 +1640,8 @@ fn run_graph(
             }
             Node::OneHot { classes, input } => eval_one_hot(*classes, get(*input)?)?,
             Node::IndexSelect { dim, input, index } => {
-                get(*input)?
-                    .contiguous()?
-                    .index_select(&index_u32(get(*index)?)?, *dim)?
+                let keys = cached_index(&mut indices, *index, get(*index)?)?;
+                get(*input)?.contiguous()?.index_select(&keys, *dim)?
             }
             Node::ScatterAdd {
                 dim,
@@ -1542,14 +1649,12 @@ fn run_graph(
                 input,
                 index,
             } => {
+                let keys = cached_index(&mut indices, *index, get(*index)?)?;
                 let src = get(*input)?.contiguous()?;
                 let mut shape = src.dims().to_vec();
                 shape[*dim] = *length;
-                Tensor::zeros(shape, DType::F32, device)?.index_add(
-                    &index_u32(get(*index)?)?,
-                    &src,
-                    *dim,
-                )?
+                Tensor::zeros(shape, DType::F32, device)?
+                    .index_add(&keys, &src, *dim)?
             }
             Node::Random {
                 kind,
@@ -1562,8 +1667,19 @@ fn run_graph(
             )?,
         };
         outputs[idx] = Some(out);
+        // Release every input nothing else will read. On a rolled-out
+        // automaton this is the difference between holding one activation
+        // per graph node and holding only what the backward pass still
+        // needs, which is also what PyTorch holds.
+        for input in node_inputs(node) {
+            remaining[input] -= 1;
+            if remaining[input] == 0 && !prep.is_root[input] {
+                outputs[input] = None;
+                indices[input] = None;
+            }
+        }
     }
-    roots
+    prep.roots
         .iter()
         .map(|&i| {
             outputs.get(i).and_then(|t| t.clone()).ok_or_else(|| {
@@ -1644,18 +1760,33 @@ fn vec_readback(mut vec: Vec<f32>) -> Readback {
 
 #[napi(js_name = "evalGraph")]
 pub fn eval_graph(graph_json: String, leaves: Float32Array, seed: u32) -> Result<Readback> {
-    // Tiny CPU-pinned graphs bypass candle entirely (plan/exec evaluator).
-    // serializeLazyGraph emits `device` last, so the suffix check avoids a
-    // full JSON parse on the hot path (plan-cache hits).
-    if graph_json.ends_with("\"device\":\"cpu\"}") {
-        let prep = prepared(&graph_json)?;
-        let data = execute(&prep, &leaves, seed).map_err(to_napi_err)?;
+    let prep = prepared(&graph_json)?;
+    evaluate(&prep, &leaves, seed)
+}
+
+/// Overrides the JS side's evaluator choice, for measuring one against
+/// another: TYPENET_EVALUATOR=loops | cpu | gpu.
+fn forced_target() -> Option<Target> {
+    static CHOICE: OnceLock<Option<Target>> = OnceLock::new();
+    *CHOICE.get_or_init(|| match std::env::var("TYPENET_EVALUATOR") {
+        Ok(name) if !name.is_empty() => Some(Target::parse(Some(name.as_str()))),
+        _ => None,
+    })
+}
+
+/// Run a prepared graph on the evaluator it was planned for.
+fn evaluate(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> Result<Readback> {
+    let target = forced_target().unwrap_or(prep.target);
+    if target == Target::Loops {
+        let data = execute(prep, leaves, seed).map_err(to_napi_err)?;
         return Ok(vec_readback(data));
     }
-    let graph: Graph = serde_json::from_str(&graph_json)
-        .map_err(|e| Error::new(Status::InvalidArg, format!("invalid graph JSON: {e}")))?;
-    let device = device();
-    let outputs = run_graph(&graph, &leaves, device, seed).map_err(to_napi_err)?;
+    let device = if target == Target::Accelerator {
+        device()
+    } else {
+        &Device::Cpu
+    };
+    let outputs = run_graph(prep, leaves, device, seed).map_err(to_napi_err)?;
     // All roots are read back as one concatenated f32 buffer; the JS
     // side slices it per root using the shapes it already knows.
     device.synchronize().map_err(to_napi_err)?;

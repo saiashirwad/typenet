@@ -11,7 +11,8 @@
     "format": "prettier --write .",
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
-    "example:gat": "vite-node examples/gat.ts"
+    "example:gat": "vite-node examples/gat.ts",
+    "gnca": "vite-node examples/gnca/train.ts --"
   },
   "dependencies": {
     "hotscript": "^1.0.13",

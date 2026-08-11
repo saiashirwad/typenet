@@ -59,7 +59,8 @@ export {
   disableNative,
   isNativeEnabled,
   isNativeAvailable,
-  nativeDevice
+  nativeDevice,
+  nativeDeviceMode
 } from "./src/backends/native.ts"
 
 export type {

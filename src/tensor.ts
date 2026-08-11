@@ -1155,10 +1155,27 @@ type SerializedNode = Record<string, unknown> & {
   op: string
 }
 
-// Graphs touching at most this many elements (leaves + intermediate
-// node outputs) are pinned to the candle CPU device via the graph
-// JSON's `device` hint. 65536 = one 256×256 matrix.
-const CPU_HINT_MAX_WORK = 65536
+// Graphs touching at most this many elements (leaves + intermediate node
+// outputs) go to the native fused loop evaluator, which pays no dispatch
+// or BLAS setup cost. 65536 = one 256×256 matrix.
+const LOOP_EVALUATOR_MAX_WORK = 65536
+
+/**
+ * Which native evaluator a graph of `work` elements should run on.
+ *
+ * Tiny graphs go to the loop evaluator. Everything else goes to candle
+ * on the CPU device, which on macOS means Accelerate for matmul. That is
+ * not the obvious default, so the numbers behind it (Apple M5, see
+ * LAZY.md): CPU matches Metal on chained large matmuls, loses to it by
+ * ~1.5x on purely elementwise graphs, and beats it by ~7x on the
+ * gather/scatter graphs message passing produces — candle's Metal
+ * index_select/index_add are slow and the graphs are made of many small
+ * kernels. `useNative({ device: "gpu" })` opts back in.
+ */
+function pickTarget(work: number): "loops" | "cpu" | "gpu" {
+  if (work <= LOOP_EVALUATOR_MAX_WORK) return "loops"
+  return nativeBackend.nativeDeviceMode()
+}
 
 function serializeLazyGraph(roots: AnyTensor[]): {
   json: string
@@ -1339,12 +1356,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     json: JSON.stringify({
       nodes,
       roots: rootIndices,
-      // Tiny graphs evaluate faster on candle's CPU device: Metal
-      // charges ~10µs per kernel dispatch plus a sync per readback,
-      // which dominates when the compute itself is microseconds.
-      ...(work <= CPU_HINT_MAX_WORK ?
-        { device: "cpu" }
-      : {})
+      device: pickTarget(work)
     }),
     leaves,
     rootShapes,
@@ -1637,10 +1649,12 @@ export function compile<
     // Grad tensors to materialize per replay (lazy tensor + its
     // original storage, so the result can be swapped in like force()).
     materialize: { t: AnyTensor; storage: LazyStorage }[]
-    // Native replay: serialized once at trace time; only the leaf
-    // buffer is rebuilt per call from the live leaf tensors.
+    // Native replay: serialized once at trace time and handed to the
+    // backend once as a prepared plan, so a call ships only the leaf
+    // buffer, rebuilt from the live leaf tensors.
     native: {
       json: string
+      handle: number | null
       leafTensors: AnyTensor[]
       leafOffsets: number[]
       leafBytes: number
@@ -1723,6 +1737,7 @@ export function compile<
         serialized ?
           {
             json: serialized.json,
+            handle: null,
             leafTensors: serialized.leafTensors,
             leafOffsets: serialized.leafOffsets,
             leafBytes: serialized.leafBytes,
@@ -1814,8 +1829,14 @@ export function compile<
         native.leafOffsets[i]!
       )
     })
-    const data = nativeBackend.evalGraphNative(
-      native.json,
+    // Prepared once, then replayed by handle: the graph JSON never
+    // crosses the boundary again.
+    if (native.handle === null)
+      native.handle = nativeBackend.prepareGraphNative(
+        native.json
+      )
+    const data = nativeBackend.evalPreparedNative(
+      native.handle,
       leaves,
       nextSeed()
     )
@@ -2659,6 +2680,53 @@ export class Tensor<
         `oneHot() requires a positive class count, got ${classes}`
       )
     return rawOneHot(this, classes) as any
+  }
+
+  /**
+   * A contiguous slice of `length` entries along `dim`, starting at
+   * `start` — the `x[:, a:b]` of tensor libraries. Used to read a block
+   * of channels out of a state tensor, or to split a weight matrix into
+   * the pieces of a fused layer.
+   */
+  narrow<L extends number>(
+    dim: 0,
+    start: number,
+    length: L
+  ): Tensor<ResizeDim<S, 0, L>, P>
+  narrow<D extends number, L extends number>(
+    dim: D & DimCheck<S, D>,
+    start: number,
+    length: L
+  ): Tensor<ResizeDim<S, D, L>, P>
+  narrow(
+    dim: number,
+    start: number,
+    length: number
+  ): AnyTensor {
+    const d = normalizeDim(dim, this.shape.length)
+    const size = this.shape[d]!
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(length) ||
+      start < 0 ||
+      length < 0 ||
+      start + length > size
+    )
+      throw new Error(
+        `narrow(${dim}, ${start}, ${length}) is out of range for ${showShape(this.shape)}`
+      )
+    const out = rawNarrow(this, d, start, length)
+    // The gradient is the incoming one placed back in the window and
+    // zero everywhere else — a scatter over the window's indices, which
+    // costs an index of `length` entries rather than zero-padding.
+    return withGrad(out, "narrow", [this], g => {
+      const window = makeRaw(
+        Float32Array.from({ length }, (_, i) => start + i),
+        [length],
+        "float32"
+      )
+      return [rawScatterAdd(g, window, d, size)]
+    })
   }
 
   /**

@@ -190,6 +190,32 @@ describe("scatterAdd", () => {
   })
 })
 
+describe("narrow", () => {
+  it("slices a contiguous window", () => {
+    expect(rows().narrow(0, 1, 2).toArray()).toEqual([
+      [3, 4],
+      [5, 6]
+    ])
+    expect(rows().narrow(1, 1, 1).toArray()).toEqual([
+      [2],
+      [4],
+      [6],
+      [8]
+    ])
+  })
+
+  it("agrees across eager, lazy and native", () => {
+    expectAgree(() => rows().narrow(0, 1, 3).narrow(1, 0, 1).mul(3))
+  })
+
+  it("rejects a window past the end", () => {
+    expect(() => rows().narrow(0, 3, 2)).toThrow(
+      /narrow\(0, 3, 2\) is out of range for \[4, 2\]/
+    )
+    expect(() => rows().narrow(0, -1, 2)).toThrow(/out of range/)
+  })
+})
+
 describe("comparisons", () => {
   const a = () => tensor([-1, 0, 1, 2])
 
@@ -257,6 +283,41 @@ describe("maximum, minimum and clamp", () => {
 describe.skipIf(!isNativeAvailable())(
   "native gather/scatter at a size that uses candle",
   () => {
+    // Above the loop evaluator's range a graph runs through candle, on
+    // the CPU device by default. The accelerator is opt-in and has its
+    // own kernels for these ops, so check both give the same answer.
+    it.each(["cpu", "gpu"] as const)(
+      "matches eager on the %s device",
+      device => {
+        const n = 300
+        const c = 40
+        const e = 2048
+        const x = Tensor.rand([n, c]) as AnyTensor
+        const index = Tensor.zeros([e]) as AnyTensor
+        for (let i = 0; i < e; i++)
+          (index.data as Float32Array)[i] = (i * 7) % n
+        const build = () =>
+          x
+            .indexSelect(index)
+            .clamp(-0.5, 0.5)
+            .scatterAdd(index, n)
+            .gt(0.1)
+        configure({ lazy: false })
+        const eager = build()
+        useNative({ device })
+        configure({ lazy: true })
+        const native = build()
+        const a = eager.data
+        const b = native.data
+        expect(b.length).toBe(a.length)
+        for (let i = 0; i < a.length; i++)
+          expect(
+            Math.abs(a[i]! - b[i]!),
+            `${device} element ${i}`
+          ).toBeLessThan(1e-4)
+      }
+    )
+
     // Above CPU_HINT_MAX_WORK (65536 elements) the graph runs through
     // candle rather than the tiny-graph loop evaluator, so this covers
     // the other native code path.

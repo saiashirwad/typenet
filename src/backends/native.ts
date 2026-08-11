@@ -14,11 +14,19 @@ export type NativeModule = {
     leaves: Float32Array,
     seed: number
   ): ArrayBuffer
+  prepareGraph(graphJson: string): number
+  evalPrepared(
+    handle: number,
+    leaves: Float32Array,
+    seed: number
+  ): ArrayBuffer
+  releaseGraph(handle: number): void
   deviceName(): string
 }
 
 let moduleCache: NativeModule | null | undefined
 let nativeEnabled = false
+let deviceMode: "cpu" | "gpu" = "cpu"
 
 function loadNative(): NativeModule | null {
   if (moduleCache !== undefined) return moduleCache
@@ -36,22 +44,39 @@ export function isNativeAvailable(): boolean {
   return loadNative() !== null
 }
 
-/** Device the native backend evaluates on ("metal" or "cpu"). */
+/** Best accelerator the addon found ("metal" or "cpu"), whether used or not. */
 export function nativeDevice(): string | null {
   return loadNative()?.deviceName() ?? null
 }
 
+/** Which device non-tiny graphs currently run on. */
+export function nativeDeviceMode(): "cpu" | "gpu" {
+  return deviceMode
+}
+
 /**
- * Enable the native backend for lazy-graph evaluation. Throws when
- * the addon is not built; run `pnpm build:native` first. Only affects
- * lazy mode — eager execution is unchanged.
+ * Enable the native backend for lazy-graph evaluation. Throws when the
+ * addon is not built; run `pnpm build:native` first. Only affects lazy
+ * mode — eager execution is unchanged.
+ *
+ * `device` picks what non-tiny graphs run on: `"cpu"` (the default) is
+ * candle's CPU device, which on macOS uses Accelerate for matmul;
+ * `"gpu"` is the best accelerator available. CPU is the default because
+ * it wins on the graph shapes typenet produces — see `pickTarget` in
+ * src/tensor.ts for the measurements. Reach for `"gpu"` when a workload
+ * is dominated by large elementwise tensors.
  */
-export function useNative(): void {
+export function useNative(
+  options: { device?: "cpu" | "gpu" } = {}
+): void {
   if (!loadNative())
     throw new Error(
       "@typenet/native is not built. Run `pnpm build:native` " +
         "(requires a Rust toolchain) before calling useNative()."
     )
+  // Each call fully specifies the configuration, so a plain useNative()
+  // always means the default device and no earlier choice lingers.
+  deviceMode = options.device ?? "cpu"
   nativeEnabled = true
 }
 
@@ -89,4 +114,56 @@ export function evalGraphNative(
       `native backend: ${error instanceof Error ? error.message : String(error)}`
     )
   }
+}
+
+/**
+ * Parse and plan a graph once, returning a handle to evaluate it by.
+ *
+ * `compile()` replays one graph thousands of times; going through
+ * `evalGraphNative` every call would ship the whole JSON across the FFI
+ * boundary and hash it just to find the plan again, and for a rolled-out
+ * automaton that string is hundreds of kilobytes.
+ */
+export function prepareGraphNative(
+  graphJson: string
+): number {
+  const mod = loadNative()
+  if (!mod)
+    throw new Error(
+      "@typenet/native is not built. Run `pnpm build:native`."
+    )
+  try {
+    return mod.prepareGraph(graphJson)
+  } catch (error) {
+    throw new Error(
+      `native backend: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+}
+
+/** Evaluate a graph prepared by {@link prepareGraphNative}. */
+export function evalPreparedNative(
+  handle: number,
+  leaves: Float32Array,
+  seed: number
+): Float32Array {
+  const mod = loadNative()
+  if (!mod)
+    throw new Error(
+      "@typenet/native is not built. Run `pnpm build:native`."
+    )
+  try {
+    return new Float32Array(
+      mod.evalPrepared(handle, leaves, seed >>> 0)
+    )
+  } catch (error) {
+    throw new Error(
+      `native backend: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+}
+
+/** Release a prepared graph. */
+export function releaseGraphNative(handle: number): void {
+  loadNative()?.releaseGraph(handle)
 }

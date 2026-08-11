@@ -457,6 +457,24 @@ const CASES: Case[] = [
     sample: awayFromUnit
   },
   {
+    name: "narrow(dim 1)",
+    shapes: [[3, 5]],
+    build: ([a]) => a!.narrow(1, 1, 3).pow(3).sum()
+  },
+  {
+    name: "narrow(dim 0), whole tensor",
+    shapes: [[4, 2]],
+    build: ([a]) => a!.narrow(0, 0, 4).pow(3).sum()
+  },
+  {
+    name: "narrow then cat back",
+    shapes: [[2, 6]],
+    build: ([a]) =>
+      Tensor.cat(a!.narrow(1, 3, 3), a!.narrow(1, 0, 3), 1)
+        .pow(3)
+        .sum()
+  },
+  {
     // the overflow penalty the graph CA trains with
     name: "overflow penalty (x - clamp(x)).abs().mean()",
     shapes: [[6]],
