@@ -781,11 +781,75 @@ function evalNode(node: LazyNode): AnyTensor {
   }
 }
 
+/**
+ * Post-order traversal of the lazy graph reachable from `roots`: every
+ * tensor appears after all of its inputs, each exactly once. Leaves
+ * (non-lazy tensors) are included, with no inputs of their own.
+ *
+ * Iterative on purpose. A compiled training step for a cellular
+ * automaton rolls the update rule out over dozens of time steps and
+ * then differentiates it, which is a graph thousands of nodes deep —
+ * far past what recursion survives.
+ */
+function topoOrder(
+  roots: readonly AnyTensor[]
+): AnyTensor[] {
+  const order: AnyTensor[] = []
+  const seen = new Set<AnyTensor>()
+  const stack: {
+    t: AnyTensor
+    inputs: AnyTensor[]
+    i: number
+  }[] = []
+  const push = (t: AnyTensor): void => {
+    if (seen.has(t)) return
+    seen.add(t)
+    stack.push({
+      t,
+      inputs:
+        t._storage.kind === "lazy" ?
+          nodeInputs(t._storage.node)
+        : [],
+      i: 0
+    })
+  }
+  for (const root of roots) {
+    push(root)
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1]!
+      if (frame.i < frame.inputs.length) {
+        push(frame.inputs[frame.i++]!)
+        continue
+      }
+      stack.pop()
+      order.push(frame.t)
+    }
+  }
+  return order
+}
+
+/**
+ * Evaluate `roots` and everything they depend on with the TS
+ * interpreter, deepest node first. Walking in topological order means
+ * each `evalNode` call finds its inputs already materialized, so the
+ * `force()` calls inside it never recurse.
+ */
+function evalInterpreted(roots: AnyTensor[]): void {
+  for (const t of topoOrder(roots)) {
+    const storage = t._storage
+    if (storage.kind !== "lazy") continue
+    if (!storage.cache)
+      storage.cache = eagerly(() => evalNode(storage.node))
+    ;(t as { _storage: TensorStorage })._storage =
+      storage.cache._storage
+  }
+}
+
 function force(t: AnyTensor): AnyTensor {
   const storage = t._storage
   if (storage.kind !== "lazy") return t
   if (!storage.cache && !evalNativeMany([t]))
-    storage.cache = eagerly(() => evalNode(storage.node))
+    evalInterpreted([t])
   ;(t as { _storage: TensorStorage })._storage =
     storage.cache!._storage
   return t
@@ -815,168 +879,138 @@ function serializeLazyGraph(roots: AnyTensor[]): {
   leafOffsets: number[]
   leafBytes: number
 } | null {
+  const order = topoOrder(roots)
   const nodes: SerializedNode[] = []
-  const seen = new Map<AnyTensor, number>()
-  const leafIds = new Map<AnyTensor, number>()
+  const index = new Map<AnyTensor, number>()
   const leafData: Float32Array[] = []
   const leafTensors: AnyTensor[] = []
   const leafOffsets: number[] = []
-  let leafCount = 0
   let leafBytes = 0
   // Rough work estimate (elements touched) — used to pin tiny graphs
   // to the candle CPU device, where per-kernel Metal dispatch and
   // readback overhead would dwarf the compute.
   let work = 0
 
-  const visit = (t: AnyTensor): number | null => {
-    const cached = seen.get(t)
-    if (cached !== undefined) return cached
-    const index = visitUncached(t)
-    if (index !== null) seen.set(t, index)
-    return index
-  }
-
-  const visitUncached = (t: AnyTensor): number | null => {
-    if (t._storage.kind === "lazy") {
-      work += prod(t._storage.node.shape)
-      const node = t._storage.node
-      const ref = (u: AnyTensor): number | null => visit(u)
-      let body: SerializedNode
-      switch (node.op) {
-        case "binary": {
-          const a = ref(node.a)
-          const b = ref(node.b)
-          if (a === null || b === null) return null
-          body = {
-            op: "binary",
-            kind: node.kind,
-            parameter: node.parameter,
-            a,
-            b,
-            shape: node.shape
-          }
-          break
-        }
-        case "unary": {
-          const input = ref(node.input)
-          if (input === null) return null
-          body = {
-            op: "unary",
-            kind: node.kind,
-            parameter: node.parameter,
-            input
-          }
-          break
-        }
-        case "matmul": {
-          const a = ref(node.a)
-          const b = ref(node.b)
-          if (a === null || b === null) return null
-          body = { op: "matmul", a, b }
-          break
-        }
-        case "reduce": {
-          const input = ref(node.input)
-          if (input === null) return null
-          body = {
-            op: "reduce",
-            kind: node.kind,
-            dim: node.dim,
-            keepdim: node.keepdim,
-            input
-          }
-          break
-        }
-        case "reduceAll": {
-          const input = ref(node.input)
-          if (input === null) return null
-          body = { op: "reduceAll", kind: node.kind, input }
-          break
-        }
-        case "broadcastTo": {
-          const input = ref(node.input)
-          if (input === null) return null
-          body = {
-            op: "broadcastTo",
-            input,
-            shape: node.shape
-          }
-          break
-        }
-        case "permute": {
-          const input = ref(node.input)
-          if (input === null) return null
-          body = { op: "permute", order: node.order, input }
-          break
-        }
-        case "view": {
-          const input = ref(node.input)
-          if (input === null) return null
-          body = { op: "view", input, shape: node.shape }
-          break
-        }
-        case "narrow": {
-          const input = ref(node.input)
-          if (input === null) return null
-          body = {
-            op: "narrow",
-            dim: node.dim,
-            start: node.start,
-            length: node.length,
-            input
-          }
-          break
-        }
-        case "cat": {
-          const a = ref(node.a)
-          const b = ref(node.b)
-          if (a === null || b === null) return null
-          body = { op: "cat", a, b, dim: node.dim }
-          break
-        }
-        case "oneHot": {
-          const input = ref(node.input)
-          if (input === null) return null
-          body = {
-            op: "oneHot",
-            classes: node.classes,
-            input
-          }
-          break
-        }
-      }
-      nodes.push(body)
-      return nodes.length - 1
-    }
-    if (t._storage.kind !== "cpu" || t.dtype !== "float32")
-      return null
-    let id = leafIds.get(t)
-    if (id === undefined) {
-      id = leafCount++
-      leafIds.set(t, id)
-      leafData.push(t._storage.data as Float32Array)
+  for (const t of order) {
+    index.set(t, nodes.length)
+    if (t._storage.kind !== "lazy") {
+      // A leaf: its data becomes one slice of the concatenated leaf
+      // buffer. Anything the native bridge cannot take (float64,
+      // non-CPU storage) aborts serialization so the caller falls
+      // back to the interpreter.
+      if (t._storage.kind !== "cpu" || t.dtype !== "float32")
+        return null
+      const data = t._storage.data as Float32Array
+      nodes.push({
+        op: "leaf",
+        leaf: leafTensors.length,
+        offset: leafBytes,
+        shape: [...t.shape]
+      })
+      leafData.push(data)
       leafTensors.push(t)
       leafOffsets.push(leafBytes)
-      leafBytes += t._storage.data.length
-      work += t._storage.data.length
+      leafBytes += data.length
+      work += data.length
+      continue
     }
-    nodes.push({
-      op: "leaf",
-      leaf: id,
-      offset: leafOffsets[id]!,
-      shape: [...t.shape]
-    })
-    return nodes.length - 1
+    const node = t._storage.node
+    work += prod(node.shape)
+    // Every input precedes `t` in topological order, so its index is
+    // already assigned.
+    const ref = (u: AnyTensor): number => index.get(u)!
+    switch (node.op) {
+      case "binary":
+        nodes.push({
+          op: "binary",
+          kind: node.kind,
+          parameter: node.parameter,
+          a: ref(node.a),
+          b: ref(node.b),
+          shape: node.shape
+        })
+        break
+      case "unary":
+        nodes.push({
+          op: "unary",
+          kind: node.kind,
+          parameter: node.parameter,
+          input: ref(node.input)
+        })
+        break
+      case "matmul":
+        nodes.push({
+          op: "matmul",
+          a: ref(node.a),
+          b: ref(node.b)
+        })
+        break
+      case "reduce":
+        nodes.push({
+          op: "reduce",
+          kind: node.kind,
+          dim: node.dim,
+          keepdim: node.keepdim,
+          input: ref(node.input)
+        })
+        break
+      case "reduceAll":
+        nodes.push({
+          op: "reduceAll",
+          kind: node.kind,
+          input: ref(node.input)
+        })
+        break
+      case "broadcastTo":
+        nodes.push({
+          op: "broadcastTo",
+          input: ref(node.input),
+          shape: node.shape
+        })
+        break
+      case "permute":
+        nodes.push({
+          op: "permute",
+          order: node.order,
+          input: ref(node.input)
+        })
+        break
+      case "view":
+        nodes.push({
+          op: "view",
+          input: ref(node.input),
+          shape: node.shape
+        })
+        break
+      case "narrow":
+        nodes.push({
+          op: "narrow",
+          dim: node.dim,
+          start: node.start,
+          length: node.length,
+          input: ref(node.input)
+        })
+        break
+      case "cat":
+        nodes.push({
+          op: "cat",
+          a: ref(node.a),
+          b: ref(node.b),
+          dim: node.dim
+        })
+        break
+      case "oneHot":
+        nodes.push({
+          op: "oneHot",
+          classes: node.classes,
+          input: ref(node.input)
+        })
+        break
+    }
   }
 
-  const rootIndices: number[] = []
-  const rootShapes: number[][] = []
-  for (const root of roots) {
-    const index = visit(root)
-    if (index === null) return null
-    rootIndices.push(index)
-    rootShapes.push([...root.shape])
-  }
+  const rootIndices = roots.map(root => index.get(root)!)
+  const rootShapes = roots.map(root => [...root.shape])
   const total = leafData.reduce((n, d) => n + d.length, 0)
   const leaves = new Float32Array(total)
   let offset = 0
@@ -1047,12 +1081,10 @@ export function forceMany(ts: AnyTensor[]): void {
     const storage = t._storage
     return storage.kind === "lazy" && !storage.cache
   })
-  if (pending.length === 0) return
-  if (pending.length > 1 && evalNativeMany(pending)) {
-    for (const t of pending) force(t)
-    return
-  }
-  for (const t of pending) force(t)
+  if (pending.length > 0 && !evalNativeMany(pending))
+    evalInterpreted(pending)
+  // Everything is materialized by now; force() only swaps storages in.
+  for (const t of ts) force(t)
 }
 
 // --- optimizer in the graph (phase B task 4) ----------------------
@@ -1150,19 +1182,12 @@ export function printGraph(
 ): string {
   const rootList = Array.isArray(roots) ? roots : [roots]
   const ids = new Map<AnyTensor, number>()
-  const entries: { t: AnyTensor; node: LazyNode | null }[] =
-    []
-  const visit = (t: AnyTensor): void => {
-    if (ids.has(t)) return
-    let node: LazyNode | null = null
-    if (t._storage.kind === "lazy") {
-      node = t._storage.node
-      for (const input of nodeInputs(node)) visit(input)
-    }
-    ids.set(t, entries.length)
-    entries.push({ t, node })
-  }
-  for (const root of rootList) visit(root)
+  const entries = topoOrder(rootList).map(t => ({
+    t,
+    node:
+      t._storage.kind === "lazy" ? t._storage.node : null
+  }))
+  entries.forEach(({ t }, i) => ids.set(t, i))
   const label = (t: AnyTensor): string =>
     tensorNames.get(t) ?? `%${ids.get(t)!}`
   const width = Math.max(
@@ -1345,19 +1370,9 @@ export function compile<
       ...updates.map(u => u.expr),
       ...materialize.map(m => m.t)
     ]
-    const seen = new Set<AnyTensor>()
-    const lazy: State["lazy"] = []
-    const walk = (t: AnyTensor) => {
-      if (seen.has(t)) return
-      seen.add(t)
-      if (t._storage.kind === "lazy") {
-        const storage = t._storage
-        lazy.push({ t, storage })
-        for (const input of nodeInputs(storage.node))
-          walk(input)
-      }
-    }
-    for (const root of roots) walk(root)
+    const lazy: State["lazy"] = topoOrder(roots)
+      .filter(t => t._storage.kind === "lazy")
+      .map(t => ({ t, storage: t._storage as LazyStorage }))
     const serialized = serializeLazyGraph(roots)
     return {
       placeholders,
@@ -1525,6 +1540,43 @@ export function compile<
   }) as (
     ...inputs: { [K in keyof Args]: CompiledInput<Args[K]> }
   ) => R
+}
+
+/**
+ * Post-order traversal of the autograd tape behind `root`: every
+ * tensor appears after the inputs it was computed from, so walking the
+ * result in reverse visits each node only once its own gradient is
+ * complete. Iterative for the same reason as `topoOrder` — the tape
+ * behind a long rollout is thousands of nodes deep.
+ */
+function tapeOrder(root: AnyTensor): AnyTensor[] {
+  const topo: AnyTensor[] = []
+  const seen = new Set<AnyTensor>()
+  const stack: {
+    t: AnyTensor
+    inputs: AnyTensor[]
+    i: number
+  }[] = []
+  const push = (t: AnyTensor): void => {
+    if (seen.has(t)) return
+    seen.add(t)
+    stack.push({
+      t,
+      inputs: t.gradNode ? t.gradNode.inputs : [],
+      i: 0
+    })
+  }
+  push(root)
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!
+    if (frame.i < frame.inputs.length) {
+      push(frame.inputs[frame.i++]!)
+      continue
+    }
+    stack.pop()
+    topo.push(frame.t)
+  }
+  return topo
 }
 
 function withGrad(
@@ -1819,16 +1871,7 @@ export class Tensor<
       )
     }
 
-    const topo: AnyTensor[] = []
-    const seen = new Set<AnyTensor>()
-    const visit = (t: AnyTensor) => {
-      if (seen.has(t)) return
-      seen.add(t)
-      if (t.gradNode)
-        for (const input of t.gradNode.inputs) visit(input)
-      topo.push(t)
-    }
-    visit(this)
+    const topo = tapeOrder(this as AnyTensor)
 
     const grads = new Map<AnyTensor, AnyTensor>()
     grads.set(this, seed)
