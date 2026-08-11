@@ -83,21 +83,27 @@ export function knnGraph(pos: Points, k = 8): Edges {
   return fromPairs(pairs, n)
 }
 
-/** Expand undirected pairs into a sorted, bidirectional edge list. */
+/**
+ * Expand undirected pairs into a bidirectional edge list, ordered by
+ * source then destination. Order does not change the maths — aggregation
+ * is a scatter-add — but a canonical one makes two builds of the same
+ * graph comparable, including against the reference implementation.
+ */
 function fromPairs(pairs: Set<number>, n: number): Edges {
-  const sorted = Array.from(pairs).sort((a, b) => a - b)
-  const count = sorted.length * 2
-  const src = new Float32Array(count)
-  const dst = new Float32Array(count)
-  sorted.forEach((key, i) => {
+  const both: number[] = []
+  for (const key of pairs) {
     const a = Math.floor(key / n)
     const b = key % n
-    src[i] = a
-    dst[i] = b
-    src[sorted.length + i] = b
-    dst[sorted.length + i] = a
+    both.push(a * n + b, b * n + a)
+  }
+  both.sort((x, y) => x - y)
+  const src = new Float32Array(both.length)
+  const dst = new Float32Array(both.length)
+  both.forEach((key, i) => {
+    src[i] = Math.floor(key / n)
+    dst[i] = key % n
   })
-  return { src, dst, count }
+  return { src, dst, count: both.length }
 }
 
 /**
