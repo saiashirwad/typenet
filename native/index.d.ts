@@ -5,14 +5,14 @@ export declare function deviceName(): string
 export declare function evalGraph(
   graphJson: string,
   leaves: Float32Array,
-  seed: number
+  seed: number,
 ): Readback
 
 /** Evaluate a plan created by `prepareGraph`. */
 export declare function evalPrepared(
   handle: number,
   leaves: Float32Array,
-  seed: number
+  seed: number,
 ): Readback
 
 /**
@@ -23,7 +23,7 @@ export declare function preparedGraphCount(): number
 
 /** Parse and plan a graph once, returning a handle for `evalPrepared`. */
 export declare function prepareGraph(
-  graphJson: string
+  graphJson: string,
 ): number
 
 /** Drop a plan created by `prepareGraph`. */

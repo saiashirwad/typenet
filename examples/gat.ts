@@ -1,25 +1,13 @@
 "use tsover"
 
-import {
-  Adam,
-  crossEntropy,
-  eye,
-  Module,
-  rand,
-  randn,
-  Tensor,
-  type TensorParams
-} from "../index.ts"
+import { Adam, crossEntropy, eye, Module, rand, randn, Tensor, type TensorParams } from "../index.ts"
 
 type GradParams = {
   requires_grad: true
   dtype: "float32"
 }
 
-class GATHead<
-  FIn extends number,
-  FOut extends number
-> extends Module {
+class GATHead<FIn extends number, FOut extends number> extends Module {
   readonly W: Tensor<[FIn, FOut], GradParams>
   readonly attSrc: Tensor<[FOut, 1], GradParams>
   readonly attDst: Tensor<[FOut, 1], GradParams>
@@ -27,17 +15,14 @@ class GATHead<
   constructor(fin: FIn, fout: FOut) {
     super()
     const k = 1 / Math.sqrt(fin)
-    this.W = (
-      rand([fin, fout]) * (2 * k) -
-      k
-    ).requires_grad()
+    this.W = (rand([fin, fout]) * (2 * k) - k).requires_grad()
     this.attSrc = (randn([fout, 1]) * 0.1).requires_grad()
     this.attDst = (randn([fout, 1]) * 0.1).requires_grad()
   }
 
   forward<N extends number, P extends TensorParams>(
     h: Tensor<[N, FIn], P>,
-    adj: Tensor<[N, N], any>
+    adj: Tensor<[N, N], any>,
   ): Tensor<[N, FOut], P> {
     const wh = h.matmul(this.W)
     const src = wh.matmul(this.attSrc)
@@ -52,17 +37,14 @@ class GATHead<
   }
 }
 
-class GAT<
-  Features extends number,
-  Classes extends number
-> extends Module {
+class GAT<Features extends number, Classes extends number> extends Module {
   readonly head1: GATHead<Features, 8>
   readonly head2: GATHead<Features, 8>
   readonly out: GATHead<16, Classes>
 
   constructor(
     readonly features: Features,
-    readonly classes: Classes
+    readonly classes: Classes,
   ) {
     super()
     this.head1 = new GATHead(features, 8)
@@ -72,7 +54,7 @@ class GAT<
 
   forward<N extends number, P extends TensorParams>(
     x: Tensor<[N, Features], P>,
-    adj: Tensor<[N, N], any>
+    adj: Tensor<[N, N], any>,
   ): Tensor<[N, Classes], P> {
     const h1 = this.head1.forward(x, adj).leakyRelu(0.2)
     const h2 = this.head2.forward(x, adj).leakyRelu(0.2)
@@ -116,11 +98,10 @@ for (let epoch = 1; epoch <= 300; epoch++) {
   if (epoch % 60 === 0) {
     const preds = net.forward(X, adj).argmax(1)
     let correct = 0
-    for (let i = 0; i < N; i++)
-      if (preds.data[i] === labels[i]) correct++
+    for (let i = 0; i < N; i++) if (preds.data[i] === labels[i]) correct++
     const accuracy = ((100 * correct) / N).toFixed(1)
     console.log(
-      `epoch ${String(epoch).padStart(3)}  loss ${loss.item().toFixed(4)}  accuracy ${accuracy}%`
+      `epoch ${String(epoch).padStart(3)}  loss ${loss.item().toFixed(4)}  accuracy ${accuracy}%`,
     )
   }
 }

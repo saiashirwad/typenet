@@ -4,20 +4,8 @@
 // values within one evaluation, and reproducibility from a seed.
 
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Tensor,
-  compile,
-  configure,
-  normal,
-  printGraph,
-  tensor,
-  uniform
-} from "../src/tensor.ts"
-import {
-  disableNative,
-  isNativeAvailable,
-  useNative
-} from "../src/backends/native.ts"
+import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
+import { compile, configure, normal, printGraph, Tensor, tensor, uniform } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -53,18 +41,18 @@ describe("uniform", () => {
     const a = uniform([64]) as AnyTensor
     const b = uniform([64]) as AnyTensor
     expect(Array.from(a.data)).not.toEqual(
-      Array.from(b.data)
+      Array.from(b.data),
     )
   })
 
   it("repeats exactly for a given seed", () => {
     configure({ seed: 7 })
     const first = Array.from(
-      (uniform([32]) as AnyTensor).data
+      (uniform([32]) as AnyTensor).data,
     )
     configure({ seed: 7 })
     const second = Array.from(
-      (uniform([32]) as AnyTensor).data
+      (uniform([32]) as AnyTensor).data,
     )
     expect(second).toEqual(first)
   })
@@ -86,8 +74,9 @@ describe("normal", () => {
   })
 
   it("produces no NaNs (log(0) is excluded)", () => {
-    for (const x of (normal([4096]) as AnyTensor).data)
+    for (const x of (normal([4096]) as AnyTensor).data) {
       expect(Number.isFinite(x)).toBe(true)
+    }
   })
 })
 
@@ -96,7 +85,7 @@ describe("random nodes in a graph", () => {
     configure({ lazy: true })
     const out = (uniform([4]) as AnyTensor).add(1)
     expect(printGraph(out)).toMatch(
-      /random\.uniform\(\) \{stream=\d+\}/
+      /random\.uniform\(\) \{stream=\d+\}/,
     )
   })
 
@@ -107,9 +96,7 @@ describe("random nodes in a graph", () => {
   })
 
   it("redraw on every call of a compiled function", () => {
-    const step = compile((x: Tensor<[64]>) =>
-      (x as AnyTensor).add(uniform([64]))
-    )
+    const step = compile((x: Tensor<[64]>) => (x as AnyTensor).add(uniform([64])))
     const zeros = Tensor.zeros([64])
     const first = Array.from(step(zeros).data)
     const second = Array.from(step(zeros).data)
@@ -132,12 +119,8 @@ describe("random nodes in a graph", () => {
   })
 
   it("gate roughly half the entries, differently each call", () => {
-    const step = compile(() =>
-      (uniform([4096]) as AnyTensor).lt(0.5).sum()
-    )
-    const counts = [step(), step(), step()].map(t =>
-      t.item()
-    )
+    const step = compile(() => (uniform([4096]) as AnyTensor).lt(0.5).sum())
+    const counts = [step(), step(), step()].map(t => t.item())
     for (const c of counts) {
       expect(c).toBeGreaterThan(1900)
       expect(c).toBeLessThan(2200)
@@ -162,12 +145,12 @@ describe.skipIf(!isNativeAvailable())(
       // identical rather than merely similarly distributed.
       configure({ lazy: true, seed: 99 })
       const interpreted = Array.from(
-        (uniform([1024]) as AnyTensor).data
+        (uniform([1024]) as AnyTensor).data,
       )
       useNative()
       configure({ lazy: true, seed: 99 })
       const native = Array.from(
-        (uniform([1024]) as AnyTensor).data
+        (uniform([1024]) as AnyTensor).data,
       )
       expect(native).toEqual(interpreted)
     })
@@ -179,19 +162,18 @@ describe.skipIf(!isNativeAvailable())(
       configure({ lazy: true, seed: 41 })
       const native = (normal([1024]) as AnyTensor).data
       let worst = 0
-      for (let i = 0; i < interpreted.length; i++)
+      for (let i = 0; i < interpreted.length; i++) {
         worst = Math.max(
           worst,
-          Math.abs(interpreted[i]! - native[i]!)
+          Math.abs(interpreted[i]! - native[i]!),
         )
+      }
       expect(worst).toBeLessThan(1e-5)
     })
 
     it("redraw per call in a compiled native step", () => {
       useNative()
-      const step = compile((x: Tensor<[4096]>) =>
-        (x as AnyTensor).add(uniform([4096])).sum()
-      )
+      const step = compile((x: Tensor<[4096]>) => (x as AnyTensor).add(uniform([4096])).sum())
       const zeros = Tensor.zeros([4096])
       const first = step(zeros).item()
       const second = step(zeros).item()
@@ -200,5 +182,5 @@ describe.skipIf(!isNativeAvailable())(
       expect(first / 4096).toBeCloseTo(0.5, 1)
       expect(second / 4096).toBeCloseTo(0.5, 1)
     })
-  }
+  },
 )

@@ -1,13 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { Tensor, tensor, configure } from "../src/tensor.ts"
+import { disableNative, isNativeAvailable, nativeDevice, useNative } from "../src/backends/native.ts"
 import { crossEntropy } from "../src/nn.ts"
-import {
-  disableNative,
-  isNativeAvailable,
-  nativeDevice,
-  useNative
-} from "../src/backends/native.ts"
 import { SGD } from "../src/optim.ts"
+import { configure, Tensor, tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -24,14 +19,15 @@ function bothWays<T>(fn: () => T): { eager: T; native: T } {
 
 function expectClose(
   eager: AnyTensor,
-  native: AnyTensor
+  native: AnyTensor,
 ): void {
   expect(native.shape).toEqual(eager.shape)
   const a = eager.data
   const b = native.data
   expect(b.length).toBe(a.length)
-  for (let i = 0; i < a.length; i++)
+  for (let i = 0; i < a.length; i++) {
     expect(Math.abs(a[i]! - b[i]!)).toBeLessThan(1e-4)
+  }
 }
 
 afterEach(() => {
@@ -45,7 +41,7 @@ describe.skipIf(!available)("native backend", () => {
     const { eager, native } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
-        [4, 5, 6]
+        [4, 5, 6],
       ])
       return a
         .mul(tensor([[10], [100]]))
@@ -62,27 +58,27 @@ describe.skipIf(!available)("native backend", () => {
       const plain = tensor([
         [1, 2],
         [3, 4],
-        [5, 6]
+        [5, 6],
       ]).matmul(
         tensor([
           [1, 2, 3, 4],
-          [5, 6, 7, 8]
-        ])
+          [5, 6, 7, 8],
+        ]),
       )
       const batched = Tensor.stack([
         tensor([
           [1, 0],
-          [0, 1]
+          [0, 1],
         ]),
         tensor([
           [2, 0],
-          [0, 2]
-        ])
+          [0, 2],
+        ]),
       ]).matmul(
         tensor([
           [1, 2],
-          [3, 4]
-        ])
+          [3, 4],
+        ]),
       )
       return { plain, batched }
     })
@@ -95,7 +91,7 @@ describe.skipIf(!available)("native backend", () => {
     const { eager, native } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
-        [4, 5, 6]
+        [4, 5, 6],
       ])
       return {
         dim: a.sum(0),
@@ -104,7 +100,7 @@ describe.skipIf(!available)("native backend", () => {
         mean: a.mean(1),
         max: a.max(0),
         maxAll: a.max(),
-        argmax: a.argmax(1)
+        argmax: a.argmax(1),
       }
     })
     expectClose(eager.dim, native.dim)
@@ -138,7 +134,7 @@ describe.skipIf(!available)("native backend", () => {
     const { eager, native } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
-        [4, 5, 6]
+        [4, 5, 6],
       ])
       const v = a.view([3, 2]).transpose(0, 1)
       const p = a.unsqueeze(0).permute(1, 0, 2).squeeze()
@@ -158,10 +154,10 @@ describe.skipIf(!available)("native backend", () => {
       Tensor.cat(
         tensor([
           [1, 2],
-          [3, 4]
+          [3, 4],
         ]),
         tensor([[5, 6]]),
-        0
+        0,
       )
     )
     expectClose(eager, native)
@@ -169,9 +165,7 @@ describe.skipIf(!available)("native backend", () => {
 
   it("matches eager for oneHot", () => {
     useNative()
-    const { eager, native } = bothWays(() =>
-      tensor([0, 2, 1]).oneHot(3)
-    )
+    const { eager, native } = bothWays(() => tensor([0, 2, 1]).oneHot(3))
     expectClose(eager, native)
   })
 
@@ -182,21 +176,24 @@ describe.skipIf(!available)("native backend", () => {
         [0, 0],
         [0, 1],
         [1, 0],
-        [1, 1]
+        [1, 1],
       ])
       const y = tensor([[0], [1], [1], [0]])
       const w1 = tensor([
         [0.5, -0.5, 0.25, -0.25],
-        [0.1, 0.2, -0.3, 0.4]
+        [0.1, 0.2, -0.3, 0.4],
       ]).requires_grad()
       const b1 = tensor([
-        0.1, -0.1, 0.05, -0.05
+        0.1,
+        -0.1,
+        0.05,
+        -0.05,
       ]).requires_grad()
       const w2 = tensor([
         [0.6],
         [-0.6],
         [0.3],
-        [-0.3]
+        [-0.3],
       ]).requires_grad()
       const b2 = tensor([0.2]).requires_grad()
       const params = [w1, b1, w2, b2] as AnyTensor[]
@@ -212,11 +209,9 @@ describe.skipIf(!available)("native backend", () => {
     const { eager, native } = bothWays(step)
     expect(native.loss.item()).toBeCloseTo(
       eager.loss.item(),
-      4
+      4,
     )
-    eager.params.forEach((p, i) =>
-      expectClose(p, native.params[i]!)
-    )
+    eager.params.forEach((p, i) => expectClose(p, native.params[i]!))
   })
 
   it("throws a clear error when native eval fails", () => {
@@ -231,12 +226,12 @@ describe.skipIf(!available)("native backend", () => {
     const run = () => {
       const a = tensor([
         [0.5, -1, 2],
-        [1.5, 0.25, -0.75]
+        [1.5, 0.25, -0.75],
       ]).requires_grad()
       const b = tensor([
         [1, -2],
         [0.5, 0.5],
-        [-1, 3]
+        [-1, 3],
       ]).requires_grad()
       const c = tensor([2, -1]).requires_grad()
       const loss = (a as AnyTensor)
@@ -252,9 +247,7 @@ describe.skipIf(!available)("native backend", () => {
       return [a, b, c] as AnyTensor[]
     }
     const { eager, native } = bothWays(run)
-    eager.forEach((p, i) =>
-      expectClose(p.grad!, native[i]!.grad!)
-    )
+    eager.forEach((p, i) => expectClose(p.grad!, native[i]!.grad!))
   })
 
   it("matches eager gradients through crossEntropy", () => {
@@ -264,11 +257,11 @@ describe.skipIf(!available)("native backend", () => {
         [2, 1, 0.1],
         [0.5, 1.5, -1],
         [-0.3, 0.8, 1.2],
-        [1, -1, 0]
+        [1, -1, 0],
       ]).requires_grad()
       const loss = crossEntropy(
         logits as any,
-        tensor([0, 1, 2, 0]) as any
+        tensor([0, 1, 2, 0]) as any,
       )
       loss.backward()
       return [logits] as AnyTensor[]
@@ -284,21 +277,24 @@ describe.skipIf(!available)("native backend", () => {
         [0, 0],
         [0, 1],
         [1, 0],
-        [1, 1]
+        [1, 1],
       ])
       const y = tensor([[0], [1], [1], [0]])
       const w1 = tensor([
         [0.5, -0.5, 0.25, -0.25],
-        [0.1, 0.2, -0.3, 0.4]
+        [0.1, 0.2, -0.3, 0.4],
       ]).requires_grad()
       const b1 = tensor([
-        0.1, -0.1, 0.05, -0.05
+        0.1,
+        -0.1,
+        0.05,
+        -0.05,
       ]).requires_grad()
       const w2 = tensor([
         [0.6],
         [-0.6],
         [0.3],
-        [-0.3]
+        [-0.3],
       ]).requires_grad()
       const b2 = tensor([0.2]).requires_grad()
       const h = x.matmul(w1).add(b1).tanh()
@@ -307,9 +303,7 @@ describe.skipIf(!available)("native backend", () => {
       return [w1, b1, w2, b2] as AnyTensor[]
     }
     const { eager, native } = bothWays(run)
-    eager.forEach((p, i) =>
-      expectClose(p.grad!, native[i]!.grad!)
-    )
+    eager.forEach((p, i) => expectClose(p.grad!, native[i]!.grad!))
   })
 
   it("evaluates shared subexpressions once across multiple roots", () => {
@@ -325,15 +319,15 @@ describe.skipIf(!available)("native backend", () => {
     // the same materialized values.
     expectClose(
       tensor([6, 12, 18]) as AnyTensor,
-      x.grad as AnyTensor
+      x.grad as AnyTensor,
     )
     expectClose(
       tensor([1, 4, 9]) as AnyTensor,
-      z as AnyTensor
+      z as AnyTensor,
     )
     expectClose(
       tensor([2, 8, 18]) as AnyTensor,
-      y as AnyTensor
+      y as AnyTensor,
     )
   })
 })
@@ -346,7 +340,8 @@ describe("native backend availability", () => {
       useNative()
       configure({ lazy: true })
       expect(tensor([1, 2]).add(1).toArray()).toEqual([
-        2, 3
+        2,
+        3,
       ])
     } else {
       expect(() => useNative()).toThrow(/build:native/)

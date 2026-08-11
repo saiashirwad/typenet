@@ -10,23 +10,6 @@
 
 import * as nativeBackend from "./backends/native.ts"
 import {
-  prod,
-  showShape,
-  type CpuStorage,
-  type DType,
-  type LazyNode,
-  type LazyNodeBody,
-  type LazyStorage,
-  type TensorStorage
-} from "./storage.ts"
-import {
-  getActiveSeed,
-  nextSeed,
-  randomData,
-  reseed,
-  setActiveSeed
-} from "./kernels.ts"
-import {
   rawBinary,
   rawBroadcastTo,
   rawCat,
@@ -39,13 +22,11 @@ import {
   rawReduceAll,
   rawScatterAdd,
   rawUnary,
-  reshapeRaw
+  reshapeRaw,
 } from "./eager.ts"
-import {
-  makeRaw,
-  makeStorage,
-  type AnyTensor
-} from "./tensor.ts"
+import { getActiveSeed, nextSeed, randomData, reseed, setActiveSeed } from "./kernels.ts"
+import { type CpuStorage, type DType, type LazyNode, type LazyNodeBody, type LazyStorage, prod, showShape, type TensorStorage } from "./storage.ts"
+import { type AnyTensor, makeRaw, makeStorage } from "./tensor.ts"
 
 let lazyMode = false
 
@@ -112,17 +93,17 @@ function nodeInputs(node: LazyNode): AnyTensor[] {
 function makeLazy(
   body: LazyNodeBody,
   shape: readonly number[],
-  dtype: DType
+  dtype: DType,
 ): AnyTensor {
   const node = {
     ...body,
     shape: [...shape],
-    dtype
+    dtype,
   } as LazyNode
   return makeStorage(
     { kind: "lazy", node, cache: null },
     shape,
-    dtype
+    dtype,
   )
 }
 
@@ -133,13 +114,13 @@ function evalNode(node: LazyNode): AnyTensor {
         force(node.a),
         force(node.b),
         node.kind,
-        node.parameter
+        node.parameter,
       )
     case "unary":
       return rawUnary(
         force(node.input),
         node.kind,
-        node.parameter
+        node.parameter,
       )
     case "matmul":
       return rawMatmul(force(node.a), force(node.b))
@@ -148,7 +129,7 @@ function evalNode(node: LazyNode): AnyTensor {
         force(node.input),
         node.dim,
         node.keepdim,
-        node.kind
+        node.kind,
       )
     case "reduceAll":
       return rawReduceAll(force(node.input), node.kind)
@@ -163,7 +144,7 @@ function evalNode(node: LazyNode): AnyTensor {
         force(node.input),
         node.dim,
         node.start,
-        node.length
+        node.length,
       )
     case "cat":
       return rawCat(force(node.a), force(node.b), node.dim)
@@ -173,14 +154,14 @@ function evalNode(node: LazyNode): AnyTensor {
       return rawIndexSelect(
         force(node.input),
         force(node.index),
-        node.dim
+        node.dim,
       )
     case "scatterAdd":
       return rawScatterAdd(
         force(node.input),
         force(node.index),
         node.dim,
-        node.length
+        node.length,
       )
     case "random":
       return makeRaw(
@@ -189,10 +170,10 @@ function evalNode(node: LazyNode): AnyTensor {
           prod(node.shape),
           node.stream,
           getActiveSeed(),
-          node.dtype
+          node.dtype,
         ),
         node.shape,
-        node.dtype
+        node.dtype,
       )
   }
 }
@@ -208,7 +189,7 @@ function evalNode(node: LazyNode): AnyTensor {
  * far past what recursion survives.
  */
 function topoOrder(
-  roots: readonly AnyTensor[]
+  roots: readonly AnyTensor[],
 ): AnyTensor[] {
   const order: AnyTensor[] = []
   const seen = new Set<AnyTensor>()
@@ -222,11 +203,10 @@ function topoOrder(
     seen.add(t)
     stack.push({
       t,
-      inputs:
-        t._storage.kind === "lazy" ?
-          nodeInputs(t._storage.node)
+      inputs: t._storage.kind === "lazy"
+        ? nodeInputs(t._storage.node)
         : [],
-      i: 0
+      i: 0,
     })
   }
   for (const root of roots) {
@@ -257,20 +237,20 @@ function evalInterpreted(roots: AnyTensor[]): void {
   for (const t of topoOrder(roots)) {
     const storage = t._storage
     if (storage.kind !== "lazy") continue
-    if (!storage.cache)
+    if (!storage.cache) {
       storage.cache = eagerly(() => evalNode(storage.node))
-    ;(t as { _storage: TensorStorage })._storage =
-      storage.cache._storage
+    }
+    ;(t as { _storage: TensorStorage })._storage = storage.cache._storage
   }
 }
 
 function force(t: AnyTensor): AnyTensor {
   const storage = t._storage
   if (storage.kind !== "lazy") return t
-  if (!storage.cache && !evalNativeMany([t]))
+  if (!storage.cache && !evalNativeMany([t])) {
     evalInterpreted([t])
-  ;(t as { _storage: TensorStorage })._storage =
-    storage.cache!._storage
+  }
+  ;(t as { _storage: TensorStorage })._storage = storage.cache!._storage
   return t
 }
 
@@ -335,16 +315,17 @@ function serializeLazyGraph(roots: AnyTensor[]): {
       // non-CPU storage) aborts serialization so the caller falls
       // back to the interpreter.
       if (
-        t._storage.kind !== "cpu" ||
-        t.dtype !== "float32"
-      )
+        t._storage.kind !== "cpu"
+        || t.dtype !== "float32"
+      ) {
         return null
+      }
       const data = t._storage.data as Float32Array
       nodes.push({
         op: "leaf",
         leaf: leafTensors.length,
         offset: leafBytes,
-        shape: [...t.shape]
+        shape: [...t.shape],
       })
       leafData.push(data)
       leafTensors.push(t)
@@ -366,7 +347,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           parameter: node.parameter,
           a: ref(node.a),
           b: ref(node.b),
-          shape: node.shape
+          shape: node.shape,
         })
         break
       case "unary":
@@ -374,14 +355,14 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           op: "unary",
           kind: node.kind,
           parameter: node.parameter,
-          input: ref(node.input)
+          input: ref(node.input),
         })
         break
       case "matmul":
         nodes.push({
           op: "matmul",
           a: ref(node.a),
-          b: ref(node.b)
+          b: ref(node.b),
         })
         break
       case "reduce":
@@ -390,35 +371,35 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           kind: node.kind,
           dim: node.dim,
           keepdim: node.keepdim,
-          input: ref(node.input)
+          input: ref(node.input),
         })
         break
       case "reduceAll":
         nodes.push({
           op: "reduceAll",
           kind: node.kind,
-          input: ref(node.input)
+          input: ref(node.input),
         })
         break
       case "broadcastTo":
         nodes.push({
           op: "broadcastTo",
           input: ref(node.input),
-          shape: node.shape
+          shape: node.shape,
         })
         break
       case "permute":
         nodes.push({
           op: "permute",
           order: node.order,
-          input: ref(node.input)
+          input: ref(node.input),
         })
         break
       case "view":
         nodes.push({
           op: "view",
           input: ref(node.input),
-          shape: node.shape
+          shape: node.shape,
         })
         break
       case "narrow":
@@ -427,7 +408,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           dim: node.dim,
           start: node.start,
           length: node.length,
-          input: ref(node.input)
+          input: ref(node.input),
         })
         break
       case "cat":
@@ -435,14 +416,14 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           op: "cat",
           a: ref(node.a),
           b: ref(node.b),
-          dim: node.dim
+          dim: node.dim,
         })
         break
       case "oneHot":
         nodes.push({
           op: "oneHot",
           classes: node.classes,
-          input: ref(node.input)
+          input: ref(node.input),
         })
         break
       case "indexSelect":
@@ -450,7 +431,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           op: "indexSelect",
           dim: node.dim,
           input: ref(node.input),
-          index: ref(node.index)
+          index: ref(node.index),
         })
         break
       case "scatterAdd":
@@ -459,7 +440,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           dim: node.dim,
           length: node.length,
           input: ref(node.input),
-          index: ref(node.index)
+          index: ref(node.index),
         })
         break
       case "random":
@@ -470,7 +451,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           op: "random",
           kind: node.kind,
           stream: node.stream,
-          shape: node.shape
+          shape: node.shape,
         })
         break
     }
@@ -489,13 +470,13 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     json: JSON.stringify({
       nodes,
       roots: rootIndices,
-      device: pickTarget(work)
+      device: pickTarget(work),
     }),
     leaves,
     rootShapes,
     leafTensors,
     leafOffsets,
-    leafBytes
+    leafBytes,
   }
 }
 
@@ -507,31 +488,34 @@ function serializeLazyGraph(roots: AnyTensor[]): {
 // then do the usual in-place storage swap.
 function evalNativeMany(roots: AnyTensor[]): boolean {
   if (!nativeBackend.isNativeEnabled()) return false
-  for (const t of roots)
+  for (const t of roots) {
     if (t._storage.kind !== "lazy") return false
+  }
   const serialized = serializeLazyGraph(roots)
   if (!serialized) return false
   const data = nativeBackend.evalGraphNative(
     serialized.json,
     serialized.leaves,
-    nextSeed()
+    nextSeed(),
   )
   let offset = 0
   serialized.rootShapes.forEach((shape, i) => {
     const n = prod(shape)
     const storage = roots[i]!._storage
-    if (storage.kind === "lazy")
+    if (storage.kind === "lazy") {
       storage.cache = makeRaw(
         data.subarray(offset, offset + n),
         shape,
-        "float32"
+        "float32",
       )
+    }
     offset += n
   })
-  if (offset !== data.length)
+  if (offset !== data.length) {
     throw new Error(
-      `native backend returned ${data.length} values, expected ${offset} for roots [${serialized.rootShapes.map(showShape).join(", ")}]`
+      `native backend returned ${data.length} values, expected ${offset} for roots [${serialized.rootShapes.map(showShape).join(", ")}]`,
     )
+  }
   return true
 }
 
@@ -544,21 +528,14 @@ export function forceMany(ts: AnyTensor[]): void {
     const storage = t._storage
     return storage.kind === "lazy" && !storage.cache
   })
-  if (pending.length > 0 && !evalNativeMany(pending))
+  if (pending.length > 0 && !evalNativeMany(pending)) {
     evalInterpreted(pending)
+  }
   // Everything is materialized by now; force() only swaps storages in.
   for (const t of ts) force(t)
 }
 
-export {
-  force,
-  eagerly,
-  lazily,
-  topoOrder,
-  serializeLazyGraph,
-  makeLazy,
-  lazyMode
-}
+export { eagerly, force, lazily, lazyMode, makeLazy, serializeLazyGraph, topoOrder }
 // CpuStorage/LazyStorage are re-exported so compile.ts can narrow
 // storages without a second import hop back through tensor.ts.
 export type { CpuStorage, LazyStorage, TensorStorage }

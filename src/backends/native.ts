@@ -12,13 +12,13 @@ export type NativeModule = {
   evalGraph(
     graphJson: string,
     leaves: Float32Array,
-    seed: number
+    seed: number,
   ): ArrayBuffer
   prepareGraph(graphJson: string): number
   evalPrepared(
     handle: number,
     leaves: Float32Array,
-    seed: number
+    seed: number,
   ): ArrayBuffer
   releaseGraph(handle: number): void
   preparedGraphCount(): number
@@ -68,13 +68,14 @@ export function nativeDeviceMode(): "cpu" | "gpu" {
  * is dominated by large elementwise tensors.
  */
 export function useNative(
-  options: { device?: "cpu" | "gpu" } = {}
+  options: { device?: "cpu" | "gpu" } = {},
 ): void {
-  if (!loadNative())
+  if (!loadNative()) {
     throw new Error(
-      "@typenet/native is not built. Run `pnpm build:native` " +
-        "(requires a Rust toolchain) before calling useNative()."
+      "@typenet/native is not built. Run `pnpm build:native` "
+        + "(requires a Rust toolchain) before calling useNative().",
     )
+  }
   // Each call fully specifies the configuration, so a plain useNative()
   // always means the default device and no earlier choice lingers.
   deviceMode = options.device ?? "cpu"
@@ -99,20 +100,21 @@ export function isNativeEnabled(): boolean {
 export function evalGraphNative(
   graphJson: string,
   leaves: Float32Array,
-  seed: number
+  seed: number,
 ): Float32Array {
   const mod = loadNative()
-  if (!mod)
+  if (!mod) {
     throw new Error(
-      "@typenet/native is not built. Run `pnpm build:native`."
+      "@typenet/native is not built. Run `pnpm build:native`.",
     )
+  }
   try {
     return new Float32Array(
-      mod.evalGraph(graphJson, leaves, seed >>> 0)
+      mod.evalGraph(graphJson, leaves, seed >>> 0),
     )
   } catch (error) {
     throw new Error(
-      `native backend: ${error instanceof Error ? error.message : String(error)}`
+      `native backend: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
 }
@@ -126,18 +128,19 @@ export function evalGraphNative(
  * automaton that string is hundreds of kilobytes.
  */
 export function prepareGraphNative(
-  graphJson: string
+  graphJson: string,
 ): number {
   const mod = loadNative()
-  if (!mod)
+  if (!mod) {
     throw new Error(
-      "@typenet/native is not built. Run `pnpm build:native`."
+      "@typenet/native is not built. Run `pnpm build:native`.",
     )
+  }
   try {
     return mod.prepareGraph(graphJson)
   } catch (error) {
     throw new Error(
-      `native backend: ${error instanceof Error ? error.message : String(error)}`
+      `native backend: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
 }
@@ -146,20 +149,21 @@ export function prepareGraphNative(
 export function evalPreparedNative(
   handle: number,
   leaves: Float32Array,
-  seed: number
+  seed: number,
 ): Float32Array {
   const mod = loadNative()
-  if (!mod)
+  if (!mod) {
     throw new Error(
-      "@typenet/native is not built. Run `pnpm build:native`."
+      "@typenet/native is not built. Run `pnpm build:native`.",
     )
+  }
   try {
     return new Float32Array(
-      mod.evalPrepared(handle, leaves, seed >>> 0)
+      mod.evalPrepared(handle, leaves, seed >>> 0),
     )
   } catch (error) {
     throw new Error(
-      `native backend: ${error instanceof Error ? error.message : String(error)}`
+      `native backend: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
 }

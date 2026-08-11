@@ -7,34 +7,13 @@ import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Tensor,
-  configure,
-  disableNative
-} from "../index.ts"
-import {
-  checkpointGraph,
-  loadRule,
-  readCheckpoint,
-  saveCheckpoint
-} from "../examples/gnca/checkpoint.ts"
-import {
-  randomGeometricGraph,
-  knnGraph
-} from "../examples/gnca/graphs.ts"
-import {
-  GraphNCA,
-  graphTensors
-} from "../examples/gnca/model.ts"
-import {
-  renderSvg,
-  visible
-} from "../examples/gnca/render.ts"
+import { checkpointGraph, loadRule, readCheckpoint, saveCheckpoint } from "../examples/gnca/checkpoint.ts"
+import { knnGraph, randomGeometricGraph } from "../examples/gnca/graphs.ts"
+import { GraphNCA, graphTensors } from "../examples/gnca/model.ts"
+import { loadCloud, POINTCLOUDS } from "../examples/gnca/pointclouds.ts"
+import { renderSvg, visible } from "../examples/gnca/render.ts"
 import { heart } from "../examples/gnca/targets.ts"
-import {
-  POINTCLOUDS,
-  loadCloud
-} from "../examples/gnca/pointclouds.ts"
+import { configure, disableNative, Tensor } from "../index.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -48,7 +27,7 @@ afterEach(() => {
 const graph = randomGeometricGraph({
   nodes: 60,
   dim: 2,
-  seed: 2
+  seed: 2,
 })
 const target = heart(graph.pos)
 
@@ -63,9 +42,9 @@ function meta(step: number) {
     dim: 2,
     edges: {
       src: Array.from(graph.edges.src),
-      dst: Array.from(graph.edges.dst)
+      dst: Array.from(graph.edges.dst),
     },
-    targetRgba: Array.from(target)
+    targetRgba: Array.from(target),
   }
 }
 
@@ -76,8 +55,9 @@ describe("checkpoints", () => {
     // parameter that never got written.
     saved.parameters().forEach((p, i) => {
       const data = p.data as Float32Array
-      for (let j = 0; j < data.length; j++)
+      for (let j = 0; j < data.length; j++) {
         data[j] = Math.sin(j * 0.7 + i) * 0.4
+      }
     })
     const path = join(scratch, "round-trip.json")
     saveCheckpoint(path, meta(120), saved.parameters())
@@ -85,12 +65,12 @@ describe("checkpoints", () => {
     const loaded = new GraphNCA(8, 16)
     const padded = loadRule(
       loaded.parameters(),
-      readCheckpoint(path)
+      readCheckpoint(path),
     )
     expect(padded).toBe(0)
     loaded.parameters().forEach((p, i) => {
       expect(Array.from(p.data), `parameter ${i}`).toEqual(
-        Array.from(saved.parameters()[i]!.data)
+        Array.from(saved.parameters()[i]!.data),
       )
     })
   })
@@ -100,7 +80,7 @@ describe("checkpoints", () => {
     saveCheckpoint(
       path,
       meta(7),
-      new GraphNCA(8, 16).parameters()
+      new GraphNCA(8, 16).parameters(),
     )
     const checkpoint = readCheckpoint(path)
     expect(checkpoint.step).toBe(7)
@@ -108,11 +88,11 @@ describe("checkpoints", () => {
     expect(rebuilt.pos.n).toBe(graph.pos.n)
     expect(rebuilt.edges.count).toBe(graph.edges.count)
     expect(Array.from(rebuilt.edges.src)).toEqual(
-      Array.from(graph.edges.src)
+      Array.from(graph.edges.src),
     )
     // and the graph really is the one k-NN would build from those points
     expect(
-      Array.from(knnGraph(rebuilt.pos, 8).src)
+      Array.from(knnGraph(rebuilt.pos, 8).src),
     ).toEqual(Array.from(graph.edges.src))
   })
 
@@ -124,8 +104,9 @@ describe("checkpoints", () => {
     const narrow = new GraphNCA(8, 16)
     narrow.parameters().forEach((p, i) => {
       const data = p.data as Float32Array
-      for (let j = 0; j < data.length; j++)
+      for (let j = 0; j < data.length; j++) {
         data[j] = Math.cos(j * 0.3 + i) * 0.3
+      }
     })
     const path = join(scratch, "narrow.json")
     saveCheckpoint(path, meta(1), narrow.parameters())
@@ -135,7 +116,7 @@ describe("checkpoints", () => {
     const first = wide.parameters()[0]!
     const grown = Tensor.zeros([
       first.shape[0]! + 3,
-      first.shape[1]!
+      first.shape[1]!,
     ]) as AnyTensor
     const params = [grown, ...wide.parameters().slice(1)]
     const padded = loadRule(params, readCheckpoint(path))
@@ -143,11 +124,13 @@ describe("checkpoints", () => {
 
     const saved = narrow.parameters()[0]!.data
     const loaded = grown.data
-    for (let i = 0; i < saved.length; i++)
+    for (let i = 0; i < saved.length; i++) {
       expect(loaded[i]).toBe(saved[i])
+    }
     // the padding really is zero
-    for (let i = saved.length; i < loaded.length; i++)
+    for (let i = saved.length; i < loaded.length; i++) {
       expect(loaded[i]).toBe(0)
+    }
   })
 
   it("rejects a checkpoint from a different model", () => {
@@ -155,12 +138,12 @@ describe("checkpoints", () => {
     saveCheckpoint(
       path,
       meta(1),
-      new GraphNCA(8, 16).parameters()
+      new GraphNCA(8, 16).parameters(),
     )
     expect(() =>
       loadRule(
         new GraphNCA(16, 16).parameters(),
-        readCheckpoint(path)
+        readCheckpoint(path),
       )
     ).toThrow(/model wants/)
   })
@@ -173,12 +156,12 @@ describe("rendering", () => {
       graph.pos.data,
       2,
       [visible(target, nodes, 4)],
-      { nodes, labels: ["target"] }
+      { nodes, labels: ["target"] },
     )
     const circles = svg.match(/<circle/g)?.length ?? 0
     const live = Array.from(
       { length: nodes },
-      (_, i) => target[i * 4 + 3]!
+      (_, i) => target[i * 4 + 3]!,
     ).filter(a => a >= 0.02).length
     expect(circles).toBe(live)
     expect(live).toBeGreaterThan(0)
@@ -195,11 +178,11 @@ describe("rendering", () => {
       [frame, frame, frame],
       {
         size: 100,
-        nodes
-      }
+        nodes,
+      },
     )
     // three panels of 100 with two 12px gaps
-    expect(svg).toContain('width="324"')
+    expect(svg).toContain("width=\"324\"")
   })
 
   it("survives a rolled-out state with values outside [0, 1]", () => {
@@ -215,7 +198,7 @@ describe("rendering", () => {
       graph.pos.data,
       2,
       [visible(x.data as Float32Array, nodes, 8)],
-      { nodes }
+      { nodes },
     )
     expect(svg).not.toContain("NaN")
     expect(svg).toMatch(/fill="rgb\(255,255,255\)"/)
@@ -226,8 +209,7 @@ describe("rendering", () => {
 // The .npz reader has to handle ZIP64 (numpy writes it) and the values have
 // to match the reference exactly, so the fixture records what Python
 // produced for the same file.
-const CLOUD_DIR =
-  "../graph-cellular-automata/data/pointclouds"
+const CLOUD_DIR = "../graph-cellular-automata/data/pointclouds"
 const bunnyPath = `${CLOUD_DIR}/bunny.npz`
 const haveBunny = existsSync(bunnyPath)
 
@@ -241,12 +223,8 @@ describe.skipIf(!haveBunny)("point clouds", () => {
     // From gnca.pointclouds.load_cloud("bunny") in the reference repo.
     const firstPos = [0.114559, 0.579978, 0.507694]
     const firstRgba = [0.584566, 0.031965, 0, 1]
-    firstPos.forEach((v, i) =>
-      expect(cloud.pos.data[i]).toBeCloseTo(v, 6)
-    )
-    firstRgba.forEach((v, i) =>
-      expect(cloud.target[i]).toBeCloseTo(v, 6)
-    )
+    firstPos.forEach((v, i) => expect(cloud.pos.data[i]).toBeCloseTo(v, 6))
+    firstRgba.forEach((v, i) => expect(cloud.target[i]).toBeCloseTo(v, 6))
 
     // The longest axis fills [0.08, 0.92]; every node is on the surface,
     // so alpha is 1 everywhere rather than a fraction of the graph.
@@ -259,8 +237,9 @@ describe.skipIf(!haveBunny)("point clouds", () => {
     expect(lo).toBeCloseTo(0.08, 4)
     expect(hi).toBeCloseTo(0.92, 4)
     let alpha = 0
-    for (let i = 0; i < cloud.pos.n; i++)
+    for (let i = 0; i < cloud.pos.n; i++) {
       alpha += cloud.target[i * 4 + 3]!
+    }
     expect(alpha).toBe(cloud.pos.n)
   })
 
@@ -281,7 +260,7 @@ describe.skipIf(!haveBunny)("point clouds", () => {
       "armadillo",
       "bunny",
       "spot",
-      "teapot"
+      "teapot",
     ])
   })
 })

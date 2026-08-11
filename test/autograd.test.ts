@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { Tensor, tensor, noGrad } from "../src/tensor.ts"
+import { noGrad, Tensor, tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -8,12 +8,12 @@ function gradCheck(
   values: number[][],
   shapes: number[][],
   eps = 1e-4,
-  tol = 1e-2
+  tol = 1e-2,
 ): void {
   const make = () =>
     values.map((v, i) => {
       const t = Tensor.zeros(shapes[i]! as [number]).to(
-        "float64"
+        "float64",
       ) as AnyTensor
       ;(t.data as Float64Array).set(v)
       return t.requires_grad()
@@ -35,13 +35,13 @@ function gradCheck(
           .item(),
         f(...minus)
           .sum()
-          .item()
+          .item(),
       ])
       const numeric = (up! - down!) / (2 * eps)
       const analytic = inputs[i]!.grad!.data[j]!
       expect(
         Math.abs(numeric - analytic),
-        `input ${i} elem ${j}: numeric ${numeric} vs autograd ${analytic}`
+        `input ${i} elem ${j}: numeric ${numeric} vs autograd ${analytic}`,
       ).toBeLessThan(tol)
     }
   })
@@ -68,13 +68,13 @@ describe("autograd", () => {
   it("broadcast ops reduce gradients correctly", () => {
     const p = tensor([
       [1, 2],
-      [3, 4]
+      [3, 4],
     ]).requires_grad()
     const q = tensor([10, 20]).requires_grad()
     p.mul(q).sum().backward()
     expect(p.grad!.toArray()).toEqual([
       [10, 20],
-      [10, 20]
+      [10, 20],
     ])
     expect(q.grad!.toArray()).toEqual([4, 6])
   })
@@ -101,12 +101,12 @@ describe("autograd", () => {
       (a, b) => a.matmul(b),
       [
         [1, 2, 3, 4, 5, 6],
-        [0.5, -1, 2, 1.5, 0, 1]
+        [0.5, -1, 2, 1.5, 0, 1],
       ],
       [
         [2, 3],
-        [3, 2]
-      ]
+        [3, 2],
+      ],
     )
   })
 
@@ -115,12 +115,12 @@ describe("autograd", () => {
       (a, b) => a.matmul(b),
       [
         Array.from({ length: 12 }, (_, i) => i * 0.3 - 2),
-        [0.5, -1, 2, 1.5]
+        [0.5, -1, 2, 1.5],
       ],
       [
         [3, 2, 2],
-        [2, 2]
-      ]
+        [2, 2],
+      ],
     )
   })
 
@@ -129,9 +129,9 @@ describe("autograd", () => {
       (a, b) => a.div(b).exp().add(a.log()).add(a.sqrt()),
       [
         [1, 2, 3],
-        [4, 5, 6]
+        [4, 5, 6],
       ],
-      [[3], [3]]
+      [[3], [3]],
     )
   })
 
@@ -144,7 +144,7 @@ describe("autograd", () => {
           .add(a.tanh())
           .add(a.leakyRelu(0.2)),
       [[-2, -0.5, 0.5, 2]],
-      [[4]]
+      [[4]],
     )
   })
 
@@ -152,12 +152,12 @@ describe("autograd", () => {
     gradCheck(
       a => a.view([2, 2]).softmax(1).pow(2),
       [[1, 2, 3, 4]],
-      [[4]]
+      [[4]],
     )
     gradCheck(
       a => a.view([2, 2]).logSoftmax(1).mul(0.5),
       [[1, 2, 3, 4]],
-      [[4]]
+      [[4]],
     )
   })
 
@@ -169,29 +169,28 @@ describe("autograd", () => {
           .transpose(0, 1)
           .mul(tensor([[1], [2], [3]]) as any),
       [[1, 2, 3, 4, 5, 6]],
-      [[6]]
+      [[6]],
     )
     gradCheck(
       (a, b) =>
         Tensor.cat(
           a.view([1, 2]) as any,
           b.view([1, 2]) as any,
-          0
+          0,
         ).pow(2),
       [
         [1, 2],
-        [3, 4]
+        [3, 4],
       ],
-      [[2], [2]]
+      [[2], [2]],
     )
     gradCheck(
-      (a, b) =>
-        Tensor.stack([a, b] as any, 1 as any).pow(3),
+      (a, b) => Tensor.stack([a, b] as any, 1 as any).pow(3),
       [
         [1, 2],
-        [3, 4]
+        [3, 4],
       ],
-      [[2], [2]]
+      [[2], [2]],
     )
   })
 
@@ -199,7 +198,7 @@ describe("autograd", () => {
     gradCheck(
       a => a.view([2, 3]).mean(1).pow(2),
       [[1, 2, 3, 4, 5, 6]],
-      [[6]]
+      [[6]],
     )
   })
 })

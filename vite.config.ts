@@ -5,6 +5,6 @@ import tsover from "typescript/plugin/vite"
 export default defineConfig({
   plugins: [tsover()],
   test: {
-    include: ["test/**/*.test.ts"]
-  }
+    include: ["test/**/*.test.ts"],
+  },
 })

@@ -1,20 +1,18 @@
 import { describe, expect, it } from "vitest"
+import { crossEntropy, Linear, Module, mseLoss, ReLU, sequential } from "../src/nn.ts"
+import { Adam, SGD } from "../src/optim.ts"
 import { Tensor, tensor } from "../src/tensor.ts"
-import {
-  Linear,
-  Module,
-  ReLU,
-  crossEntropy,
-  mseLoss,
-  sequential
-} from "../src/nn.ts"
-import { SGD, Adam } from "../src/optim.ts"
 
 describe("Linear", () => {
   it("computes x @ W + b with typed dims", () => {
     const layer = new Linear(3, 2)
     ;(layer.weight.data as Float32Array).set([
-      1, 0, 0, 1, 1, 1
+      1,
+      0,
+      0,
+      1,
+      1,
+      1,
     ])
     ;(layer.bias!.data as Float32Array).set([10, 20])
     const out = layer.forward(tensor([[1, 2, 3]]))
@@ -44,7 +42,7 @@ describe("sequential", () => {
     const x = tensor([[0.5, -1]])
     const manual = l2.forward(l1.forward(x).relu())
     expect(net.forward(x).toArray()).toEqual(
-      manual.toArray()
+      manual.toArray(),
     )
     expect(net.parameters()).toHaveLength(4)
   })
@@ -53,7 +51,7 @@ describe("sequential", () => {
     expect(() =>
       sequential(
         new Linear(2, 16),
-        new Linear(17, 3) as any
+        new Linear(17, 3) as any,
       )
     ).toThrow(/expects 17 features/)
   })
@@ -63,7 +61,7 @@ describe("losses", () => {
   it("mseLoss", () => {
     const loss = mseLoss(
       tensor([1, 2, 3]),
-      tensor([2, 2, 2])
+      tensor([2, 2, 2]),
     )
     expect(loss.item()).toBeCloseTo(2 / 3)
   })
@@ -71,7 +69,7 @@ describe("losses", () => {
   it("crossEntropy matches manual computation", () => {
     const logits = tensor([
       [Math.log(1), Math.log(3)],
-      [Math.log(4), Math.log(4)]
+      [Math.log(4), Math.log(4)],
     ])
     const loss = crossEntropy(logits, [1, 0])
     const expected = -(Math.log(3 / 4) + Math.log(0.5)) / 2
@@ -79,9 +77,7 @@ describe("losses", () => {
   })
 
   it("crossEntropy validates targets", () => {
-    expect(() =>
-      crossEntropy(tensor([[1, 2]]), [5])
-    ).toThrow(/out of range/)
+    expect(() => crossEntropy(tensor([[1, 2]]), [5])).toThrow(/out of range/)
   })
 })
 
@@ -113,7 +109,7 @@ describe("training", () => {
       const cx = cls === 0 ? -1 : 1
       xs.push([
         cx + Math.sin(i) * 0.1,
-        cx + Math.cos(i) * 0.1
+        cx + Math.cos(i) * 0.1,
       ])
       ys.push(cls)
     }

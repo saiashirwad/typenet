@@ -5,20 +5,13 @@
 // lazy eval loop (advances the seed per pass) need to drive it, and an
 // imported `let` binding cannot be reassigned from outside.
 
-import {
-  arrayCtor,
-  type BinaryOp,
-  type DType,
-  type RandomKind,
-  type TypedArray,
-  type UnaryOp
-} from "./storage.ts"
+import { arrayCtor, type BinaryOp, type DType, type RandomKind, type TypedArray, type UnaryOp } from "./storage.ts"
 
 function applyBinary(
   op: BinaryOp,
   x: number,
   y: number,
-  parameter: number
+  parameter: number,
 ): number {
   switch (op) {
     case "add":
@@ -63,7 +56,7 @@ function applyBinary(
 function applyUnary(
   op: UnaryOp,
   x: number,
-  parameter: number
+  parameter: number,
 ): number {
   switch (op) {
     case "pow":
@@ -117,15 +110,15 @@ function hash32(x: number): number {
 function unitFloat(
   seed: number,
   stream: number,
-  i: number
+  i: number,
 ) {
   return (
     (hash32(
-      (hash32(seed ^ Math.imul(stream, 0x9e3779b9)) ^ i) >>>
-        0
-    ) >>>
-      8) *
-    2 ** -24
+      (hash32(seed ^ Math.imul(stream, 0x9e3779b9)) ^ i)
+        >>> 0,
+    )
+      >>> 8)
+    * 2 ** -24
   )
 }
 
@@ -167,34 +160,24 @@ function randomData(
   n: number,
   stream: number,
   seed: number,
-  dtype: DType
+  dtype: DType,
 ): TypedArray {
   const out = new (arrayCtor(dtype))(n)
-  if (kind === "uniform")
-    for (let i = 0; i < n; i++)
+  if (kind === "uniform") {
+    for (let i = 0; i < n; i++) {
       out[i] = unitFloat(seed, stream, i)
-  // Box-Muller per element from two independent draws: stateless, so
+    }
+  } // Box-Muller per element from two independent draws: stateless, so
   // element i does not depend on how many were drawn before it.
-  else
+  else {
     for (let i = 0; i < n; i++) {
       const u = 1 - unitFloat(seed, stream, 2 * i)
       const v = unitFloat(seed, stream, 2 * i + 1)
-      out[i] =
-        Math.sqrt(-2 * Math.log(u)) *
-        Math.cos(2 * Math.PI * v)
+      out[i] = Math.sqrt(-2 * Math.log(u))
+        * Math.cos(2 * Math.PI * v)
     }
+  }
   return out
 }
 
-export {
-  applyBinary,
-  applyUnary,
-  hash32,
-  unitFloat,
-  nextSeed,
-  nextStream,
-  getActiveSeed,
-  setActiveSeed,
-  reseed,
-  randomData
-}
+export { applyBinary, applyUnary, getActiveSeed, hash32, nextSeed, nextStream, randomData, reseed, setActiveSeed, unitFloat }

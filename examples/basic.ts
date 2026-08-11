@@ -11,4 +11,4 @@ const l = ((s - 1) ** 2).mean()
 
 const m = randn([2, 1]) + randn([1, 3])
 
-// a.matmul(randn([4, 4]));
+a.matmul(randn([3, 9]))

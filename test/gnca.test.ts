@@ -11,30 +11,10 @@
 
 import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Adam,
-  Tensor,
-  clipGradNorm,
-  compile,
-  configure,
-  disableNative,
-  isNativeAvailable,
-  normal,
-  useNative
-} from "../index.ts"
-import {
-  batchEdges,
-  knnGraph,
-  nearestNode,
-  randomGeometricGraph
-} from "../examples/gnca/graphs.ts"
-import {
-  GraphNCA,
-  aliveMask,
-  graphTensors,
-  seedState
-} from "../examples/gnca/model.ts"
+import { batchEdges, knnGraph, nearestNode, randomGeometricGraph } from "../examples/gnca/graphs.ts"
+import { aliveMask, GraphNCA, graphTensors, seedState } from "../examples/gnca/model.ts"
 import { TARGETS } from "../examples/gnca/targets.ts"
+import { Adam, clipGradNorm, compile, configure, disableNative, isNativeAvailable, normal, Tensor, useNative } from "../index.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -42,10 +22,10 @@ const reference = JSON.parse(
   readFileSync(
     new URL(
       "./fixtures/gnca-reference.json",
-      import.meta.url
+      import.meta.url,
     ),
-    "utf8"
-  )
+    "utf8",
+  ),
 ) as {
   channels: number
   hidden: number
@@ -71,7 +51,7 @@ const PARAM_NAMES = [
   "net.0.bias",
   "net.2.weight",
   "gate.weight",
-  "gate.bias"
+  "gate.bias",
 ]
 
 afterEach(() => {
@@ -81,7 +61,7 @@ afterEach(() => {
 
 function tensorFrom(
   values: ArrayLike<number>,
-  shape: number[]
+  shape: number[],
 ): AnyTensor {
   const t = Tensor.zeros(shape) as AnyTensor
   ;(t.data as Float32Array).set(values)
@@ -92,10 +72,10 @@ function expectClose(
   actual: ArrayLike<number>,
   expected: ArrayLike<number>,
   tolerance: number,
-  label: string
+  label: string,
 ): void {
   expect(actual.length, `${label}: length`).toBe(
-    expected.length
+    expected.length,
   )
   let worst = 0
   let at = -1
@@ -109,7 +89,7 @@ function expectClose(
   }
   expect(
     worst,
-    `${label}: worst relative diff at ${at} (${actual[at]} vs ${expected[at]})`
+    `${label}: worst relative diff at ${at} (${actual[at]} vs ${expected[at]})`,
   ).toBeLessThan(tolerance)
 }
 
@@ -121,7 +101,7 @@ const B = reference.batch
 const pos = {
   data: Float32Array.from(reference.pos),
   n: N,
-  dim: 2
+  dim: 2,
 }
 const edges = knnGraph(pos, reference.k)
 
@@ -136,7 +116,7 @@ function buildModel(): {
   params.forEach((p, i) => {
     const values = reference.weights[PARAM_NAMES[i]!]!
     expect(p.numel, `${PARAM_NAMES[i]} element count`).toBe(
-      values.length
+      values.length,
     )
     ;(p.data as Float32Array).set(values)
   })
@@ -147,21 +127,22 @@ function buildModel(): {
 function rollout(
   model: GraphNCA<number, number>,
   x0: AnyTensor,
-  graph: ReturnType<typeof graphTensors>
+  graph: ReturnType<typeof graphTensors>,
 ): { state: AnyTensor; loss: AnyTensor; mse: AnyTensor } {
   const target = tensorFrom(reference.target, [B * N, 4])
   let state = x0
-  for (let i = 0; i < reference.steps; i++)
+  for (let i = 0; i < reference.steps; i++) {
     state = model
       .forward(state, graph, 1)
       .mul(aliveMask(state, graph))
+  }
   const mse = state
     .narrow(1, 0, 4)
     .sub(target)
     .pow(2)
     .mean() as AnyTensor
   const loss = mse.add(
-    state.sub(state.clamp(-1, 1)).abs().mean()
+    state.sub(state.clamp(-1, 1)).abs().mean(),
   ) as AnyTensor
   return { state, loss, mse }
 }
@@ -170,10 +151,10 @@ describe("graph cellular automaton, against PyTorch", () => {
   it("rebuilds the same k-NN graph from the same positions", () => {
     expect(edges.count).toBe(reference.edges.src.length)
     expect(Array.from(edges.src)).toEqual(
-      reference.edges.src
+      reference.edges.src,
     )
     expect(Array.from(edges.dst)).toEqual(
-      reference.edges.dst
+      reference.edges.dst,
     )
   })
 
@@ -184,7 +165,7 @@ describe("graph cellular automaton, against PyTorch", () => {
       [reference.hidden],
       [reference.hidden, C],
       [3 * C, C],
-      [C]
+      [C],
     ])
   })
 
@@ -193,9 +174,9 @@ describe("graph cellular automaton, against PyTorch", () => {
     {
       label: "lazy interpreter",
       lazy: true,
-      native: false
+      native: false,
     },
-    { label: "native", lazy: true, native: true }
+    { label: "native", lazy: true, native: true },
   ])(
     "matches the forward rollout and every gradient ($label)",
     ({ lazy, native }) => {
@@ -203,11 +184,11 @@ describe("graph cellular automaton, against PyTorch", () => {
       const { model, params } = buildModel()
       const graph = graphTensors(
         batchEdges(edges, B, N),
-        B * N
+        B * N,
       )
       const x0 = tensorFrom(reference.x0, [
         B * N,
-        C
+        C,
       ]).requires_grad() as AnyTensor
       if (native) useNative()
       configure({ lazy })
@@ -221,25 +202,25 @@ describe("graph cellular automaton, against PyTorch", () => {
         [mse.item()],
         [reference.mse],
         1e-5,
-        "mse"
+        "mse",
       )
       expectClose(
         [loss.item()],
         [reference.loss],
         1e-5,
-        "loss"
+        "loss",
       )
       expectClose(
         state.data,
         reference.state,
         3e-5,
-        "state"
+        "state",
       )
       expectClose(
         x0.grad!.data,
         reference.xGrad,
         3e-5,
-        "grad of x0"
+        "grad of x0",
       )
       params.forEach((p, i) => {
         const name = PARAM_NAMES[i]!
@@ -248,10 +229,10 @@ describe("graph cellular automaton, against PyTorch", () => {
           p.grad!.data,
           reference.gradients[name]!,
           3e-5,
-          `grad of ${name}`
+          `grad of ${name}`,
         )
       })
-    }
+    },
   )
 
   it("matches through a compiled training step", () => {
@@ -260,33 +241,33 @@ describe("graph cellular automaton, against PyTorch", () => {
     const { model, params } = buildModel()
     const graph = graphTensors(
       batchEdges(edges, B, N),
-      B * N
+      B * N,
     )
     if (isNativeAvailable()) useNative()
     const step = compile((input: AnyTensor) => {
       const { loss } = rollout(
         model,
         input.requires_grad() as AnyTensor,
-        graph
+        graph,
       )
       loss.backward()
       return loss
     })
     const value = step(
-      tensorFrom(reference.x0, [B * N, C])
+      tensorFrom(reference.x0, [B * N, C]),
     ).item()
     expectClose(
       [value],
       [reference.loss],
       1e-5,
-      "compiled loss"
+      "compiled loss",
     )
     params.forEach((p, i) =>
       expectClose(
         p.grad!.data,
         reference.gradients[PARAM_NAMES[i]!]!,
         3e-5,
-        `compiled grad of ${PARAM_NAMES[i]}`
+        `compiled grad of ${PARAM_NAMES[i]}`,
       )
     )
   })
@@ -302,21 +283,22 @@ describe("graph cellular automaton, against PyTorch", () => {
     const built = randomGeometricGraph({
       nodes,
       dim: 2,
-      seed: 3
+      seed: 3,
     })
     const targetData = TARGETS.heart!.build(built.pos)
     const center = nearestNode(
       built.pos,
-      TARGETS.heart!.seedAt
+      TARGETS.heart!.seedAt,
     )
     const graph = graphTensors(
       batchEdges(built.edges, batch, nodes),
-      batch * nodes
+      batch * nodes,
     )
     const rows = batch * nodes
     const tiled = new Float32Array(rows * 4)
-    for (let b = 0; b < batch; b++)
+    for (let b = 0; b < batch; b++) {
       tiled.set(targetData, b * nodes * 4)
+    }
     const target = tensorFrom(tiled, [rows, 4])
 
     configure({ seed: 5 })
@@ -326,12 +308,13 @@ describe("graph cellular automaton, against PyTorch", () => {
     const optimizer = new Adam(params, { lr: 3e-3 })
     const step = compile((input: AnyTensor) => {
       let x = input.add(
-        (normal([rows, channels]) as AnyTensor).mul(0.02)
+        (normal([rows, channels]) as AnyTensor).mul(0.02),
       )
-      for (let i = 0; i < steps; i++)
+      for (let i = 0; i < steps; i++) {
         x = model
           .forward(x, graph, 0.5)
           .mul(aliveMask(x, graph))
+      }
       const loss = x
         .narrow(1, 0, 4)
         .sub(target)
@@ -347,20 +330,21 @@ describe("graph cellular automaton, against PyTorch", () => {
 
     const seed = tensorFrom(
       seedState(batch, nodes, channels, center),
-      [rows, channels]
+      [rows, channels],
     )
     const losses: number[] = []
-    for (let i = 0; i < 40; i++)
+    for (let i = 0; i < 40; i++) {
       losses.push(step(seed).item())
+    }
     const first = losses[0]!
     const last = losses[losses.length - 1]!
     expect(Number.isFinite(last)).toBe(true)
     expect(last, `${first} -> ${last}`).toBeLessThan(
-      first * 0.7
+      first * 0.7,
     )
     // and the parameters actually moved
     expect(
-      Array.from(params[2]!.data).some(v => v !== 0)
+      Array.from(params[2]!.data).some(v => v !== 0),
     ).toBe(true)
   })
 
@@ -370,12 +354,10 @@ describe("graph cellular automaton, against PyTorch", () => {
     const { model } = buildModel()
     const graph = graphTensors(
       batchEdges(edges, B, N),
-      B * N
+      B * N,
     )
     if (isNativeAvailable()) useNative()
-    const step = compile((input: AnyTensor) =>
-      model.forward(input, graph, 0.5)
-    )
+    const step = compile((input: AnyTensor) => model.forward(input, graph, 0.5))
     const x0 = tensorFrom(reference.x0, [B * N, C])
     const first = Array.from(step(x0).data)
     const second = Array.from(step(x0).data)

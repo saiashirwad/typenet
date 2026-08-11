@@ -1,10 +1,4 @@
-import {
-  Tensor,
-  _activeUpdateTrace,
-  forceMany,
-  isLazy,
-  noGrad
-} from "./tensor.ts"
+import { _activeUpdateTrace, forceMany, isLazy, noGrad, Tensor } from "./tensor.ts"
 import type { Tensor as TensorType } from "./tensor.ts"
 
 type AnyTensor = TensorType<any, any>
@@ -21,7 +15,7 @@ type GraphUpdate = { target: AnyTensor; expr: AnyTensor }
 // step see this step's values.
 function finishGraphUpdates(
   updates: GraphUpdate[],
-  grads: AnyTensor[]
+  grads: AnyTensor[],
 ): void {
   const trace = _activeUpdateTrace()
   if (trace) {
@@ -30,10 +24,11 @@ function finishGraphUpdates(
     return
   }
   forceMany(updates.map(u => u.expr))
-  for (const u of updates)
-    (u.target.data as Float32Array).set(
-      u.expr.data as Float32Array
+  for (const u of updates) {
+    ;(u.target.data as Float32Array).set(
+      u.expr.data as Float32Array,
     )
+  }
 }
 
 // The in-graph path covers CPU float32 parameters in lazy mode (or a
@@ -41,8 +36,8 @@ function finishGraphUpdates(
 // keeps the original eager loops.
 function useGraphStep(p: AnyTensor): boolean {
   return (
-    (_activeUpdateTrace() !== null || isLazy()) &&
-    p.dtype === "float32"
+    (_activeUpdateTrace() !== null || isLazy())
+    && p.dtype === "float32"
   )
 }
 
@@ -61,19 +56,21 @@ function useGraphStep(p: AnyTensor): boolean {
  */
 export function clipGradNorm(
   params: AnyTensor[],
-  maxNorm: number
+  maxNorm: number,
 ): number | null {
-  if (!(maxNorm > 0))
+  if (!(maxNorm > 0)) {
     throw new Error(
-      `clipGradNorm: maxNorm must be positive, got ${maxNorm}`
+      `clipGradNorm: maxNorm must be positive, got ${maxNorm}`,
     )
+  }
   const withGrads = params.filter(p => p.grad)
   if (withGrads.length === 0) return null
-  if (withGrads.every(useGraphStep))
+  if (withGrads.every(useGraphStep)) {
     return noGrad(() => {
       let total = withGrads[0]!.grad!.pow(2).sum()
-      for (const p of withGrads.slice(1))
+      for (const p of withGrads.slice(1)) {
         total = total.add(p.grad!.pow(2).sum())
+      }
       // maxNorm / (norm + 1e-6), never scaling up
       const scale = Tensor.scalar(maxNorm)
         .div(total.sqrt().add(1e-6))
@@ -81,27 +78,33 @@ export function clipGradNorm(
       for (const p of withGrads) p.grad = p.grad!.mul(scale)
       return null
     })
+  }
   let total = 0
-  for (const p of withGrads)
+  for (const p of withGrads) {
     for (const g of p.grad!.data) total += g * g
+  }
   const norm = Math.sqrt(total)
   const scale = Math.min(maxNorm / (norm + 1e-6), 1)
-  if (scale < 1)
+  if (scale < 1) {
     for (const p of withGrads) {
       const data = p.grad!.data
-      for (let i = 0; i < data.length; i++)
+      for (let i = 0; i < data.length; i++) {
         data[i]! *= scale
+      }
     }
+  }
   return norm
 }
 
 export abstract class Optimizer {
   constructor(protected params: AnyTensor[]) {
-    for (const p of params)
-      if (!p.requiresGrad)
+    for (const p of params) {
+      if (!p.requiresGrad) {
         throw new Error(
-          "Optimizer received a tensor without requires_grad"
+          "Optimizer received a tensor without requires_grad",
         )
+      }
+    }
   }
 
   zeroGrad(): void {
@@ -134,10 +137,11 @@ export class SGD extends Optimizer {
   }
 
   step(): void {
-    if (this.momentum > 0 && !this.velocities)
+    if (this.momentum > 0 && !this.velocities) {
       this.velocities = this.params.map(
-        p => new Float64Array(p.numel)
+        p => new Float64Array(p.numel),
       )
+    }
     const updates: GraphUpdate[] = []
     const grads: AnyTensor[] = []
     noGrad(() => {
@@ -149,13 +153,15 @@ export class SGD extends Optimizer {
           // CPU-side loop over `.data`; finishGraphUpdates forces
           // them (or, inside compile(), hands them to the tracer).
           let grad = g as AnyTensor
-          if (this.weightDecay !== 0)
+          if (this.weightDecay !== 0) {
             grad = grad.add(p.mul(this.weightDecay))
+          }
           if (this.momentum > 0) {
-            if (!this.graphVelocities)
+            if (!this.graphVelocities) {
               this.graphVelocities = this.params.map(
-                q => Tensor.zeros(q.shape) as AnyTensor
+                q => Tensor.zeros(q.shape) as AnyTensor,
               )
+            }
             const v = this.graphVelocities[pi]!
             const nextV = v.mul(this.momentum).add(grad)
             updates.push({ target: v, expr: nextV })
@@ -163,7 +169,7 @@ export class SGD extends Optimizer {
           }
           updates.push({
             target: p,
-            expr: p.sub(grad.mul(this.lr))
+            expr: p.sub(grad.mul(this.lr)),
           })
           grads.push(g)
           return
@@ -172,8 +178,9 @@ export class SGD extends Optimizer {
         const gd = g.data
         for (let i = 0; i < data.length; i++) {
           let grad = gd[i]!
-          if (this.weightDecay !== 0)
+          if (this.weightDecay !== 0) {
             grad += this.weightDecay * data[i]!
+          }
           if (this.momentum > 0) {
             const v = this.velocities![pi]!
             v[i] = this.momentum * v[i]! + grad
@@ -183,8 +190,9 @@ export class SGD extends Optimizer {
         }
       })
     })
-    if (updates.length > 0)
+    if (updates.length > 0) {
       finishGraphUpdates(updates, grads)
+    }
   }
 
   dispose(): void {
@@ -220,12 +228,13 @@ export class Adam extends Optimizer {
 
   constructor(
     params: AnyTensor[],
-    options: AdamOptions = {}
+    options: AdamOptions = {},
   ) {
     super(params)
     this.lr = options.lr ?? 0.001
     ;[this.beta1, this.beta2] = options.betas ?? [
-      0.9, 0.999
+      0.9,
+      0.999,
     ]
     this.eps = options.eps ?? 1e-8
     this.weightDecay = options.weightDecay ?? 0
@@ -243,19 +252,18 @@ export class Adam extends Optimizer {
     // beta^t becomes exp(t·ln beta), the only way to raise a constant to
     // a tensor power with the ops available. Built lazily, and only when
     // some parameter actually takes the graph path.
-    let graphBc: { one: AnyTensor; two: AnyTensor } | null =
-      null
+    let graphBc: { one: AnyTensor; two: AnyTensor } | null = null
     const corrections = () => {
       if (graphBc) return graphBc
-      if (!this.graphT)
+      if (!this.graphT) {
         this.graphT = Tensor.zeros([]) as AnyTensor
+      }
       const next = this.graphT.add(1)
       updates.push({ target: this.graphT, expr: next })
-      const correct = (beta: number) =>
-        next.mul(Math.log(beta)).exp().neg().add(1)
+      const correct = (beta: number) => next.mul(Math.log(beta)).exp().neg().add(1)
       graphBc = {
         one: correct(this.beta1),
-        two: correct(this.beta2)
+        two: correct(this.beta2),
       }
       return graphBc
     }
@@ -264,17 +272,20 @@ export class Adam extends Optimizer {
         const g = p.grad
         if (!g) return
         if (useGraphStep(p)) {
-          if (!this.graphM)
+          if (!this.graphM) {
             this.graphM = this.params.map(
-              q => Tensor.zeros(q.shape) as AnyTensor
+              q => Tensor.zeros(q.shape) as AnyTensor,
             )
-          if (!this.graphV)
+          }
+          if (!this.graphV) {
             this.graphV = this.params.map(
-              q => Tensor.zeros(q.shape) as AnyTensor
+              q => Tensor.zeros(q.shape) as AnyTensor,
             )
+          }
           let grad = g as AnyTensor
-          if (this.weightDecay !== 0)
+          if (this.weightDecay !== 0) {
             grad = grad.add(p.mul(this.weightDecay))
+          }
           const m = this.graphM[pi]!
           const v = this.graphV[pi]!
           const nextM = m
@@ -293,8 +304,8 @@ export class Adam extends Optimizer {
             expr: p.sub(
               mHat
                 .mul(this.lr)
-                .div(vHat.sqrt().add(this.eps))
-            )
+                .div(vHat.sqrt().add(this.eps)),
+            ),
           })
           grads.push(g)
           return
@@ -305,22 +316,21 @@ export class Adam extends Optimizer {
         const v = this.v[pi]!
         for (let i = 0; i < data.length; i++) {
           let grad = gd[i]!
-          if (this.weightDecay !== 0)
+          if (this.weightDecay !== 0) {
             grad += this.weightDecay * data[i]!
-          m[i] =
-            this.beta1 * m[i]! + (1 - this.beta1) * grad
-          v[i] =
-            this.beta2 * v[i]! +
-            (1 - this.beta2) * grad * grad
+          }
+          m[i] = this.beta1 * m[i]! + (1 - this.beta1) * grad
+          v[i] = this.beta2 * v[i]!
+            + (1 - this.beta2) * grad * grad
           const mHat = m[i]! / bc1
           const vHat = v[i]! / bc2
-          data[i]! -=
-            (this.lr * mHat) / (Math.sqrt(vHat) + this.eps)
+          data[i]! -= (this.lr * mHat) / (Math.sqrt(vHat) + this.eps)
         }
       })
     })
-    if (updates.length > 0)
+    if (updates.length > 0) {
       finishGraphUpdates(updates, grads)
+    }
   }
 
   dispose(): void {

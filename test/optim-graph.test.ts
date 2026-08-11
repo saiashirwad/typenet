@@ -1,16 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Tensor,
-  compile,
-  configure,
-  tensor
-} from "../src/tensor.ts"
-import { Adam, SGD, clipGradNorm } from "../src/optim.ts"
-import {
-  disableNative,
-  isNativeAvailable,
-  useNative
-} from "../src/backends/native.ts"
+import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
+import { Adam, clipGradNorm, SGD } from "../src/optim.ts"
+import { compile, configure, Tensor, tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -24,14 +15,15 @@ afterEach(() => {
 function expectClose(
   a: AnyTensor,
   b: AnyTensor,
-  tol = 1e-4
+  tol = 1e-4,
 ): void {
   expect(b.shape).toEqual(a.shape)
   const ad = a.data
   const bd = b.data
   expect(bd.length).toBe(ad.length)
-  for (let i = 0; i < ad.length; i++)
+  for (let i = 0; i < ad.length; i++) {
     expect(Math.abs(ad[i]! - bd[i]!)).toBeLessThan(tol)
+  }
 }
 
 // A small fixed-init MLP step (matmul/bias/tanh/sigmoid + mse), run
@@ -41,21 +33,24 @@ function makeNet() {
     [0, 0],
     [0, 1],
     [1, 0],
-    [1, 1]
+    [1, 1],
   ])
   const y = tensor([[0], [1], [1], [0]])
   const w1 = tensor([
     [0.5, -0.5, 0.25, -0.25],
-    [0.1, 0.2, -0.3, 0.4]
+    [0.1, 0.2, -0.3, 0.4],
   ]).requires_grad()
   const b1 = tensor([
-    0.1, -0.1, 0.05, -0.05
+    0.1,
+    -0.1,
+    0.05,
+    -0.05,
   ]).requires_grad()
   const w2 = tensor([
     [0.6],
     [-0.6],
     [0.3],
-    [-0.3]
+    [-0.3],
   ]).requires_grad()
   const b2 = tensor([0.2]).requires_grad()
   const params = [w1, b1, w2, b2] as AnyTensor[]
@@ -82,12 +77,12 @@ describe("optimizer in the lazy graph", () => {
     const eagerOpt = new SGD(eager.params, {
       lr: 0.5,
       momentum: 0.9,
-      weightDecay: 0.01
+      weightDecay: 0.01,
     })
     const lazyOpt = new SGD(lazy.params, {
       lr: 0.5,
       momentum: 0.9,
-      weightDecay: 0.01
+      weightDecay: 0.01,
     })
     for (let step = 0; step < 30; step++) {
       configure({ lazy: false })
@@ -103,7 +98,7 @@ describe("optimizer in the lazy graph", () => {
       configure({ lazy: false })
       expect(lazyLoss.item()).toBeCloseTo(
         eagerLoss.item(),
-        4
+        4,
       )
       eager.params.forEach((p, i) => {
         expectClose(p, lazy.params[i]!)
@@ -131,11 +126,9 @@ describe("optimizer in the lazy graph", () => {
       configure({ lazy: false })
       expect(lazyLoss.item()).toBeCloseTo(
         eagerLoss.item(),
-        4
+        4,
       )
-      eager.params.forEach((p, i) =>
-        expectClose(p, lazy.params[i]!)
-      )
+      eager.params.forEach((p, i) => expectClose(p, lazy.params[i]!))
     }
   })
 
@@ -143,7 +136,7 @@ describe("optimizer in the lazy graph", () => {
     const net = makeNet()
     const opt = new SGD(net.params, {
       lr: 0.5,
-      momentum: 0.9
+      momentum: 0.9,
     })
     const loss = net.loss()
     opt.zeroGrad()
@@ -153,7 +146,7 @@ describe("optimizer in the lazy graph", () => {
     const g = net.params[0]!.grad!.data
     expect(net.params[0]!.data[0]!).toBeCloseTo(
       0.5 - 0.5 * g[0]!,
-      6
+      6,
     )
   })
 })
@@ -164,11 +157,11 @@ describe("compiled training step (forward + backward + optimizer)", () => {
     const compiled = makeNet()
     const refOpt = new SGD(reference.params, {
       lr: 0.5,
-      momentum: 0.9
+      momentum: 0.9,
     })
     const opt = new SGD(compiled.params, {
       lr: 0.5,
-      momentum: 0.9
+      momentum: 0.9,
     })
     const step = compile((x: AnyTensor, y: AnyTensor) => {
       const hidden = x
@@ -201,22 +194,18 @@ describe("compiled training step (forward + backward + optimizer)", () => {
   }
 
   it("matches the eager loss trajectory and final params", () => {
-    const { reference, compiled, refLosses, losses } =
-      compiledRun(50)
+    const { reference, compiled, refLosses, losses } = compiledRun(50)
     // Loss decreases and tracks eager closely at every step.
     expect(losses[0]!).toBeCloseTo(refLosses[0]!, 5)
-    for (let i = 0; i < losses.length; i++)
+    for (let i = 0; i < losses.length; i++) {
       expect(losses[i]!).toBeCloseTo(refLosses[i]!, 3)
+    }
     expect(losses[losses.length - 1]!).toBeLessThan(
-      losses[0]!
+      losses[0]!,
     )
-    reference.params.forEach((p, i) =>
-      expectClose(p, compiled.params[i]!, 1e-3)
-    )
+    reference.params.forEach((p, i) => expectClose(p, compiled.params[i]!, 1e-3))
     // Grads after a compiled step see this step's values.
-    reference.params.forEach((p, i) =>
-      expectClose(p.grad!, compiled.params[i]!.grad!, 1e-3)
-    )
+    reference.params.forEach((p, i) => expectClose(p.grad!, compiled.params[i]!.grad!, 1e-3))
   })
 
   it("learns XOR end to end as one compiled graph", () => {
@@ -259,16 +248,14 @@ describe("compiled training step (forward + backward + optimizer)", () => {
       const loss = step(compiled.x, compiled.y).item()
       expect(loss, `step ${i + 1}`).toBeCloseTo(
         refLoss.item(),
-        4
+        4,
       )
       losses.push(loss)
     }
     configure({ lazy: false })
-    reference.params.forEach((p, i) =>
-      expectClose(p, compiled.params[i]!, 1e-4)
-    )
+    reference.params.forEach((p, i) => expectClose(p, compiled.params[i]!, 1e-4))
     expect(losses[losses.length - 1]!).toBeLessThan(
-      losses[0]!
+      losses[0]!,
     )
   })
 
@@ -305,13 +292,11 @@ describe("compiled training step (forward + backward + optimizer)", () => {
       expect(norm).toBeGreaterThan(1) // clipping really engaged
       refOpt.step()
       expect(
-        step(compiled.x, compiled.y).item()
+        step(compiled.x, compiled.y).item(),
       ).toBeCloseTo(refLoss.item(), 2)
     }
     configure({ lazy: false })
-    reference.params.forEach((p, i) =>
-      expectClose(p, compiled.params[i]!, 1e-3)
-    )
+    reference.params.forEach((p, i) => expectClose(p, compiled.params[i]!, 1e-3))
   })
 })
 
@@ -351,7 +336,9 @@ describe("clipGradNorm", () => {
   it("matches eager in lazy mode", () => {
     const build = () => {
       const a = Tensor.of([
-        1, 2, 3
+        1,
+        2,
+        3,
       ]).requires_grad() as AnyTensor
       a.pow(3).sum().mul(10).backward()
       clipGradNorm([a], 2)
@@ -369,7 +356,7 @@ describe("clipGradNorm", () => {
     const a = Tensor.of([1]).requires_grad() as AnyTensor
     a.mul(1).sum().backward()
     expect(() => clipGradNorm([a], 0)).toThrow(
-      /maxNorm must be positive/
+      /maxNorm must be positive/,
     )
   })
 })
@@ -383,11 +370,11 @@ describe.skipIf(!available)(
       const compiled = makeNet()
       const refOpt = new SGD(reference.params, {
         lr: 0.5,
-        momentum: 0.9
+        momentum: 0.9,
       })
       const opt = new SGD(compiled.params, {
         lr: 0.5,
-        momentum: 0.9
+        momentum: 0.9,
       })
       const step = compile((x: AnyTensor, y: AnyTensor) => {
         const h = x
@@ -417,14 +404,12 @@ describe.skipIf(!available)(
       }
       disableNative()
       configure({ lazy: false })
-      reference.params.forEach((p, i) =>
-        expectClose(p, compiled.params[i]!, 1e-3)
-      )
+      reference.params.forEach((p, i) => expectClose(p, compiled.params[i]!, 1e-3))
       reference.params.forEach((p, i) =>
         expectClose(
           p.grad!,
           compiled.params[i]!.grad!,
-          1e-3
+          1e-3,
         )
       )
     })
@@ -433,7 +418,7 @@ describe.skipIf(!available)(
       const reference = makeNet()
       const compiled = makeNet()
       const refOpt = new Adam(reference.params, {
-        lr: 0.05
+        lr: 0.05,
       })
       const opt = new Adam(compiled.params, { lr: 0.05 })
       const step = compile((x: AnyTensor, y: AnyTensor) => {
@@ -463,14 +448,12 @@ describe.skipIf(!available)(
         useNative()
         expect(
           step(compiled.x, compiled.y).item(),
-          `step ${i + 1}`
+          `step ${i + 1}`,
         ).toBeCloseTo(refLoss.item(), 4)
       }
       disableNative()
       configure({ lazy: false })
-      reference.params.forEach((p, i) =>
-        expectClose(p, compiled.params[i]!, 1e-4)
-      )
+      reference.params.forEach((p, i) => expectClose(p, compiled.params[i]!, 1e-4))
     })
-  }
+  },
 )

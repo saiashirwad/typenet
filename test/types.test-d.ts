@@ -1,32 +1,24 @@
+import { Linear } from "../src/nn.ts"
 import type {
   Broadcast,
-  MatMul,
-  ResolveView,
-  Transpose,
-  Permute,
-  Squeeze,
-  Unsqueeze,
-  ReduceDim,
-  Stack,
-  Cat,
   CanBroadcast,
+  Cat,
+  InferShape,
+  MatMul,
   NormalizeDim,
-  InferShape
+  Permute,
+  ReduceDim,
+  ResolveView,
+  Squeeze,
+  Stack,
+  Transpose,
+  Unsqueeze,
 } from "../src/shape.ts"
-import {
-  tensor,
-  zeros,
-  ones,
-  randn,
-  Tensor
-} from "../src/tensor.ts"
-import { Linear } from "../src/nn.ts"
+import { ones, randn, Tensor, tensor, zeros } from "../src/tensor.ts"
 
-type Equal<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends (
-    <T>() => T extends B ? 1 : 2
-  ) ?
-    true
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
+  <T>() => T extends B ? 1 : 2
+) ? true
   : false
 type Expect<T extends true> = T
 
@@ -79,7 +71,7 @@ type _i1 = Expect<
 function _tensors() {
   const a = tensor([
     [1, 2, 3],
-    [4, 5, 6]
+    [4, 5, 6],
   ])
   type _1 = Expect<Equal<typeof a.shape, [2, 3]>>
 
@@ -193,7 +185,7 @@ function _sequential() {
     new ReLU(),
     new Linear(16, 16),
     new ReLU(),
-    new Linear(16, 3)
+    new Linear(16, 3),
   )
   type _1 = Expect<Equal<typeof net, Sequential<2, 3>>>
 
@@ -214,7 +206,7 @@ function _sequential() {
 function _negative() {
   const a = tensor([
     [1, 2, 3],
-    [4, 5, 6]
+    [4, 5, 6],
   ])
   const b = zeros([3, 4])
 
@@ -243,10 +235,10 @@ function _negative() {
 
 function _genericDims<
   N extends number,
-  P extends TensorParams
+  P extends TensorParams,
 >(
   h: Tensor<[N, 24], P>,
-  adj: Tensor<[N, N], any>
+  adj: Tensor<[N, N], any>,
 ): Tensor<[N, 16], P> {
   const w = zeros([24, 8])
   const wh = h.matmul(w)
@@ -275,7 +267,7 @@ function _genericDims<
 
 function _genericOuter<
   N extends number,
-  P extends TensorParams
+  P extends TensorParams,
 >(col: Tensor<[N, 1], P>, row: Tensor<[1, N], any>) {
   // structural overloads resolve the cross-broadcast to [N, N]
   const sum = col.add(row)
@@ -290,7 +282,7 @@ function _genericOuter<
 function _genericBatched<
   B extends number,
   N extends number,
-  P extends TensorParams
+  P extends TensorParams,
 >(q: Tensor<[B, N, 8], P>, w: Tensor<[8, 16], any>) {
   const out = q.matmul(w)
   type _1 = Expect<Equal<typeof out.shape, [B, N, 16]>>
@@ -310,7 +302,7 @@ function _genericBatched<
 
 function _genericNegative<
   N extends number,
-  P extends TensorParams
+  P extends TensorParams,
 >(h: Tensor<[N, 24], P>, q: Tensor<[2, N, 16, 8], P>) {
   // @ts-expect-error inner dims 24 and 7 disagree
   h.matmul(zeros([7, 8]))
@@ -327,7 +319,7 @@ function _genericNegative<
   return h
 }
 
-import { mseLoss, crossEntropy } from "../src/nn.ts"
+import { crossEntropy, mseLoss } from "../src/nn.ts"
 
 // NoInfer pins each repeated inference site to its first occurrence, so a
 // mismatched later argument is checked instead of re-inferring.
@@ -335,14 +327,14 @@ import { mseLoss, crossEntropy } from "../src/nn.ts"
 function _noInfer<P extends TensorParams>(
   pred: Tensor<[2, 3], P>,
   logits: Tensor<[4, 3], P>,
-  badTargets: Tensor<[5], any>
+  badTargets: Tensor<[5], any>,
 ) {
   const ok = mseLoss(
     pred,
     tensor([
       [1, 2, 3],
-      [4, 5, 6]
-    ])
+      [4, 5, 6],
+    ]),
   )
   type _1 = Expect<Equal<typeof ok.shape, []>>
 
@@ -360,7 +352,7 @@ function _noInfer<P extends TensorParams>(
 
 function _gatherScatter<
   N extends number,
-  P extends TensorParams
+  P extends TensorParams,
 >(x: Tensor<[N, 16], P>, nodes: Tensor<[1024, 16], P>) {
   const src = zeros([4096])
   const gathered = nodes.indexSelect(src)
@@ -410,12 +402,7 @@ function _compare(a: Tensor<[2, 3]>, b: Tensor<[3]>) {
 // real work: the perception width and the gate's blocks are derived from
 // the channel count, and the state comes back the shape it went in.
 
-import {
-  GraphNCA,
-  aliveMask,
-  type GraphTensors,
-  type Percept
-} from "../examples/gnca/model.ts"
+import { aliveMask, GraphNCA, type GraphTensors, type Percept } from "../examples/gnca/model.ts"
 
 function _gnca(
   nodes: Tensor<[1024, 16]>,
@@ -423,7 +410,7 @@ function _gnca(
   graph: GraphTensors<1024, 9574>,
   batchedGraph: GraphTensors<8192, 76592>,
   wrongChannels: Tensor<[1024, 8]>,
-  wrongNodes: Tensor<[512, 16]>
+  wrongNodes: Tensor<[512, 16]>,
 ) {
   const rule = new GraphNCA(16, 128)
 

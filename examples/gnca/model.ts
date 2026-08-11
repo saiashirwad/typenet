@@ -14,18 +14,8 @@
 // Update: a tiny MLP produces a residual increment, applied to a random
 // subset of nodes each step.
 
-import {
-  Linear,
-  Module,
-  Tensor,
-  cat,
-  uniform
-} from "../../index.ts"
-import type {
-  DimAdd,
-  DimMul,
-  Shape
-} from "../../src/shape.ts"
+import { cat, Linear, Module, Tensor, uniform } from "../../index.ts"
+import type { DimAdd, DimMul, Shape } from "../../src/shape.ts"
 import { type Edges, inDegrees } from "./graphs.ts"
 
 /**
@@ -51,7 +41,7 @@ export type GateIn<C extends number> = DimMul<3, C>
  */
 export interface GraphTensors<
   N extends number,
-  E extends number = number
+  E extends number = number,
 > {
   /** Source node of each edge. */
   readonly src: Tensor<[E]>
@@ -68,7 +58,7 @@ export interface GraphTensors<
 /** Build the rule's view of an edge list. */
 export function graphTensors<
   N extends number,
-  E extends number
+  E extends number,
 >(edges: Edges<E>, nodes: N): GraphTensors<N, E> {
   const degree = inDegrees(edges, nodes)
   const invDegree = new Float32Array(nodes)
@@ -82,7 +72,7 @@ export function graphTensors<
     dst: fromData<[E]>(edges.dst, [edges.count]),
     nodes,
     invDegree: fromData<[N, 1]>(invDegree, [nodes, 1]),
-    logDegree: fromData<[N, 1]>(logDegree, [nodes, 1])
+    logDegree: fromData<[N, 1]>(logDegree, [nodes, 1]),
   }
 }
 
@@ -95,7 +85,7 @@ export function graphTensors<
  */
 function fromData<S extends Shape>(
   data: Float32Array,
-  shape: number[]
+  shape: number[],
 ): Tensor<S> {
   const t = Tensor.zeros(shape)
   ;(t.data as Float32Array).set(data)
@@ -111,7 +101,7 @@ function fromData<S extends Shape>(
  */
 export class GraphNCA<
   C extends number = 16,
-  H extends number = 128
+  H extends number = 128,
 > extends Module {
   readonly channels: C
   readonly hidden: H
@@ -131,20 +121,18 @@ export class GraphNCA<
     // stated. Percept<C> and GateIn<C> are that same arithmetic in types.
     this.inner = new Linear(
       3 * channels + 1,
-      hidden
+      hidden,
     ) as Linear<Percept<C>, H>
     this.outer = new Linear(hidden, channels, {
-      bias: false
-    })
-    // Zero the last layer: the initial rule is the identity, so growth
-    // starts from a standing seed rather than from noise.
+      bias: false,
+    }) // Zero the last layer: the initial rule is the identity, so growth
+     // starts from a standing seed rather than from noise.
     ;(this.outer.weight.data as Float32Array).fill(0)
     this.gate = new Linear(
       3 * channels,
-      channels
-    ) as Linear<GateIn<C>, C>
-    // Zero the gate too. 2·sigmoid(0) = 1 exactly, so at init the gate is
-    // plain identity diffusion and a warm start is exact.
+      channels,
+    ) as Linear<GateIn<C>, C> // Zero the gate too. 2·sigmoid(0) = 1 exactly, so at init the gate is
+     // plain identity diffusion and a warm start is exact.
     ;(this.gate.weight.data as Float32Array).fill(0)
     ;(this.gate.bias!.data as Float32Array).fill(0)
   }
@@ -163,7 +151,7 @@ export class GraphNCA<
     // batched state the un-batched graph is the mistake this catches, and
     // it is a silent wrong answer at runtime.
     graph: GraphTensors<NoInfer<N>, E>,
-    updateRate = 0.5
+    updateRate = 0.5,
   ): Tensor<[N, C]> {
     const c = this.channels
     const { src, dst, nodes, invDegree } = graph
@@ -175,9 +163,8 @@ export class GraphNCA<
 
     /** Sum per-edge messages onto their destination node, and average. */
     const aggregate = (
-      messages: Tensor<[E, C]>
-    ): Tensor<[N, C]> =>
-      messages.scatterAdd(dst, nodes).mul(invDegree)
+      messages: Tensor<[E, C]>,
+    ): Tensor<[N, C]> => messages.scatterAdd(dst, nodes).mul(invDegree)
 
     // The gate is linear in [x_src, x_dst, |x_src - x_dst|], so its two
     // endpoint terms are one matmul over nodes, then gathered per edge. As
@@ -185,7 +172,7 @@ export class GraphNCA<
     // much — there are many more edges than nodes.
     const weight = this.gate.weight
     const endpoints = x.matmul(
-      cat(weight.narrow(0, 0, c), weight.narrow(0, c, c), 1)
+      cat(weight.narrow(0, 0, c), weight.narrow(0, c, c), 1),
     )
     // The only shape written down in this method, and it is a check
     // rather than a cast: broadcasting the bias over the edge tensor leaves
@@ -202,7 +189,7 @@ export class GraphNCA<
         difference
           .abs()
           .matmul(weight.narrow(0, 2 * c, c))
-          .add(this.gate.bias!)
+          .add(this.gate.bias!),
       )
       .sigmoid()
       .mul(2)
@@ -213,13 +200,13 @@ export class GraphNCA<
       cat(
         cat(x, aggregate(fromNode), 1),
         aggregate(gate.mul(difference)),
-        1
+        1,
       ),
       graph.logDegree,
-      1
+      1,
     )
     const increment = this.outer.forward(
-      this.inner.forward(perception).relu()
+      this.inner.forward(perception).relu(),
     )
 
     // Stochastic per-node update: the classic NCA trick for robustness to
@@ -241,11 +228,11 @@ export class GraphNCA<
 export function aliveMask<
   N extends number,
   E extends number,
-  C extends number
+  C extends number,
 >(
   x: Tensor<[N, C]>,
   graph: GraphTensors<NoInfer<N>, E>,
-  threshold = 0.1
+  threshold = 0.1,
 ): Tensor<[N, 1]> {
   const live = x.narrow(1, 3, 1).gt(threshold)
   const liveNeighbours = live
@@ -263,7 +250,7 @@ export function seedState(
   batch: number,
   nodes: number,
   channels: number,
-  center: number
+  center: number,
 ): Float32Array {
   const data = new Float32Array(batch * nodes * channels)
   for (let b = 0; b < batch; b++) {

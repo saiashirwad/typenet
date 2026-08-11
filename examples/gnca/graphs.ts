@@ -27,7 +27,7 @@ export interface Edges<E extends number = number> {
 export function point(
   pos: Points,
   i: number,
-  d: number
+  d: number,
 ): number {
   return pos.data[i * pos.dim + d]!
 }
@@ -35,7 +35,7 @@ export function point(
 function squaredDistance(
   pos: Points,
   i: number,
-  j: number
+  j: number,
 ): number {
   let total = 0
   for (let d = 0; d < pos.dim; d++) {
@@ -119,8 +119,9 @@ export function randomGeometricGraph(options: {
   const { nodes = 1024, k = 8, seed = 0, dim = 2 } = options
   const random = rng(seed)
   const data = new Float32Array(nodes * dim)
-  for (let i = 0; i < data.length; i++)
+  for (let i = 0; i < data.length; i++) {
     data[i] = random.next()
+  }
   const pos: Points = { data, n: nodes, dim }
   return { pos, edges: knnGraph(pos, k) }
 }
@@ -140,15 +141,16 @@ export function wattsStrogatzGraph(options: {
     nodes = 1024,
     k = 8,
     beta = 0.05,
-    seed = 0
+    seed = 0,
   } = options
-  if (k % 2 !== 0)
+  if (k % 2 !== 0) {
     throw new Error(
-      `wattsStrogatzGraph: k must be even, got ${k}`
+      `wattsStrogatzGraph: k must be even, got ${k}`,
     )
+  }
   const random = rng(seed)
   const pairs = new Set<number>()
-  for (let i = 0; i < nodes; i++)
+  for (let i = 0; i < nodes; i++) {
     for (let d = 1; d <= k / 2; d++) {
       let j = (i + d) % nodes
       if (random.next() < beta) {
@@ -159,6 +161,7 @@ export function wattsStrogatzGraph(options: {
       if (i === j) continue
       pairs.add(Math.min(i, j) * nodes + Math.max(i, j))
     }
+  }
   const data = new Float32Array(nodes * 2)
   for (let i = 0; i < nodes; i++) {
     const theta = (i / nodes) * 2 * Math.PI
@@ -168,7 +171,7 @@ export function wattsStrogatzGraph(options: {
   }
   return {
     pos: { data, n: nodes, dim: 2 },
-    edges: fromPairs(pairs, nodes)
+    edges: fromPairs(pairs, nodes),
   }
 }
 
@@ -179,7 +182,7 @@ export function wattsStrogatzGraph(options: {
 export function batchEdges(
   edges: Edges,
   batch: number,
-  nodes: number
+  nodes: number,
 ): Edges {
   const count = edges.count * batch
   const src = new Float32Array(count)
@@ -201,18 +204,19 @@ export function batchEdges(
  */
 export function inDegrees(
   edges: Edges,
-  nodes: number
+  nodes: number,
 ): Float32Array {
   const degrees = new Float32Array(nodes)
-  for (let i = 0; i < edges.count; i++)
+  for (let i = 0; i < edges.count; i++) {
     degrees[edges.dst[i]!]!++
+  }
   return degrees
 }
 
 /** Index of the node closest to `at`. Used to place the seed. */
 export function nearestNode(
   pos: Points,
-  at: readonly number[]
+  at: readonly number[],
 ): number {
   let best = 0
   let bestD2 = Infinity

@@ -1,86 +1,50 @@
 export {
-  Tensor,
-  tensor,
-  zeros,
-  ones,
+  arange,
+  broadcastShapes,
+  cat,
+  compile,
+  configure,
+  eye,
   full,
+  isLazy,
+  noGrad,
+  normal,
+  ones,
+  printGraph,
   rand,
   randn,
-  uniform,
-  normal,
-  eye,
-  arange,
   scalar,
   stack,
-  cat,
-  noGrad,
-  configure,
-  isLazy,
-  compile,
-  printGraph,
-  broadcastShapes
+  Tensor,
+  tensor,
+  uniform,
+  zeros,
 } from "./src/tensor.ts"
-export type {
-  DType,
-  RandomKind,
-  TensorParams,
-  DefaultParams,
-  ShapeOf,
-  ParamsOf,
-  NestedNumbers,
-  CompiledFn
-} from "./src/tensor.ts"
+export type { CompiledFn, DefaultParams, DType, NestedNumbers, ParamsOf, RandomKind, ShapeOf, TensorParams } from "./src/tensor.ts"
 
-export {
-  Module,
-  Linear,
-  ReLU,
-  LeakyReLU,
-  Tanh,
-  Sigmoid,
-  Softmax,
-  Sequential,
-  sequential,
-  mseLoss,
-  crossEntropy
-} from "./src/nn.ts"
+export { disableNative, isNativeAvailable, isNativeEnabled, nativeDevice, nativeDeviceMode, useNative } from "./src/backends/native.ts"
+export { crossEntropy, LeakyReLU, Linear, Module, mseLoss, ReLU, Sequential, sequential, Sigmoid, Softmax, Tanh } from "./src/nn.ts"
 export type { Layer } from "./src/nn.ts"
-export {
-  Optimizer,
-  SGD,
-  Adam,
-  clipGradNorm
-} from "./src/optim.ts"
-export type {
-  SGDOptions,
-  AdamOptions
-} from "./src/optim.ts"
-export {
-  useNative,
-  disableNative,
-  isNativeEnabled,
-  isNativeAvailable,
-  nativeDevice,
-  nativeDeviceMode
-} from "./src/backends/native.ts"
+export { Adam, clipGradNorm, Optimizer, SGD } from "./src/optim.ts"
+export type { AdamOptions, SGDOptions } from "./src/optim.ts"
 
 export type {
-  Shape,
   Broadcast,
   BroadcastCheck,
   CanBroadcast,
+  Cat,
+  ErrorMessage,
+  InferShape,
   MatMul,
   MatMulCheck,
-  Transpose,
+  NestedArray,
   Permute,
-  Squeeze,
-  Unsqueeze,
   ReduceDim,
   ResizeDim,
   ResolveView,
+  Shape,
+  Squeeze,
   Stack,
-  Cat,
-  InferShape,
-  NestedArray,
-  ErrorMessage
+  Transpose,
+  Unsqueeze,
 } from "./src/shape.ts"

@@ -6,27 +6,10 @@
 // a compile() trace.
 
 import * as nativeBackend from "./backends/native.ts"
-import {
-  prod,
-  shapesEqual,
-  showShape,
-  type CpuStorage,
-  type LazyStorage,
-  type TensorStorage
-} from "./storage.ts"
 import { nextSeed } from "./kernels.ts"
-import {
-  force,
-  forceMany,
-  lazily,
-  serializeLazyGraph,
-  topoOrder
-} from "./lazy.ts"
-import {
-  makeRaw,
-  Tensor,
-  type AnyTensor
-} from "./tensor.ts"
+import { force, forceMany, lazily, serializeLazyGraph, topoOrder } from "./lazy.ts"
+import { type CpuStorage, type LazyStorage, prod, shapesEqual, showShape, type TensorStorage } from "./storage.ts"
+import { type AnyTensor, makeRaw, Tensor } from "./tensor.ts"
 
 // --- optimizer in the graph (phase B task 4) ----------------------
 // In lazy mode an optimizer step builds its parameter/state updates
@@ -58,10 +41,7 @@ export function _activeUpdateTrace(): UpdateTrace | null {
   return updateTrace
 }
 
-type CompiledInput<T extends AnyTensor> =
-  T extends Tensor<infer S, any> ?
-    Tensor<S, any> | ArrayLike<number>
-  : never
+type CompiledInput<T extends AnyTensor> = T extends Tensor<infer S, any> ? Tensor<S, any> | ArrayLike<number> : never
 
 // --- debug names + graph printing (phase C task 5) ----------------
 // Names are debug metadata only: a WeakMap from tensor object to
@@ -82,38 +62,33 @@ const tensorNames = new WeakMap<AnyTensor, string>()
  * no graph and prints as a single `leaf` line.
  */
 export function printGraph(
-  roots: AnyTensor | AnyTensor[]
+  roots: AnyTensor | AnyTensor[],
 ): string {
   const rootList = Array.isArray(roots) ? roots : [roots]
   const ids = new Map<AnyTensor, number>()
   const entries = topoOrder(rootList).map(t => ({
     t,
-    node:
-      t._storage.kind === "lazy" ? t._storage.node : null
+    node: t._storage.kind === "lazy" ? t._storage.node : null,
   }))
   entries.forEach(({ t }, i) => ids.set(t, i))
-  const label = (t: AnyTensor): string =>
-    tensorNames.get(t) ?? `%${ids.get(t)!}`
+  const label = (t: AnyTensor): string => tensorNames.get(t) ?? `%${ids.get(t)!}`
   const width = Math.max(
     1,
-    ...entries.map(({ t }) => label(t).length)
+    ...entries.map(({ t }) => label(t).length),
   )
   const rootSet = new Set(rootList)
   return entries
     .map(({ t, node }) => {
       const lhs = label(t).padEnd(width)
       const shape = showShape(t.shape)
-      const tail = `${shape} ${t.dtype}${
-        rootSet.has(t) ? " ; root" : ""
-      }`
+      const tail = `${shape} ${t.dtype}${rootSet.has(t) ? " ; root" : ""}`
       if (!node) return `${lhs} = leaf ${tail}`
       const arg = (u: AnyTensor) => label(u)
       const attrs = (pairs: [string, unknown][]): string =>
-        pairs.length === 0 ?
-          ""
-        : ` {${pairs.map(([k, v]) => `${k}=${v}`).join(", ")}}`
-      const param = (p: number): [string, unknown][] =>
-        p === 0 ? [] : [["parameter", p]]
+        pairs.length === 0
+          ? ""
+          : ` {${pairs.map(([k, v]) => `${k}=${v}`).join(", ")}}`
+      const param = (p: number): [string, unknown][] => p === 0 ? [] : [["parameter", p]]
       switch (node.op) {
         case "binary":
           return `${lhs} = ${node.kind}(${arg(node.a)}, ${arg(node.b)})${attrs(param(node.parameter))} ${tail}`
@@ -122,58 +97,74 @@ export function printGraph(
         case "matmul":
           return `${lhs} = matmul(${arg(node.a)}, ${arg(node.b)}) ${tail}`
         case "reduce":
-          return `${lhs} = reduce.${node.kind}(${arg(node.input)})${attrs(
-            [
-              ["dim", node.dim],
-              ...(node.keepdim ?
-                ([["keepdim", node.keepdim]] as [
-                  string,
-                  unknown
-                ][])
-              : [])
-            ]
-          )} ${tail}`
+          return `${lhs} = reduce.${node.kind}(${arg(node.input)})${
+            attrs(
+              [
+                ["dim", node.dim],
+                ...(node.keepdim
+                  ? ([["keepdim", node.keepdim]] as [
+                    string,
+                    unknown,
+                  ][])
+                  : []),
+              ],
+            )
+          } ${tail}`
         case "reduceAll":
           return `${lhs} = reduceAll.${node.kind}(${arg(node.input)}) ${tail}`
         case "broadcastTo":
           return `${lhs} = broadcastTo(${arg(node.input)}) ${tail}`
         case "permute":
-          return `${lhs} = permute(${arg(node.input)})${attrs(
-            [["order", `[${node.order.join(", ")}]`]]
-          )} ${tail}`
+          return `${lhs} = permute(${arg(node.input)})${
+            attrs(
+              [["order", `[${node.order.join(", ")}]`]],
+            )
+          } ${tail}`
         case "view":
           return `${lhs} = view(${arg(node.input)}) ${tail}`
         case "narrow":
-          return `${lhs} = narrow(${arg(node.input)})${attrs(
-            [
-              ["dim", node.dim],
-              ["start", node.start],
-              ["length", node.length]
-            ]
-          )} ${tail}`
+          return `${lhs} = narrow(${arg(node.input)})${
+            attrs(
+              [
+                ["dim", node.dim],
+                ["start", node.start],
+                ["length", node.length],
+              ],
+            )
+          } ${tail}`
         case "cat":
-          return `${lhs} = cat(${arg(node.a)}, ${arg(node.b)})${attrs(
-            [["dim", node.dim]]
-          )} ${tail}`
+          return `${lhs} = cat(${arg(node.a)}, ${arg(node.b)})${
+            attrs(
+              [["dim", node.dim]],
+            )
+          } ${tail}`
         case "oneHot":
-          return `${lhs} = oneHot(${arg(node.input)})${attrs(
-            [["classes", node.classes]]
-          )} ${tail}`
+          return `${lhs} = oneHot(${arg(node.input)})${
+            attrs(
+              [["classes", node.classes]],
+            )
+          } ${tail}`
         case "indexSelect":
-          return `${lhs} = indexSelect(${arg(node.input)}, ${arg(node.index)})${attrs(
-            [["dim", node.dim]]
-          )} ${tail}`
+          return `${lhs} = indexSelect(${arg(node.input)}, ${arg(node.index)})${
+            attrs(
+              [["dim", node.dim]],
+            )
+          } ${tail}`
         case "scatterAdd":
-          return `${lhs} = scatterAdd(${arg(node.input)}, ${arg(node.index)})${attrs(
-            [
-              ["dim", node.dim],
-              ["length", node.length]
-            ]
-          )} ${tail}`
+          return `${lhs} = scatterAdd(${arg(node.input)}, ${arg(node.index)})${
+            attrs(
+              [
+                ["dim", node.dim],
+                ["length", node.length],
+              ],
+            )
+          } ${tail}`
         case "random":
-          return `${lhs} = random.${node.kind}()${attrs([
-            ["stream", node.stream]
-          ])} ${tail}`
+          return `${lhs} = random.${node.kind}()${
+            attrs([
+              ["stream", node.stream],
+            ])
+          } ${tail}`
       }
     })
     .join("\n")
@@ -214,14 +205,16 @@ export { tensorNames }
  */
 export type CompiledFn<
   Args extends AnyTensor[],
-  R extends AnyTensor | AnyTensor[]
-> = ((
-  ...inputs: { [K in keyof Args]: CompiledInput<Args[K]> }
-) => R) & { dispose(): void }
+  R extends AnyTensor | AnyTensor[],
+> =
+  & ((
+    ...inputs: { [K in keyof Args]: CompiledInput<Args[K]> }
+  ) => R)
+  & { dispose(): void }
 
 export function compile<
   Args extends AnyTensor[],
-  R extends AnyTensor | AnyTensor[]
+  R extends AnyTensor | AnyTensor[],
 >(fn: (...args: Args) => R): CompiledFn<Args, R> {
   type State = {
     placeholders: AnyTensor[]
@@ -254,29 +247,31 @@ export function compile<
 
   const trace = (inputs: readonly unknown[]): State => {
     const placeholders = inputs.map((input, i) => {
-      if (!(input instanceof Tensor))
+      if (!(input instanceof Tensor)) {
         throw new Error(
-          `compile() traces on the first call, so argument ${i} must be a Tensor (later calls may pass flat buffers)`
+          `compile() traces on the first call, so argument ${i} must be a Tensor (later calls may pass flat buffers)`,
         )
+      }
       const t = force(input as AnyTensor)
       if (
-        t._storage.kind !== "cpu" ||
-        t.dtype !== "float32"
-      )
+        t._storage.kind !== "cpu"
+        || t.dtype !== "float32"
+      ) {
         throw new Error(
-          `compile() only supports CPU float32 inputs, argument ${i} is ${t.dtype}`
+          `compile() only supports CPU float32 inputs, argument ${i} is ${t.dtype}`,
         )
+      }
       // Own copy of the data: replay mutates this buffer per call.
       return makeRaw(
         (t._storage.data as Float32Array).slice(),
         t.shape,
-        "float32"
+        "float32",
       )
     })
     const prevTrace = updateTrace
     const traced: UpdateTrace = {
       updates: [],
-      materialize: []
+      materialize: [],
     }
     updateTrace = traced
     let result: unknown
@@ -287,26 +282,29 @@ export function compile<
     }
     const tuple = Array.isArray(result)
     const outputs = (
-      tuple ? result : [result]) as AnyTensor[]
+      tuple ? result : [result]
+    ) as AnyTensor[]
     outputs.forEach((out, i) => {
-      if (!(out instanceof Tensor))
+      if (!(out instanceof Tensor)) {
         throw new Error(
-          `compile() expected fn to return a Tensor or Tensor[], got ${typeof out} at output ${i}`
+          `compile() expected fn to return a Tensor or Tensor[], got ${typeof out} at output ${i}`,
         )
+      }
     })
     const updates = traced.updates
     const materialize = traced.materialize.map(t => {
-      if (t._storage.kind !== "lazy")
+      if (t._storage.kind !== "lazy") {
         throw new Error(
-          "compile(): an optimizer step produced a non-lazy gradient — compiled training steps need lazy gradients"
+          "compile(): an optimizer step produced a non-lazy gradient — compiled training steps need lazy gradients",
         )
+      }
       return { t, storage: t._storage }
     })
     // Root order: outputs, then update expressions, then grads.
     const roots = [
       ...outputs,
       ...updates.map(u => u.expr),
-      ...materialize.map(m => m.t)
+      ...materialize.map(m => m.t),
     ]
     const lazy: State["lazy"] = topoOrder(roots)
       .filter(t => t._storage.kind === "lazy")
@@ -319,66 +317,74 @@ export function compile<
       shapes: placeholders.map(p => [...p.shape]),
       updates,
       materialize,
-      native:
-        serialized ?
-          {
-            json: serialized.json,
-            handle: null,
-            leafTensors: serialized.leafTensors,
-            leafOffsets: serialized.leafOffsets,
-            leafBytes: serialized.leafBytes,
-            rootShapes: serialized.rootShapes
-          }
+      native: serialized
+        ? {
+          json: serialized.json,
+          handle: null,
+          leafTensors: serialized.leafTensors,
+          leafOffsets: serialized.leafOffsets,
+          leafBytes: serialized.leafBytes,
+          rootShapes: serialized.rootShapes,
+        }
         : null,
-      lazy
+      lazy,
     }
   }
 
   const swapInputs = (
     state: State,
-    inputs: readonly unknown[]
+    inputs: readonly unknown[],
   ): void => {
-    if (inputs.length !== state.placeholders.length)
+    if (inputs.length !== state.placeholders.length) {
       throw new Error(
-        `compiled function expected ${state.placeholders.length} arguments, got ${inputs.length}`
+        `compiled function expected ${state.placeholders.length} arguments, got ${inputs.length}`,
       )
+    }
     inputs.forEach((input, i) => {
       const storage = state.placeholders[i]!._storage
       const buffer = (storage as CpuStorage)
         .data as Float32Array
       if (input instanceof Tensor) {
         const t = force(input as AnyTensor)
-        if (t._storage.kind !== "cpu")
+        if (t._storage.kind !== "cpu") {
           throw new Error(
-            `compiled function argument ${i}: expected a CPU tensor`
+            `compiled function argument ${i}: expected a CPU tensor`,
           )
-        if (t.dtype !== "float32")
+        }
+        if (t.dtype !== "float32") {
           throw new Error(
-            `compiled function argument ${i}: expected float32, got ${t.dtype}`
+            `compiled function argument ${i}: expected float32, got ${t.dtype}`,
           )
-        if (!shapesEqual(t.shape, state.shapes[i]!))
+        }
+        if (!shapesEqual(t.shape, state.shapes[i]!)) {
           throw new Error(
-            `compiled function argument ${i}: expected shape ${showShape(state.shapes[i]!)}, got ${showShape(t.shape)} — compiled graphs are shape-stable, recompile for a new shape`
+            `compiled function argument ${i}: expected shape ${showShape(state.shapes[i]!)}, got ${
+              showShape(t.shape)
+            } — compiled graphs are shape-stable, recompile for a new shape`,
           )
+        }
         buffer.set(t._storage.data as Float32Array)
       } else if (
-        input != null &&
-        typeof (input as ArrayLike<number>).length ===
-          "number"
+        input != null
+        && typeof (input as ArrayLike<number>).length
+          === "number"
       ) {
         if (
-          (input as ArrayLike<number>).length !==
-          buffer.length
-        )
+          (input as ArrayLike<number>).length
+            !== buffer.length
+        ) {
           throw new Error(
-            `compiled function argument ${i}: expected ${buffer.length} values for shape ${showShape(state.shapes[i]!)}, got ${(input as ArrayLike<number>).length}`
+            `compiled function argument ${i}: expected ${buffer.length} values for shape ${showShape(state.shapes[i]!)}, got ${
+              (input as ArrayLike<number>).length
+            }`,
           )
+        }
         buffer.set(
-          Array.from(input as ArrayLike<number>, Number)
+          Array.from(input as ArrayLike<number>, Number),
         )
       } else {
         throw new Error(
-          `compiled function argument ${i}: expected a Tensor or flat ArrayLike<number>`
+          `compiled function argument ${i}: expected a Tensor or flat ArrayLike<number>`,
         )
       }
     })
@@ -387,17 +393,19 @@ export function compile<
   // Write one evaluated update root back into its target leaf buffer.
   const applyUpdate = (
     u: GraphUpdate,
-    values: Float32Array
+    values: Float32Array,
   ): void => {
     const storage = u.target._storage
-    if (storage.kind !== "cpu")
+    if (storage.kind !== "cpu") {
       throw new Error(
-        "compiled function: an optimizer update target is not CPU storage — compiled graphs require parameters and optimizer state to stay put"
+        "compiled function: an optimizer update target is not CPU storage — compiled graphs require parameters and optimizer state to stay put",
       )
-    if (storage.data.length !== values.length)
+    }
+    if (storage.data.length !== values.length) {
       throw new Error(
-        "compiled function: an optimizer update target changed size"
+        "compiled function: an optimizer update target changed size",
       )
+    }
     ;(storage.data as Float32Array).set(values)
   }
 
@@ -406,25 +414,27 @@ export function compile<
     const leaves = new Float32Array(native.leafBytes)
     native.leafTensors.forEach((leaf, i) => {
       const storage = leaf._storage
-      if (storage.kind !== "cpu")
+      if (storage.kind !== "cpu") {
         throw new Error(
-          "compiled function: a captured tensor is not CPU storage — compiled graphs require captured leaves (e.g. parameters) to stay put"
+          "compiled function: a captured tensor is not CPU storage — compiled graphs require captured leaves (e.g. parameters) to stay put",
         )
+      }
       leaves.set(
         storage.data as Float32Array,
-        native.leafOffsets[i]!
+        native.leafOffsets[i]!,
       )
     })
     // Prepared once, then replayed by handle: the graph JSON never
     // crosses the boundary again.
-    if (native.handle === null)
+    if (native.handle === null) {
       native.handle = nativeBackend.prepareGraphNative(
-        native.json
+        native.json,
       )
+    }
     const data = nativeBackend.evalPreparedNative(
       native.handle,
       leaves,
-      nextSeed()
+      nextSeed(),
     )
     let offset = 0
     const take = (shape: number[]): Float32Array => {
@@ -437,17 +447,17 @@ export function compile<
       .slice(0, state.outputs.length)
       .map(shape => makeRaw(take(shape), shape, "float32"))
     // Root order: outputs, update expressions, grads (see trace()).
-    for (const u of state.updates)
+    for (const u of state.updates) {
       applyUpdate(u, take([...u.expr.shape]))
+    }
     for (const m of state.materialize) {
       const values = take([...m.t.shape])
       m.storage.cache = makeRaw(
         values,
         [...m.t.shape],
-        "float32"
+        "float32",
       )
-      ;(m.t as { _storage: TensorStorage })._storage =
-        m.storage.cache._storage
+      ;(m.t as { _storage: TensorStorage })._storage = m.storage.cache._storage
     }
     return outputs
   }
@@ -462,23 +472,21 @@ export function compile<
     forceMany([
       ...state.outputs,
       ...state.updates.map(u => u.expr),
-      ...state.materialize.map(m => m.t)
+      ...state.materialize.map(m => m.t),
     ])
-    for (const u of state.updates)
+    for (const u of state.updates) {
       applyUpdate(u, u.expr.data as Float32Array)
+    }
     // Fresh tensors sharing this call's result buffers — the next
     // call allocates new buffers, so callers can hold onto these.
-    return state.outputs.map(out =>
-      makeRaw(out.data, out.shape, out.dtype)
-    )
+    return state.outputs.map(out => makeRaw(out.data, out.shape, out.dtype))
   }
 
   const compiled = ((...inputs: readonly unknown[]) => {
     if (!state) state = trace(inputs)
     swapInputs(state, inputs)
-    const outputs =
-      state.native && nativeBackend.isNativeEnabled() ?
-        runNative(state)
+    const outputs = state.native && nativeBackend.isNativeEnabled()
+      ? runNative(state)
       : runInterpreter(state)
     return (state.tuple ? outputs : outputs[0]) as R
   }) as CompiledFn<Args, R>

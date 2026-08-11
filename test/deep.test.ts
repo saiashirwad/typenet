@@ -1,16 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Tensor,
-  compile,
-  configure,
-  printGraph,
-  tensor
-} from "../src/tensor.ts"
-import {
-  isNativeAvailable,
-  useNative,
-  disableNative
-} from "../src/backends/native.ts"
+import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
+import { compile, configure, printGraph, Tensor, tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -69,9 +59,7 @@ describe("deep graphs", () => {
   })
 
   it("compiles and replays a deep chain", () => {
-    const step = compile((x: Tensor<[2]>) =>
-      chain(x as AnyTensor, 2000).sum()
-    )
+    const step = compile((x: Tensor<[2]>) => chain(x as AnyTensor, 2000).sum())
     const first = step(tensor([1, 2])).item()
     const second = step(tensor([1, 2])).item()
     expect(second).toBeCloseTo(first, 6)
@@ -88,5 +76,5 @@ describe.skipIf(!isNativeAvailable())(
       const out = chain(tensor([1, 2]), 4000)
       expect(out.get(0)).toBeCloseTo(1.0001 ** 4000, 3)
     })
-  }
+  },
 )

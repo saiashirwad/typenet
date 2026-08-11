@@ -13,45 +13,16 @@
 // learns, and a heal probe as the number the whole thing chases —
 // training loss can fall while regeneration stays broken.
 
-import {
-  Adam,
-  Tensor,
-  clipGradNorm,
-  compile,
-  configure,
-  isNativeAvailable,
-  nativeDevice,
-  nativeDeviceMode,
-  normal,
-  useNative
-} from "../../index.ts"
+import { writeFileSync } from "node:fs"
+import { Adam, clipGradNorm, compile, configure, isNativeAvailable, nativeDevice, nativeDeviceMode, normal, Tensor, useNative } from "../../index.ts"
+import { loadRule, readCheckpoint, saveCheckpoint } from "./checkpoint.ts"
 import * as damage from "./damage.ts"
-import {
-  type Edges,
-  type Points,
-  batchEdges,
-  knnGraph,
-  nearestNode,
-  randomGeometricGraph,
-  wattsStrogatzGraph
-} from "./graphs.ts"
-import {
-  GraphNCA,
-  type GraphTensors,
-  aliveMask,
-  graphTensors,
-  seedState
-} from "./model.ts"
+import { batchEdges, type Edges, knnGraph, nearestNode, type Points, randomGeometricGraph, wattsStrogatzGraph } from "./graphs.ts"
+import { aliveMask, GraphNCA, type GraphTensors, graphTensors, seedState } from "./model.ts"
+import { loadCloud, POINTCLOUDS } from "./pointclouds.ts"
+import { renderSvg, visible } from "./render.ts"
 import { rng } from "./rng.ts"
 import { type Target, TARGETS } from "./targets.ts"
-import { POINTCLOUDS, loadCloud } from "./pointclouds.ts"
-import {
-  loadRule,
-  readCheckpoint,
-  saveCheckpoint
-} from "./checkpoint.ts"
-import { renderSvg, visible } from "./render.ts"
-import { writeFileSync } from "node:fs"
 
 type AnyTensor = Tensor<any, any>
 
@@ -71,7 +42,7 @@ const options = {
   /** Rollout length range. Healing needs longer than growing. */
   horizon: [
     number("horizon-min", 48),
-    number("horizon-max", 80)
+    number("horizon-max", 80),
   ],
   /**
    * How many distinct rollout lengths to draw from. Each gets its own
@@ -94,13 +65,13 @@ const options = {
   /** Where the .npz surface clouds live, for the mesh targets. */
   clouds: text(
     "clouds",
-    "../graph-cellular-automata/data/pointclouds"
+    "../graph-cellular-automata/data/pointclouds",
   ),
   beta: number("beta", 0.05),
   seed: number("seed", 0),
   report: number("report", 20),
   probe: number("probe", 500),
-  native: !flags.has("no-native")
+  native: !flags.has("no-native"),
 } as const
 
 function parseFlags(argv: string[]): Map<string, string> {
@@ -122,10 +93,11 @@ function number(name: string, fallback: number): number {
   const raw = flags.get(name)
   if (raw === undefined || raw === "") return fallback
   const value = Number(raw)
-  if (!Number.isFinite(value))
+  if (!Number.isFinite(value)) {
     throw new Error(
-      `--${name} expects a number, got ${raw}`
+      `--${name} expects a number, got ${raw}`,
     )
+  }
   return value
 }
 
@@ -142,16 +114,16 @@ if (options.native && isNativeAvailable()) useNative()
 // a pattern on the Watts-Strogatz ring, or a pattern painted onto a random
 // geometric graph.
 const isCloud = options.target in POINTCLOUDS
-const useRing =
-  !isCloud &&
-  (options.graph === "ws" ||
-    (options.graph === "auto" && options.target === "ring"))
-if (!isCloud && !TARGETS[options.target])
+const useRing = !isCloud
+  && (options.graph === "ws"
+    || (options.graph === "auto" && options.target === "ring"))
+if (!isCloud && !TARGETS[options.target]) {
   throw new Error(
-    `unknown target ${options.target}; patterns: ` +
-      `${Object.keys(TARGETS).join(", ")}; surface clouds: ` +
-      `${Object.keys(POINTCLOUDS).join(", ")}`
+    `unknown target ${options.target}; patterns: `
+      + `${Object.keys(TARGETS).join(", ")}; surface clouds: `
+      + `${Object.keys(POINTCLOUDS).join(", ")}`,
   )
+}
 
 let pos: Points
 let edges: Edges
@@ -166,10 +138,10 @@ if (isCloud) {
     cloud = loadCloud(path, { nodes: options.nodes })
   } catch (error) {
     throw new Error(
-      `could not load the ${options.target} cloud from ${path}: ` +
-        `${error instanceof Error ? error.message : String(error)}\n` +
-        `Point --clouds at a directory of .npz clouds; the reference ` +
-        `repo builds them with scripts/fetch_pointclouds.py.`
+      `could not load the ${options.target} cloud from ${path}: `
+        + `${error instanceof Error ? error.message : String(error)}\n`
+        + `Point --clouds at a directory of .npz clouds; the reference `
+        + `repo builds them with scripts/fetch_pointclouds.py.`,
     )
   }
   pos = cloud.pos
@@ -181,20 +153,19 @@ if (isCloud) {
 } else {
   const spec = TARGETS[options.target]!
   seedAt = spec.seedAt
-  const built =
-    useRing ?
-      wattsStrogatzGraph({
-        nodes: options.nodes,
-        k: options.k,
-        beta: options.beta,
-        seed: options.seed
-      })
+  const built = useRing
+    ? wattsStrogatzGraph({
+      nodes: options.nodes,
+      k: options.k,
+      beta: options.beta,
+      seed: options.seed,
+    })
     : randomGeometricGraph({
-        nodes: options.nodes,
-        k: options.k,
-        seed: options.seed,
-        dim: seedAt.length
-      })
+      nodes: options.nodes,
+      k: options.k,
+      seed: options.seed,
+      dim: seedAt.length,
+    })
   pos = built.pos
   edges = built.edges
   targetData = spec.build(pos)
@@ -209,16 +180,16 @@ const center = nearestNode(pos, seedAt)
 const inPattern = damage.patternNodes(targetData)
 
 console.log(
-  `${options.target}: ${dim}-d ${kind}, ` +
-    `${N} nodes, ${edges.count} edges, ${inPattern.length} in the pattern`
+  `${options.target}: ${dim}-d ${kind}, `
+    + `${N} nodes, ${edges.count} edges, ${inPattern.length} in the pattern`,
 )
 console.log(
   `backend: ${
-    isNativeAvailable() && options.native ?
-      `native, ${nativeDeviceMode()} device ` +
-      `(accelerator available: ${nativeDevice()})`
-    : "interpreter"
-  }`
+    isNativeAvailable() && options.native
+      ? `native, ${nativeDeviceMode()} device `
+        + `(accelerator available: ${nativeDevice()})`
+      : "interpreter"
+  }`,
 )
 
 // The rule sees a batch as one big graph: B copies side by side in the
@@ -231,12 +202,12 @@ const batched = graphTensors(batchEdges(edges, B, N), B * N)
 // back anyway.
 const targetTiled = tensorFrom(tile(targetData, B), [
   B * N,
-  4
+  4,
 ])
 
 function tensorFrom(
   data: Float32Array,
-  shape: number[]
+  shape: number[],
 ): AnyTensor {
   const t = Tensor.zeros(shape) as AnyTensor
   ;(t.data as Float32Array).set(data)
@@ -245,11 +216,12 @@ function tensorFrom(
 
 function tile(
   data: Float32Array,
-  times: number
+  times: number,
 ): Float32Array {
   const out = new Float32Array(data.length * times)
-  for (let i = 0; i < times; i++)
+  for (let i = 0; i < times; i++) {
     out.set(data, i * data.length)
+  }
   return out
 }
 
@@ -269,7 +241,7 @@ function rollout(
   // Dims come from command-line flags, so they are `number` — a wildcard
   // the shape algebra accepts anywhere. A model written with literal
   // channel counts gets them checked; a CLI cannot.
-  graph: GraphTensors<number>
+  graph: GraphTensors<number>,
 ): AnyTensor {
   let x = x0
   for (let i = 0; i < steps; i++) {
@@ -284,7 +256,7 @@ function rollout(
 /** Squared error against the target on the four visible channels. */
 function visibleLoss(
   x: AnyTensor,
-  against: AnyTensor
+  against: AnyTensor,
 ): AnyTensor {
   return x.narrow(1, 0, 4).sub(against).pow(2).mean()
 }
@@ -311,35 +283,33 @@ const rollouts = new Map<
 
 function trainStep(
   x0: Float32Array,
-  steps: number
+  steps: number,
 ): { loss: number; mse: number; state: Float32Array } {
   let step = rollouts.get(steps)
   if (!step) {
     step = compile((input: AnyTensor): StepResult => {
-      const noised =
-        options.noise > 0 ?
-          input.add(
-            (
-              normal([B * N, C] as [
-                number,
-                number
-              ]) as AnyTensor
-            ).mul(options.noise)
-          )
+      const noised = options.noise > 0
+        ? input.add(
+          (
+            normal([B * N, C] as [
+              number,
+              number,
+            ]) as AnyTensor
+          ).mul(options.noise),
+        )
         : input
       const x = rollout(noised, steps, batched)
       const mse = visibleLoss(x, targetTiled)
       // States that run away are the usual failure after damage, so
       // penalise magnitude outside [-1, 1] directly.
-      const loss =
-        options.overflow > 0 ?
-          mse.add(
-            x
-              .sub(x.clamp(-1, 1))
-              .abs()
-              .mean()
-              .mul(options.overflow)
-          )
+      const loss = options.overflow > 0
+        ? mse.add(
+          x
+            .sub(x.clamp(-1, 1))
+            .abs()
+            .mean()
+            .mul(options.overflow),
+        )
         : mse
       optimizer.zeroGrad()
       loss.backward()
@@ -350,12 +320,12 @@ function trainStep(
     rollouts.set(steps, step)
   }
   const [loss, mse, state] = step(
-    tensorFrom(x0, [B * N, C])
+    tensorFrom(x0, [B * N, C]),
   )
   return {
     loss: loss.item(),
     mse: mse.item(),
-    state: state.data as Float32Array
+    state: state.data as Float32Array,
   }
 }
 
@@ -363,10 +333,10 @@ const horizons = Array.from(
   { length: options.buckets },
   (_, i) =>
     Math.round(
-      options.horizon[0]! +
-        ((options.horizon[1]! - options.horizon[0]!) * i) /
-          Math.max(options.buckets - 1, 1)
-    )
+      options.horizon[0]!
+        + ((options.horizon[1]! - options.horizon[0]!) * i)
+          / Math.max(options.buckets - 1, 1),
+    ),
 )
 
 // ------------------------------------------------------------- the pool ---
@@ -375,24 +345,25 @@ const horizons = Array.from(
 // left behind, not from the bare seed.
 
 const pool = new Float32Array(options.pool * N * C)
-for (let i = 0; i < options.pool; i++)
+for (let i = 0; i < options.pool; i++) {
   pool.set(seedState(1, N, C, center), i * N * C)
+}
 
 const random = rng(options.seed + 1)
 
 /** Squared error of one flat sample against the target, visible channels. */
 function sampleError(
   state: Float32Array,
-  offset: number
+  offset: number,
 ): number {
   let total = 0
-  for (let node = 0; node < N; node++)
+  for (let node = 0; node < N; node++) {
     for (let c = 0; c < 4; c++) {
-      const delta =
-        state[offset + node * C + c]! -
-        targetData[node * 4 + c]!
+      const delta = state[offset + node * C + c]!
+        - targetData[node * 4 + c]!
       total += delta * delta
     }
+  }
   return total / (N * 4)
 }
 
@@ -400,14 +371,15 @@ function sampleError(
 function wipe(
   batchState: Float32Array,
   b: number,
-  nodes: Int32Array
+  nodes: Int32Array,
 ): void {
-  for (const node of nodes)
+  for (const node of nodes) {
     batchState.fill(
       0,
       (b * N + node) * C,
-      (b * N + node) * C + C
+      (b * N + node) * C + C,
     )
+  }
 }
 
 // ------------------------------------------------------------- the probe ---
@@ -417,12 +389,12 @@ function wipe(
 
 const probeHole = damage.ball(pos, inPattern, {
   frac: 0.25,
-  center: inPattern[Math.floor(inPattern.length / 2)]!
+  center: inPattern[Math.floor(inPattern.length / 2)]!,
 })
 
 function healProbe(
   grow = 80,
-  heal = 160
+  heal = 160,
 ): {
   grown: number
   healed: number
@@ -445,26 +417,25 @@ function healProbe(
   const grownState = run(state, grow)
   const grownError = sampleError(grownState, 0)
   const wounded = grownState.slice()
-  for (const node of probeHole)
+  for (const node of probeHole) {
     wounded.fill(0, node * C, node * C + C)
+  }
   const healedState = run(wounded, heal)
   configure({ lazy: false })
   return {
     grown: grownError,
     healed: sampleError(healedState, 0),
     grownState,
-    healedState
+    healedState,
   }
 }
 
 // -------------------------------------------------- checkpoints, pictures ---
 
-const checkpointPath =
-  text("save", "") ||
-  `runs/gnca-${options.target}${options.tag ? `-${options.tag}` : ""}.json`
-const svgPath =
-  text("svg", "") ||
-  checkpointPath.replace(/\.json$/, ".svg")
+const checkpointPath = text("save", "")
+  || `runs/gnca-${options.target}${options.tag ? `-${options.tag}` : ""}.json`
+const svgPath = text("svg", "")
+  || checkpointPath.replace(/\.json$/, ".svg")
 
 function save(step: number): void {
   saveCheckpoint(
@@ -479,11 +450,11 @@ function save(step: number): void {
       dim: pos.dim,
       edges: {
         src: Array.from(edges.src),
-        dst: Array.from(edges.dst)
+        dst: Array.from(edges.dst),
       },
-      targetRgba: Array.from(targetData)
+      targetRgba: Array.from(targetData),
     },
-    params
+    params,
   )
 }
 
@@ -500,31 +471,31 @@ function drawProbe(probe: {
       [
         visible(targetData, N, 4),
         visible(probe.grownState, N, C),
-        visible(probe.healedState, N, C)
+        visible(probe.healedState, N, C),
       ],
-      { labels: ["target", "grown", "healed"], nodes: N }
-    )
+      { labels: ["target", "grown", "healed"], nodes: N },
+    ),
   )
 }
 
 if (options.initFrom) {
   const padded = loadRule(
     params,
-    readCheckpoint(options.initFrom)
+    readCheckpoint(options.initFrom),
   )
   console.log(
-    `warm-started from ${options.initFrom}` +
-      (padded > 0 ? ` (zero-padded ${padded} weights)` : "")
+    `warm-started from ${options.initFrom}`
+      + (padded > 0 ? ` (zero-padded ${padded} weights)` : ""),
   )
 }
 
 // -------------------------------------------------------------- training ---
 
 console.log(
-  `training ${options.steps} steps, batch ${B}, ` +
-    `rollout lengths ${horizons.join("/")}, ` +
-    `${params.length} parameter tensors, ` +
-    `${params.reduce((n, p) => n + p.numel, 0)} weights`
+  `training ${options.steps} steps, batch ${B}, `
+    + `rollout lengths ${horizons.join("/")}, `
+    + `${params.length} parameter tensors, `
+    + `${params.reduce((n, p) => n + p.numel, 0)} weights`,
 )
 
 const batchState = new Float32Array(B * N * C)
@@ -533,16 +504,18 @@ let lastReport = Date.now()
 
 for (let step = 1; step <= options.steps; step++) {
   // Draw a batch from the pool.
-  for (let b = 0; b < B; b++)
+  for (let b = 0; b < B; b++) {
     chosen[b] = random.int(options.pool)
-  for (let b = 0; b < B; b++)
+  }
+  for (let b = 0; b < B; b++) {
     batchState.set(
       pool.subarray(
         chosen[b]! * N * C,
-        (chosen[b]! + 1) * N * C
+        (chosen[b]! + 1) * N * C,
       ),
-      b * N * C
+      b * N * C,
     )
+  }
 
   // Rank worst-first, so batchState[0] is the least-formed pattern and
   // the last entries the most. Damage lands on the best ones: healing a
@@ -550,15 +523,15 @@ for (let step = 1; step <= options.steps; step++) {
   // already-broken state is spent twice over.
   const order = Array.from({ length: B }, (_, b) => b).sort(
     (a, b) =>
-      sampleError(batchState, b * N * C) -
-      sampleError(batchState, a * N * C)
+      sampleError(batchState, b * N * C)
+      - sampleError(batchState, a * N * C),
   )
   const ranked = new Float32Array(B * N * C)
   const rankedChoice = new Int32Array(B)
   order.forEach((b, i) => {
     ranked.set(
       batchState.subarray(b * N * C, (b + 1) * N * C),
-      i * N * C
+      i * N * C,
     )
     rankedChoice[i] = chosen[b]!
   })
@@ -567,8 +540,9 @@ for (let step = 1; step <= options.steps; step++) {
 
   // Every eighth step, train the worst sample from the bare seed, so the
   // rule keeps practising the long horizon from nothing.
-  if (step % 8 === 0)
+  if (step % 8 === 0) {
     batchState.set(seedState(1, N, C, center), 0)
+  }
 
   // Damage the best-formed samples: one gets scattered noise, the rest
   // get balls covering 20-50% of the pattern.
@@ -577,19 +551,19 @@ for (let step = 1; step <= options.steps; step++) {
     wipe(
       batchState,
       b,
-      i === 0 ?
-        damage.scatter(inPattern, { random })
-      : damage.ball(pos, inPattern, {
+      i === 0
+        ? damage.scatter(inPattern, { random })
+        : damage.ball(pos, inPattern, {
           frac: random.range(0.2, 0.5),
-          random
-        })
+          random,
+        }),
     )
   }
 
   const horizon = horizons[random.int(horizons.length)]!
   const { loss, mse, state } = trainStep(
     batchState,
-    horizon
+    horizon,
   )
 
   // Write the rollout back into the pool, and reset the worst sample to
@@ -603,32 +577,32 @@ for (let step = 1; step <= options.steps; step++) {
       worst = b
     }
   }
-  for (let b = 0; b < B; b++)
+  for (let b = 0; b < B; b++) {
     pool.set(
-      b === worst ?
-        seedState(1, N, C, center)
-      : state.subarray(b * N * C, (b + 1) * N * C),
-      chosen[b]! * N * C
+      b === worst
+        ? seedState(1, N, C, center)
+        : state.subarray(b * N * C, (b + 1) * N * C),
+      chosen[b]! * N * C,
     )
+  }
 
   if (step % options.report === 0 || step === 1) {
     const now = Date.now()
-    const rate =
-      step === 1 ? 0 : (
-        (options.report * 1000) /
-        Math.max(now - lastReport, 1)
-      )
+    const rate = step === 1 ? 0 : (
+      (options.report * 1000)
+      / Math.max(now - lastReport, 1)
+    )
     lastReport = now
     console.log(
-      `step ${String(step).padStart(6)}  loss ${loss.toFixed(6)}  ` +
-        `mse ${mse.toFixed(6)}  ${rate.toFixed(2)} steps/s`
+      `step ${String(step).padStart(6)}  loss ${loss.toFixed(6)}  `
+        + `mse ${mse.toFixed(6)}  ${rate.toFixed(2)} steps/s`,
     )
   }
   if (step % options.probe === 0) {
     const probe = healProbe()
     console.log(
-      `    probe: grown ${probe.grown.toFixed(4)}  ` +
-        `healed ${probe.healed.toFixed(4)}`
+      `    probe: grown ${probe.grown.toFixed(4)}  `
+        + `healed ${probe.healed.toFixed(4)}`,
     )
     save(step)
     drawProbe(probe)
@@ -639,7 +613,7 @@ const probe = healProbe()
 save(options.steps)
 drawProbe(probe)
 console.log(
-  `done. probe: grown ${probe.grown.toFixed(4)}  ` +
-    `healed ${probe.healed.toFixed(4)}`
+  `done. probe: grown ${probe.grown.toFixed(4)}  `
+    + `healed ${probe.healed.toFixed(4)}`,
 )
 console.log(`saved ${checkpointPath} and ${svgPath}`)

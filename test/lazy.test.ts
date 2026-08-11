@@ -1,12 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Tensor,
-  tensor,
-  configure,
-  isLazy
-} from "../src/tensor.ts"
 import { crossEntropy } from "../src/nn.ts"
 import { SGD } from "../src/optim.ts"
+import { configure, isLazy, Tensor, tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -24,7 +19,7 @@ function bothWays<T>(fn: () => T): {
 
 function expectSame(
   eager: AnyTensor,
-  lazy: AnyTensor
+  lazy: AnyTensor,
 ): void {
   expect(lazy.shape).toEqual(eager.shape)
   expect(lazy.toArray()).toEqual(eager.toArray())
@@ -33,25 +28,26 @@ function expectSame(
 function expectClose(
   eager: AnyTensor,
   lazy: AnyTensor,
-  tolerance = 1e-6
+  tolerance = 1e-6,
 ): void {
   expect(lazy.shape).toEqual(eager.shape)
   const a = eager.data
   const b = lazy.data
   expect(b.length).toBe(a.length)
-  for (let i = 0; i < a.length; i++)
+  for (let i = 0; i < a.length; i++) {
     expect(Math.abs(a[i]! - b[i]!)).toBeLessThan(tolerance)
+  }
 }
 
 function expectGradsClose(
   eager: AnyTensor[],
   lazy: AnyTensor[],
-  tolerance = 1e-6
+  tolerance = 1e-6,
 ): void {
   eager.forEach((p, i) => {
     expect(
       lazy[i]!.grad,
-      `grad for param ${i}`
+      `grad for param ${i}`,
     ).not.toBeNull()
     expectClose(p.grad!, lazy[i]!.grad!, tolerance)
   })
@@ -74,14 +70,14 @@ describe("lazy mode", () => {
     configure({ lazy: true })
     const a = tensor([
       [1, 2, 3],
-      [4, 5, 6]
+      [4, 5, 6],
     ])
     const b = a.add(tensor([10, 20, 30]))
     expect(b._storage.kind).toBe("lazy")
     expect(b.shape).toEqual([2, 3])
     expect(b.toArray()).toEqual([
       [11, 22, 33],
-      [14, 25, 36]
+      [14, 25, 36],
     ])
     expect(b._storage.kind).toBe("cpu")
   })
@@ -90,7 +86,7 @@ describe("lazy mode", () => {
     const { eager, lazy } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
-        [4, 5, 6]
+        [4, 5, 6],
       ])
       return a
         .mul(tensor([[10], [100]]))
@@ -106,12 +102,12 @@ describe("lazy mode", () => {
       tensor([
         [1, 2],
         [3, 4],
-        [5, 6]
+        [5, 6],
       ]).matmul(
         tensor([
           [1, 2, 3, 4],
-          [5, 6, 7, 8]
-        ])
+          [5, 6, 7, 8],
+        ]),
       )
     )
     expectSame(eager, lazy)
@@ -121,7 +117,7 @@ describe("lazy mode", () => {
     const { eager, lazy } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
-        [4, 5, 6]
+        [4, 5, 6],
       ])
       return {
         dim: a.sum(0),
@@ -129,7 +125,7 @@ describe("lazy mode", () => {
         all: a.sum(),
         mean: a.mean(1),
         max: a.max(0),
-        maxAll: a.max()
+        maxAll: a.max(),
       }
     })
     expectSame(eager.dim, lazy.dim)
@@ -160,7 +156,7 @@ describe("lazy mode", () => {
     const { eager, lazy } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
-        [4, 5, 6]
+        [4, 5, 6],
       ])
       const v = a.view([3, 2]).transpose(0, 1)
       const p = a.unsqueeze(0).permute(1, 0, 2).squeeze()
@@ -175,19 +171,17 @@ describe("lazy mode", () => {
       Tensor.cat(
         tensor([
           [1, 2],
-          [3, 4]
+          [3, 4],
         ]),
         tensor([[5, 6]]),
-        0
+        0,
       )
     )
     expectSame(eager, lazy)
   })
 
   it("matches eager for oneHot", () => {
-    const { eager, lazy } = bothWays(() =>
-      tensor([0, 2, 1]).oneHot(3)
-    )
+    const { eager, lazy } = bothWays(() => tensor([0, 2, 1]).oneHot(3))
     expectSame(eager, lazy)
   })
 
@@ -214,21 +208,24 @@ describe("lazy mode", () => {
         [0, 0],
         [0, 1],
         [1, 0],
-        [1, 1]
+        [1, 1],
       ])
       const y = tensor([[0], [1], [1], [0]])
       const w1 = tensor([
         [0.5, -0.5, 0.25, -0.25],
-        [0.1, 0.2, -0.3, 0.4]
+        [0.1, 0.2, -0.3, 0.4],
       ]).requires_grad()
       const b1 = tensor([
-        0.1, -0.1, 0.05, -0.05
+        0.1,
+        -0.1,
+        0.05,
+        -0.05,
       ]).requires_grad()
       const w2 = tensor([
         [0.6],
         [-0.6],
         [0.3],
-        [-0.3]
+        [-0.3],
       ]).requires_grad()
       const b2 = tensor([0.2]).requires_grad()
       const params = [w1, b1, w2, b2] as AnyTensor[]
@@ -244,23 +241,21 @@ describe("lazy mode", () => {
     const { eager, lazy } = bothWays(step)
     expect(lazy.loss.item()).toBeCloseTo(
       eager.loss.item(),
-      6
+      6,
     )
-    eager.params.forEach((p, i) =>
-      expectSame(p, lazy.params[i]!)
-    )
+    eager.params.forEach((p, i) => expectSame(p, lazy.params[i]!))
   })
 
   it("matches eager gradients for a matmul/broadcast/reduce/unary chain", () => {
     const run = () => {
       const a = tensor([
         [0.5, -1, 2],
-        [1.5, 0.25, -0.75]
+        [1.5, 0.25, -0.75],
       ]).requires_grad()
       const b = tensor([
         [1, -2],
         [0.5, 0.5],
-        [-1, 3]
+        [-1, 3],
       ]).requires_grad()
       const c = tensor([2, -1]).requires_grad()
       const loss = (a as AnyTensor)
@@ -285,11 +280,11 @@ describe("lazy mode", () => {
         [2, 1, 0.1],
         [0.5, 1.5, -1],
         [-0.3, 0.8, 1.2],
-        [1, -1, 0]
+        [1, -1, 0],
       ]).requires_grad()
       const loss = crossEntropy(
         logits as any,
-        tensor([0, 1, 2, 0]) as any
+        tensor([0, 1, 2, 0]) as any,
       )
       loss.backward()
       return [logits] as AnyTensor[]
@@ -300,7 +295,7 @@ describe("lazy mode", () => {
     const withArrayTargets = () => {
       const logits = tensor([
         [2, 1, 0.1],
-        [0.5, 1.5, -1]
+        [0.5, 1.5, -1],
       ]).requires_grad()
       crossEntropy(logits as any, [0, 2]).backward()
       return [logits] as AnyTensor[]
@@ -315,21 +310,24 @@ describe("lazy mode", () => {
         [0, 0],
         [0, 1],
         [1, 0],
-        [1, 1]
+        [1, 1],
       ])
       const y = tensor([[0], [1], [1], [0]])
       const w1 = tensor([
         [0.5, -0.5, 0.25, -0.25],
-        [0.1, 0.2, -0.3, 0.4]
+        [0.1, 0.2, -0.3, 0.4],
       ]).requires_grad()
       const b1 = tensor([
-        0.1, -0.1, 0.05, -0.05
+        0.1,
+        -0.1,
+        0.05,
+        -0.05,
       ]).requires_grad()
       const w2 = tensor([
         [0.6],
         [-0.6],
         [0.3],
-        [-0.3]
+        [-0.3],
       ]).requires_grad()
       const b2 = tensor([0.2]).requires_grad()
       const h = x.matmul(w1).add(b1).tanh()
@@ -366,7 +364,9 @@ describe("lazy mode", () => {
     loss.backward()
     // y = 2x² + x² = 3x², dy/dx = 6x
     expect((x.grad as AnyTensor).toArray()).toEqual([
-      6, 12, 18
+      6,
+      12,
+      18,
     ])
     // Aliasing: forcing the graph swapped the storage of every alias
     // of a shared node, so z (referenced by two parents plus sum) is

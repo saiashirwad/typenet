@@ -47,7 +47,7 @@ function tapeOrder(root: AnyTensor): AnyTensor[] {
     stack.push({
       t,
       inputs: t.gradNode ? t.gradNode.inputs : [],
-      i: 0
+      i: 0,
     })
   }
   push(root)
@@ -67,7 +67,7 @@ function withGrad(
   result: AnyTensor,
   name: string,
   inputs: AnyTensor[],
-  backward: (grad: AnyTensor) => (AnyTensor | null)[]
+  backward: (grad: AnyTensor) => (AnyTensor | null)[],
 ): AnyTensor {
   if (gradEnabled && inputs.some(t => t.needsGrad)) {
     result.gradNode = { name, inputs, backward }

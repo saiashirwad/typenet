@@ -1,12 +1,6 @@
+import type { DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts"
 import { Tensor } from "./tensor.ts"
 import type { TensorParams } from "./tensor.ts"
-import type {
-  DimEq,
-  ErrorMessage,
-  MatMul,
-  MatMulCheck,
-  Shape
-} from "./shape.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -38,7 +32,7 @@ export abstract class Module {
 
 export class Linear<
   In extends number,
-  Out extends number
+  Out extends number,
 > extends Module {
   readonly weight: Tensor<[In, Out], GradParams>
   readonly bias: Tensor<[Out], GradParams> | null
@@ -48,7 +42,7 @@ export class Linear<
   constructor(
     inFeatures: In,
     outFeatures: Out,
-    options: { bias?: boolean } = {}
+    options: { bias?: boolean } = {},
   ) {
     super()
     this.inFeatures = inFeatures
@@ -59,14 +53,13 @@ export class Linear<
       .sub(k)
       .detach()
       .requires_grad() as any
-    this.bias =
-      options.bias === false ?
-        null
+    this.bias = options.bias === false
+      ? null
       : (Tensor.zeros([outFeatures]).requires_grad() as any)
   }
 
   forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P> & MatMulCheck<S, [In, Out]>
+    x: Tensor<S, P> & MatMulCheck<S, [In, Out]>,
   ): Tensor<MatMul<S, [In, Out]>, P> {
     const y = (x as AnyTensor).matmul(this.weight)
     return (this.bias ? y.add(this.bias) : y) as any
@@ -75,19 +68,19 @@ export class Linear<
 
 export interface Layer<
   In extends number,
-  Out extends number
+  Out extends number,
 > {
   readonly inFeatures?: In
   readonly outFeatures?: Out
 
   forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, NoInfer<In>], P>
+    x: Tensor<[B, NoInfer<In>], P>,
   ): Tensor<[B, NoInfer<Out>], P>
 }
 
 export class ReLU extends Module {
   forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>
+    x: Tensor<S, P>,
   ): Tensor<S, P> {
     return x.relu()
   }
@@ -98,7 +91,7 @@ export class LeakyReLU extends Module {
     super()
   }
   forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>
+    x: Tensor<S, P>,
   ): Tensor<S, P> {
     return x.leakyRelu(this.negativeSlope)
   }
@@ -106,7 +99,7 @@ export class LeakyReLU extends Module {
 
 export class Tanh extends Module {
   forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>
+    x: Tensor<S, P>,
   ): Tensor<S, P> {
     return x.tanh()
   }
@@ -114,7 +107,7 @@ export class Tanh extends Module {
 
 export class Sigmoid extends Module {
   forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>
+    x: Tensor<S, P>,
   ): Tensor<S, P> {
     return x.sigmoid()
   }
@@ -122,7 +115,7 @@ export class Sigmoid extends Module {
 
 export class Softmax extends Module {
   forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>
+    x: Tensor<S, P>,
   ): Tensor<S, P> {
     return x.softmax(-1 as any) as any
   }
@@ -130,11 +123,8 @@ export class Softmax extends Module {
 
 export class Sequential<
   In extends number,
-  Out extends number
->
-  extends Module
-  implements Layer<In, Out>
-{
+  Out extends number,
+> extends Module implements Layer<In, Out> {
   declare readonly inFeatures?: In
   declare readonly outFeatures?: Out
 
@@ -143,7 +133,7 @@ export class Sequential<
   }
 
   forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, In], P>
+    x: Tensor<[B, In], P>,
   ): Tensor<[B, Out], P> {
     let h: AnyTensor = x
     for (const layer of this.layers) h = layer.forward(h)
@@ -152,32 +142,28 @@ export class Sequential<
 }
 
 type LayerIn<L> =
-  L extends { readonly inFeatures?: infer I } ?
-    NonNullable<I> extends number ?
-      NonNullable<I>
+    L extends { readonly inFeatures?: infer I } ?
+      NonNullable<I> extends number ? NonNullable<I>
     : undefined
   : undefined
 
 type LayerOut<L> =
-  L extends { readonly outFeatures?: infer O } ?
-    NonNullable<O> extends number ?
-      NonNullable<O>
+    L extends { readonly outFeatures?: infer O } ?
+      NonNullable<O> extends number ? NonNullable<O>
     : undefined
   : undefined
 
-type NextDim<H, Prev> =
-  LayerOut<H> extends number ? LayerOut<H> : Prev
+type NextDim<H, Prev> = LayerOut<H> extends number ? LayerOut<H> : Prev
 
 type ChainCheck<
   L extends readonly unknown[],
-  Prev extends number | undefined = undefined
+  Prev extends number | undefined = undefined,
 > =
-  L extends readonly [infer H, ...infer R] ?
-    LayerIn<H> extends infer I ?
-      I extends number ?
-        Prev extends number ?
-          DimEq<Prev, I> extends false ?
-            ErrorMessage<`sequential: layer expects ${I} input features but the previous layer outputs ${Prev}`>
+    L extends readonly [infer H, ...infer R] ?
+      LayerIn<H> extends infer I ?
+        I extends number ?
+          Prev extends number ?
+            DimEq<Prev, I> extends false ? ErrorMessage<`sequential: layer expects ${I} input features but the previous layer outputs ${Prev}`>
           : ChainCheck<R, NextDim<H, Prev>>
         : ChainCheck<R, NextDim<H, Prev>>
       : ChainCheck<R, NextDim<H, Prev>>
@@ -185,25 +171,22 @@ type ChainCheck<
   : unknown
 
 type ChainIn<L extends readonly unknown[]> =
-  L extends readonly [infer H, ...infer R] ?
-    LayerIn<H> extends number ?
-      LayerIn<H>
+    L extends readonly [infer H, ...infer R] ?
+      LayerIn<H> extends number ? LayerIn<H>
     : ChainIn<R>
   : number
 
 type ChainOut<
   L extends readonly unknown[],
-  Acc extends number = number
-> =
-  L extends readonly [infer H, ...infer R] ?
-    ChainOut<
-      R,
-      LayerOut<H> extends number ? LayerOut<H> : Acc
-    >
+  Acc extends number = number,
+> = L extends readonly [infer H, ...infer R] ? ChainOut<
+    R,
+    LayerOut<H> extends number ? LayerOut<H> : Acc
+  >
   : Acc
 
 export function sequential<
-  const L extends readonly Layer<any, any>[]
+  const L extends readonly Layer<any, any>[],
 >(
   ...layers: L & ChainCheck<L>
 ): Sequential<ChainIn<L>, ChainOut<L>>
@@ -213,26 +196,28 @@ export function sequential(
   let prevOut: number | undefined
   layers.forEach((l, i) => {
     if (
-      prevOut !== undefined &&
-      l.inFeatures !== undefined &&
-      l.inFeatures !== prevOut
-    )
+      prevOut !== undefined
+      && l.inFeatures !== undefined
+      && l.inFeatures !== prevOut
+    ) {
       throw new Error(
-        `sequential: layer ${i} expects ${l.inFeatures} features but the previous layer outputs ${prevOut}`
+        `sequential: layer ${i} expects ${l.inFeatures} features but the previous layer outputs ${prevOut}`,
       )
+    }
     if (l.outFeatures !== undefined) prevOut = l.outFeatures
-    else if (l.inFeatures !== undefined)
+    else if (l.inFeatures !== undefined) {
       prevOut = l.inFeatures
+    }
   })
   return new Sequential(layers)
 }
 
 export function mseLoss<
   S extends Shape,
-  P extends TensorParams
+  P extends TensorParams,
 >(
   prediction: Tensor<S, P>,
-  target: Tensor<NoInfer<S>, any>
+  target: Tensor<NoInfer<S>, any>,
 ): Tensor<[], P> {
   return (prediction as AnyTensor)
     .sub(target as AnyTensor)
@@ -243,36 +228,39 @@ export function mseLoss<
 export function crossEntropy<
   B extends number,
   C extends number,
-  P extends TensorParams
+  P extends TensorParams,
 >(
   logits: Tensor<[B, C], P>,
-  targets: readonly number[] | Tensor<[NoInfer<B>], any>
+  targets: readonly number[] | Tensor<[NoInfer<B>], any>,
 ): Tensor<[], P> {
   const l = logits as AnyTensor
   const [batch, classes] = l.shape as number[]
   let mask: AnyTensor
   if (targets instanceof Tensor) {
-    if (targets.numel !== batch)
+    if (targets.numel !== batch) {
       throw new Error(
-        `crossEntropy: ${targets.numel} targets for batch of ${batch}`
+        `crossEntropy: ${targets.numel} targets for batch of ${batch}`,
       )
+    }
     mask = targets.oneHot(classes!)
   } else {
-    if (targets.length !== batch)
+    if (targets.length !== batch) {
       throw new Error(
-        `crossEntropy: ${targets.length} targets for batch of ${batch}`
+        `crossEntropy: ${targets.length} targets for batch of ${batch}`,
       )
+    }
     const onehot = new Float32Array(batch! * classes!)
     for (let i = 0; i < batch!; i++) {
       const target = targets[i]!
       if (
-        target < 0 ||
-        target >= classes! ||
-        !Number.isInteger(target)
-      )
+        target < 0
+        || target >= classes!
+        || !Number.isInteger(target)
+      ) {
         throw new Error(
-          `crossEntropy: target ${target} out of range for ${classes} classes`
+          `crossEntropy: target ${target} out of range for ${classes} classes`,
         )
+      }
       onehot[i * classes! + target] = 1
     }
     mask = fromFlat(onehot, [batch!, classes!])
@@ -287,7 +275,7 @@ export function crossEntropy<
 
 function fromFlat(
   data: Float32Array,
-  shape: number[]
+  shape: number[],
 ): AnyTensor {
   const t = Tensor.zeros(shape as [number, number])
   t.data.set(data)

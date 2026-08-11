@@ -54,64 +54,64 @@ type CpuStorage = {
 
 type LazyNodeBody =
   | {
-      op: "binary"
-      kind: BinaryOp
-      parameter: number
-      a: AnyTensor
-      b: AnyTensor
-    }
+    op: "binary"
+    kind: BinaryOp
+    parameter: number
+    a: AnyTensor
+    b: AnyTensor
+  }
   | {
-      op: "unary"
-      kind: UnaryOp
-      parameter: number
-      input: AnyTensor
-    }
+    op: "unary"
+    kind: UnaryOp
+    parameter: number
+    input: AnyTensor
+  }
   | { op: "matmul"; a: AnyTensor; b: AnyTensor }
   | {
-      op: "reduce"
-      kind: ReduceOp
-      dim: number
-      keepdim: boolean
-      input: AnyTensor
-    }
+    op: "reduce"
+    kind: ReduceOp
+    dim: number
+    keepdim: boolean
+    input: AnyTensor
+  }
   | {
-      op: "reduceAll"
-      kind: "sum" | "max"
-      input: AnyTensor
-    }
+    op: "reduceAll"
+    kind: "sum" | "max"
+    input: AnyTensor
+  }
   | { op: "broadcastTo"; input: AnyTensor }
   | { op: "permute"; order: number[]; input: AnyTensor }
   | { op: "view"; input: AnyTensor }
   | {
-      op: "narrow"
-      dim: number
-      start: number
-      length: number
-      input: AnyTensor
-    }
+    op: "narrow"
+    dim: number
+    start: number
+    length: number
+    input: AnyTensor
+  }
   | { op: "cat"; a: AnyTensor; b: AnyTensor; dim: number }
   | { op: "oneHot"; classes: number; input: AnyTensor }
   | {
-      op: "indexSelect"
-      dim: number
-      input: AnyTensor
-      index: AnyTensor
-    }
+    op: "indexSelect"
+    dim: number
+    input: AnyTensor
+    index: AnyTensor
+  }
   | {
-      op: "scatterAdd"
-      dim: number
-      length: number
-      input: AnyTensor
-      index: AnyTensor
-    }
+    op: "scatterAdd"
+    dim: number
+    length: number
+    input: AnyTensor
+    index: AnyTensor
+  }
   | {
-      op: "random"
-      kind: RandomKind
-      // Identifies this node's own stream, so two random nodes in one
-      // graph never draw the same numbers. Fixed when the node is
-      // built, which keeps a compiled graph's structure stable.
-      stream: number
-    }
+    op: "random"
+    kind: RandomKind
+    // Identifies this node's own stream, so two random nodes in one
+    // graph never draw the same numbers. Fixed when the node is
+    // built, which keeps a compiled graph's structure stable.
+    stream: number
+  }
 
 type LazyNode = LazyNodeBody & {
   shape: number[]
@@ -126,13 +126,7 @@ type LazyStorage = {
 
 type TensorStorage = CpuStorage | LazyStorage
 
-export type {
-  CpuStorage,
-  LazyNodeBody,
-  LazyNode,
-  LazyStorage,
-  TensorStorage
-}
+export type { CpuStorage, LazyNode, LazyNodeBody, LazyStorage, TensorStorage }
 
 function arrayCtor(dtype: DType) {
   return dtype === "float64" ? Float64Array : Float32Array
@@ -146,7 +140,7 @@ function prod(xs: readonly number[]): number {
 
 function shapesEqual(
   a: readonly number[],
-  b: readonly number[]
+  b: readonly number[],
 ): boolean {
   return (
     a.length === b.length && a.every((x, i) => x === b[i])
@@ -158,7 +152,7 @@ function showShape(s: readonly number[]): string {
 }
 
 function contiguousStrides(
-  shape: readonly number[]
+  shape: readonly number[],
 ): number[] {
   const strides = new Array<number>(shape.length)
   let acc = 1
@@ -171,17 +165,18 @@ function contiguousStrides(
 
 export function broadcastShapes(
   a: readonly number[],
-  b: readonly number[]
+  b: readonly number[],
 ): number[] {
   const rank = Math.max(a.length, b.length)
   const out = new Array<number>(rank)
   for (let i = 0; i < rank; i++) {
     const da = a[a.length - 1 - i] ?? 1
     const db = b[b.length - 1 - i] ?? 1
-    if (da !== db && da !== 1 && db !== 1)
+    if (da !== db && da !== 1 && db !== 1) {
       throw new Error(
-        `Cannot broadcast ${showShape(a)} with ${showShape(b)}`
+        `Cannot broadcast ${showShape(a)} with ${showShape(b)}`,
       )
+    }
     out[rank - 1 - i] = Math.max(da, db)
   }
   return out
@@ -189,7 +184,7 @@ export function broadcastShapes(
 
 function broadcastStrides(
   from: readonly number[],
-  to: readonly number[]
+  to: readonly number[],
 ): number[] {
   const strides = contiguousStrides(from)
   const out = new Array<number>(to.length).fill(0)
@@ -203,22 +198,15 @@ function broadcastStrides(
 function normalizeDim(
   dim: number,
   rank: number,
-  extra = 0
+  extra = 0,
 ): number {
   const d = dim < 0 ? rank + extra + dim : dim
-  if (d < 0 || d >= rank + extra)
+  if (d < 0 || d >= rank + extra) {
     throw new Error(
-      `Dimension ${dim} out of range for rank ${rank}`
+      `Dimension ${dim} out of range for rank ${rank}`,
     )
+  }
   return d
 }
 
-export {
-  arrayCtor,
-  prod,
-  shapesEqual,
-  showShape,
-  contiguousStrides,
-  broadcastStrides,
-  normalizeDim
-}
+export { arrayCtor, broadcastStrides, contiguousStrides, normalizeDim, prod, shapesEqual, showShape }

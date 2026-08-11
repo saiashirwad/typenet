@@ -29,13 +29,7 @@ Feature dimensions are literal, the batch dimension stays generic:
 
 ```ts
 "use tsover"
-import {
-  tensor,
-  Tensor,
-  Linear,
-  Module,
-  SGD
-} from "typenet"
+import { Linear, Module, SGD, Tensor, tensor } from "typenet"
 import type { TensorParams } from "typenet"
 
 class XorNet extends Module {
@@ -43,7 +37,7 @@ class XorNet extends Module {
   out = new Linear(8, 1)
 
   forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, 2], P>
+    x: Tensor<[B, 2], P>,
   ): Tensor<[B, 1], P> {
     const h = this.hidden.forward(x).tanh() // Tensor<[B, 8]>
     return this.out.forward(h).sigmoid() // Tensor<[B, 1]>
@@ -54,14 +48,14 @@ const X = tensor([
   [0, 0],
   [0, 1],
   [1, 0],
-  [1, 1]
+  [1, 1],
 ]) // Tensor<[4, 2]>
 const Y = tensor([[0], [1], [1], [0]]) // Tensor<[4, 1]>
 
 const net = new XorNet()
 const optim = new SGD(net.parameters(), {
   lr: 0.5,
-  momentum: 0.9
+  momentum: 0.9,
 })
 
 for (let epoch = 0; epoch < 1500; epoch++) {
@@ -127,7 +121,7 @@ const step = compile(
     clipGradNorm(net.parameters(), 1)
     optim.step()
     return loss
-  }
+  },
 )
 for (let i = 0; i < 1000; i++) step(X, Y)
 ```
@@ -139,41 +133,84 @@ The graph can be deep: a cellular automaton rolled out over dozens of time steps
 ```ts
 // creation
 tensor([[1, 2], [3, 4]]) // shape inferred: Tensor<[2, 2]>
-zeros([2, 3]); ones([4]); full([2], 7); rand([3]); randn([3])
-eye(3); arange(10); scalar(42)
+zeros([2, 3])
+ones([4])
+full([2], 7)
+rand([3])
+randn([3])
+eye(3)
+arange(10)
+scalar(42)
 
 // math — differentiable and shape-checked
-a.add(b); a.sub(b); a.mul(b); a.div(b); a.pow(2)
-a.neg(); a.exp(); a.log(); a.sqrt(); a.abs()
-a.relu(); a.sigmoid(); a.tanh(); a.softmax(1); a.logSoftmax(1)
-a.matmul(b); a.dot(b)
-a.maximum(b); a.minimum(b); a.clamp(-1, 1)
-a.gt(0); a.ge(0); a.lt(0); a.le(0); a.eq(0) // 1/0 masks, no gradient
+a.add(b)
+a.sub(b)
+a.mul(b)
+a.div(b)
+a.pow(2)
+a.neg()
+a.exp()
+a.log()
+a.sqrt()
+a.abs()
+a.relu()
+a.sigmoid()
+a.tanh()
+a.softmax(1)
+a.logSoftmax(1)
+a.matmul(b)
+a.dot(b)
+a.maximum(b)
+a.minimum(b)
+a.clamp(-1, 1)
+a.gt(0)
+a.ge(0)
+a.lt(0)
+a.le(0)
+a.eq(0) // 1/0 masks, no gradient
 
 // reductions
-a.sum(); a.sum(1); a.sum(-1, true); a.mean(); a.max(); a.argmax(1)
+a.sum()
+a.sum(1)
+a.sum(-1, true)
+a.mean()
+a.max()
+a.argmax(1)
 
 // shape
-a.view([3, -1]); a.reshape([2, 3]); a.squeeze(); a.unsqueeze(-1)
-a.transpose(0, 2); a.permute(2, 0, 1); a.T; a.narrow(1, 0, 4)
-Tensor.stack([a, b], 0); Tensor.cat(a, b, 1)
+a.view([3, -1])
+a.reshape([2, 3])
+a.squeeze()
+a.unsqueeze(-1)
+a.transpose(0, 2)
+a.permute(2, 0, 1)
+a.T
+a.narrow(1, 0, 4)
+Tensor.stack([a, b], 0)
+Tensor.cat(a, b, 1)
 
 // gather and scatter, for message passing on a graph
-x.indexSelect(src)              // each edge's source state
+x.indexSelect(src) // each edge's source state
 messages.scatterAdd(dst, nodes) // each node's incoming messages
 
 // random values redrawn on every evaluation, unlike rand/randn
-uniform([n, 1]); normal([n, c]); configure({ seed: 0 })
+uniform([n, 1])
+normal([n, c])
+configure({ seed: 0 })
 
 // nn / optim
 new Linear(784, 128) // weights Tensor<[784, 128]>
-net.parameters(); mseLoss(pred, target); crossEntropy(logits, targets)
-new SGD(params, { lr, momentum?, weightDecay? })
-new Adam(params, { lr?, betas?, eps?, weightDecay? })
+net.parameters()
+mseLoss(pred, target)
+crossEntropy(logits, targets)
+new SGD(params, { lr, momentum, weightDecay })
+new Adam(params, { lr, betas, eps, weightDecay })
 clipGradNorm(params, 1) // between backward() and step()
 
 // data out
-a.item(); a.get(1, 2); a.toArray() // NestedArray<S>, typed nesting depth
+a.item()
+a.get(1, 2)
+a.toArray() // NestedArray<S>, typed nesting depth
 ```
 
 ## Graphs and message passing

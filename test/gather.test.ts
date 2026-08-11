@@ -6,12 +6,8 @@
 // Gradients for all of these live in test/gradcheck.test.ts.
 
 import { afterEach, describe, expect, it } from "vitest"
-import { Tensor, configure, tensor } from "../src/tensor.ts"
-import {
-  disableNative,
-  isNativeAvailable,
-  useNative
-} from "../src/backends/native.ts"
+import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
+import { configure, Tensor, tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -43,24 +39,27 @@ function allPaths(fn: () => AnyTensor): {
 
 function expectAgree(
   fn: () => AnyTensor,
-  tolerance = 1e-5
+  tolerance = 1e-5,
 ): void {
   const { eager, lazy, native } = allPaths(fn)
-  for (const [label, other] of [
-    ["lazy", lazy],
-    ["native", native]
-  ] as const) {
+  for (
+    const [label, other] of [
+      ["lazy", lazy],
+      ["native", native],
+    ] as const
+  ) {
     if (!other) continue
     expect(other.shape, `${label} shape`).toEqual(
-      eager.shape
+      eager.shape,
     )
     const a = eager.data
     const b = other.data
-    for (let i = 0; i < a.length; i++)
+    for (let i = 0; i < a.length; i++) {
       expect(
         Math.abs(a[i]! - b[i]!),
-        `${label} element ${i}: ${b[i]} vs eager ${a[i]}`
+        `${label} element ${i}: ${b[i]} vs eager ${a[i]}`,
       ).toBeLessThan(tolerance)
+    }
   }
 }
 
@@ -69,7 +68,7 @@ const rows = () =>
     [1, 2],
     [3, 4],
     [5, 6],
-    [7, 8]
+    [7, 8],
   ])
 
 describe("indexSelect", () => {
@@ -77,11 +76,11 @@ describe("indexSelect", () => {
     expect(
       rows()
         .indexSelect(tensor([2, 0, 2]))
-        .toArray()
+        .toArray(),
     ).toEqual([
       [5, 6],
       [1, 2],
-      [5, 6]
+      [5, 6],
     ])
   })
 
@@ -89,12 +88,12 @@ describe("indexSelect", () => {
     expect(
       rows()
         .indexSelect(tensor([1, 0]), 1)
-        .toArray()
+        .toArray(),
     ).toEqual([
       [2, 1],
       [4, 3],
       [6, 5],
-      [8, 7]
+      [8, 7],
     ])
   })
 
@@ -129,9 +128,7 @@ describe("indexSelect", () => {
   })
 
   it("rejects a non-rank-1 index", () => {
-    expect(() =>
-      rows().indexSelect(tensor([[0], [1]]) as any)
-    ).toThrow(/requires a rank-1 index/)
+    expect(() => rows().indexSelect(tensor([[0], [1]]) as any)).toThrow(/requires a rank-1 index/)
   })
 })
 
@@ -141,12 +138,12 @@ describe("scatterAdd", () => {
     expect(
       rows()
         .scatterAdd(tensor([1, 1, 0, 3]), 4)
-        .toArray()
+        .toArray(),
     ).toEqual([
       [5, 6],
       [4, 6],
       [0, 0],
-      [7, 8]
+      [7, 8],
     ])
   })
 
@@ -154,7 +151,7 @@ describe("scatterAdd", () => {
     expect(
       tensor([[1, 2, 3]])
         .scatterAdd(tensor([0, 0, 1]), 2, 1)
-        .toArray()
+        .toArray(),
     ).toEqual([[3, 3]])
   })
 
@@ -177,7 +174,7 @@ describe("scatterAdd", () => {
       [1, 2],
       [0, 0],
       [10, 12],
-      [7, 8]
+      [7, 8],
     ])
   })
 
@@ -199,9 +196,7 @@ describe("scatterAdd", () => {
   })
 
   it("rejects a negative length", () => {
-    expect(() =>
-      rows().scatterAdd(tensor([0, 1, 2, 3]), -1)
-    ).toThrow(/non-negative integer length/)
+    expect(() => rows().scatterAdd(tensor([0, 1, 2, 3]), -1)).toThrow(/non-negative integer length/)
   })
 })
 
@@ -209,28 +204,26 @@ describe("narrow", () => {
   it("slices a contiguous window", () => {
     expect(rows().narrow(0, 1, 2).toArray()).toEqual([
       [3, 4],
-      [5, 6]
+      [5, 6],
     ])
     expect(rows().narrow(1, 1, 1).toArray()).toEqual([
       [2],
       [4],
       [6],
-      [8]
+      [8],
     ])
   })
 
   it("agrees across eager, lazy and native", () => {
-    expectAgree(() =>
-      rows().narrow(0, 1, 3).narrow(1, 0, 1).mul(3)
-    )
+    expectAgree(() => rows().narrow(0, 1, 3).narrow(1, 0, 1).mul(3))
   })
 
   it("rejects a window past the end", () => {
     expect(() => rows().narrow(0, 3, 2)).toThrow(
-      /narrow\(0, 3, 2\) is out of range for \[4, 2\]/
+      /narrow\(0, 3, 2\) is out of range for \[4, 2\]/,
     )
     expect(() => rows().narrow(0, -1, 2)).toThrow(
-      /out of range/
+      /out of range/,
     )
   })
 })
@@ -250,10 +243,10 @@ describe("comparisons", () => {
     expect(
       tensor([[1], [3]])
         .gt(tensor([0, 2, 4]))
-        .toArray()
+        .toArray(),
     ).toEqual([
       [1, 0, 0],
-      [1, 1, 0]
+      [1, 1, 0],
     ])
   })
 
@@ -265,9 +258,7 @@ describe("comparisons", () => {
   })
 
   it("agree across eager, lazy and native", () => {
-    expectAgree(() =>
-      a().gt(0).add(a().le(1)).mul(a().eq(2).add(1))
-    )
+    expectAgree(() => a().gt(0).add(a().le(1)).mul(a().eq(2).add(1)))
   })
 })
 
@@ -276,26 +267,35 @@ describe("maximum, minimum and clamp", () => {
     expect(
       tensor([1, 5])
         .maximum(tensor([4, 2]))
-        .toArray()
+        .toArray(),
     ).toEqual([4, 5])
     expect(
       tensor([1, 5])
         .minimum(tensor([4, 2]))
-        .toArray()
+        .toArray(),
     ).toEqual([1, 2])
     expect(tensor([1, 5]).maximum(3).toArray()).toEqual([
-      3, 5
+      3,
+      5,
     ])
   })
 
   it("clamp into a range, either end open", () => {
     const x = () => tensor([-3, -1, 0, 1, 3])
     expect(x().clamp(-1, 1).toArray()).toEqual([
-      -1, -1, 0, 1, 1
+      -1,
+      -1,
+      0,
+      1,
+      1,
     ])
     expect(x().clamp(0).toArray()).toEqual([0, 0, 0, 1, 3])
     expect(x().clamp(null, 0).toArray()).toEqual([
-      -3, -1, 0, 0, 0
+      -3,
+      -1,
+      0,
+      0,
+      0,
     ])
   })
 
@@ -321,8 +321,9 @@ describe.skipIf(!isNativeAvailable())(
         const e = 2048
         const x = Tensor.rand([n, c]) as AnyTensor
         const index = Tensor.zeros([e]) as AnyTensor
-        for (let i = 0; i < e; i++)
-          (index.data as Float32Array)[i] = (i * 7) % n
+        for (let i = 0; i < e; i++) {
+          ;(index.data as Float32Array)[i] = (i * 7) % n
+        }
         const build = () =>
           x
             .indexSelect(index)
@@ -337,12 +338,13 @@ describe.skipIf(!isNativeAvailable())(
         const a = eager.data
         const b = native.data
         expect(b.length).toBe(a.length)
-        for (let i = 0; i < a.length; i++)
+        for (let i = 0; i < a.length; i++) {
           expect(
             Math.abs(a[i]! - b[i]!),
-            `${device} element ${i}`
+            `${device} element ${i}`,
           ).toBeLessThan(1e-4)
-      }
+        }
+      },
     )
 
     // Above CPU_HINT_MAX_WORK (65536 elements) the graph runs through
@@ -374,11 +376,12 @@ describe.skipIf(!isNativeAvailable())(
       const a = eager.data
       const b = native.data
       let worst = 0
-      for (let i = 0; i < a.length; i++)
+      for (let i = 0; i < a.length; i++) {
         worst = Math.max(worst, Math.abs(a[i]! - b[i]!))
+      }
       expect(worst).toBeLessThan(1e-4)
     })
-  }
+  },
 )
 
 // Degenerate shapes: a zero-length dim is legal and the parallel kernels
@@ -386,9 +389,11 @@ describe.skipIf(!isNativeAvailable())(
 // rather than return an empty result.
 describe("empty dimensions", () => {
   const each = (fn: () => AnyTensor) => {
-    for (const native of isNativeAvailable() ?
-      [false, true]
-    : [false]) {
+    for (
+      const native of isNativeAvailable()
+        ? [false, true]
+        : [false]
+    ) {
       configure({ lazy: false })
       const eager = fn()
       if (native) useNative()
@@ -396,7 +401,7 @@ describe("empty dimensions", () => {
       const other = fn()
       expect(other.shape).toEqual(eager.shape)
       expect(Array.from(other.data)).toEqual(
-        Array.from(eager.data)
+        Array.from(eager.data),
       )
       disableNative()
       configure({ lazy: false })
@@ -413,7 +418,7 @@ describe("empty dimensions", () => {
       (Tensor.zeros([3, 0]) as AnyTensor).scatterAdd(
         Tensor.zeros([0]) as any,
         0,
-        1
+        1,
       )
     )
   })
@@ -429,15 +434,13 @@ describe("empty dimensions", () => {
   it("multiplies matrices with a zero inner dim", () => {
     each(() =>
       (Tensor.zeros([4, 0]) as AnyTensor).matmul(
-        Tensor.zeros([0, 3]) as any
+        Tensor.zeros([0, 3]) as any,
       )
     )
   })
 
   it("narrows and cats an empty window", () => {
-    each(() =>
-      Tensor.cat(rows().narrow(1, 0, 0), rows(), 1)
-    )
+    each(() => Tensor.cat(rows().narrow(1, 0, 0), rows(), 1))
   })
 })
 
@@ -455,12 +458,15 @@ describe.skipIf(!isNativeAvailable())(
       const x = Tensor.zeros([rows, cols]) as AnyTensor
       const data = x.data as Float32Array
       // deterministic, and deliberately near-cancelling
-      for (let i = 0; i < data.length; i++)
+      for (let i = 0; i < data.length; i++) {
         data[i] = Math.sin(i * 12.9898) * 0.5
+      }
       const exact = new Float64Array(cols)
-      for (let i = 0; i < rows; i++)
-        for (let c = 0; c < cols; c++)
+      for (let i = 0; i < rows; i++) {
+        for (let c = 0; c < cols; c++) {
           exact[c]! += data[i * cols + c]!
+        }
+      }
       let terms = 0
       for (const v of data) terms += Math.abs(v)
       return { x, exact, terms: terms / cols }
@@ -481,22 +487,22 @@ describe.skipIf(!isNativeAvailable())(
         const band = terms * 1e-5
         for (let c = 0; c < cols; c++) {
           const eagerError = Math.abs(
-            eager.data[c]! - exact[c]!
+            eager.data[c]! - exact[c]!,
           )
           const nativeError = Math.abs(
-            native.data[c]! - exact[c]!
+            native.data[c]! - exact[c]!,
           )
           expect(
             nativeError,
-            `column ${c}: ${native.data[c]} vs exact ${exact[c]}`
+            `column ${c}: ${native.data[c]} vs exact ${exact[c]}`,
           ).toBeLessThan(band)
           // and not materially worse than the order it replaced
           expect(
             nativeError,
-            `column ${c}: native error ${nativeError} vs eager ${eagerError}`
+            `column ${c}: native error ${nativeError} vs eager ${eagerError}`,
           ).toBeLessThan(Math.max(eagerError * 8, band))
         }
-      }
+      },
     )
 
     it("keeps the dim when asked", () => {
@@ -506,10 +512,11 @@ describe.skipIf(!isNativeAvailable())(
       configure({ lazy: true })
       const kept = x.sum(0, true)
       expect(kept.shape).toEqual([1, cols])
-      for (let c = 0; c < cols; c++)
+      for (let c = 0; c < cols; c++) {
         expect(
-          Math.abs(kept.get(0, c) - exact[c]!)
+          Math.abs(kept.get(0, c) - exact[c]!),
         ).toBeLessThan(terms * 1e-5)
+      }
     })
 
     it("still reduces the inner dim correctly", () => {
@@ -522,12 +529,13 @@ describe.skipIf(!isNativeAvailable())(
       const native = x.sum(1)
       expect(native.shape).toEqual([8192])
       let worst = 0
-      for (let i = 0; i < 8192; i++)
+      for (let i = 0; i < 8192; i++) {
         worst = Math.max(
           worst,
-          Math.abs(eager.data[i]! - native.data[i]!)
+          Math.abs(eager.data[i]! - native.data[i]!),
         )
+      }
       expect(worst).toBeLessThan(1e-6)
     })
-  }
+  },
 )

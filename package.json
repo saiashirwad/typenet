@@ -8,7 +8,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "build:native": "pnpm -C native build",
-    "format": "prettier --write .",
+    "format": "dprint fmt",
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
     "example:gat": "vite-node examples/gat.ts",
@@ -21,6 +21,7 @@
   "devDependencies": {
     "@typenet/native": "workspace:*",
     "@types/node": "^26.1.1",
+    "dprint": "^0.55.2",
     "prettier": "^3.5.3",
     "tsover": "npm:tsover-generic-overloads@6.0.2-generic.0",
     "typescript": "npm:tsover-generic-overloads@6.0.2-generic.0",

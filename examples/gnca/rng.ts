@@ -19,11 +19,9 @@ export function rng(seed: number): Rng {
     /** Integer in [0, n). */
     int: (n: number) => Math.floor(next() * n),
     /** Uniform in [lo, hi). */
-    range: (lo: number, hi: number) =>
-      lo + next() * (hi - lo),
+    range: (lo: number, hi: number) => lo + next() * (hi - lo),
     /** Integer in [lo, hi], both ends included. */
-    intRange: (lo: number, hi: number) =>
-      lo + Math.floor(next() * (hi - lo + 1)),
+    intRange: (lo: number, hi: number) => lo + Math.floor(next() * (hi - lo + 1)),
     /** `count` distinct entries of `values`, order shuffled. */
     sample: (values: ArrayLike<number>, count: number) => {
       const pool = Array.from(values)
@@ -33,7 +31,7 @@ export function rng(seed: number): Rng {
         ;[pool[i], pool[j]] = [pool[j]!, pool[i]!]
       }
       return pool.slice(0, take)
-    }
+    },
   }
 }
 
@@ -48,7 +46,7 @@ export interface Rng {
 /** The `q`th quantile of `values`, linearly interpolated (numpy's default). */
 export function quantile(
   values: ArrayLike<number>,
-  q: number
+  q: number,
 ): number {
   const sorted = Array.from(values).sort((a, b) => a - b)
   if (sorted.length === 0) return NaN

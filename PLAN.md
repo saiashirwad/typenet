@@ -65,7 +65,7 @@ Gate: gradcheck green in both modes; negative tests green.
    ```ts
    const step = compile(
      (x: Tensor<[4, 2]>, t: Tensor<[4, 1]>) =>
-       ((net.forward(x) - t) ** 2).mean()
+       ((net.forward(x) - t) ** 2).mean(),
    )
    step(inputData, targetData) // reuse: swap buffers, one FFI hop
    ```
