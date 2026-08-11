@@ -618,7 +618,14 @@ a sampling profiler. It found, in order:
 Net effect on the graph-CA training step (1024 nodes × batch 8 = 8192
 nodes, 76592 edges, forward + backward + Adam): **141 ms → ~16 ms per
 rolled-out time step**, about 9x. At the reference recipe's rollout
-lengths that is ~1 training step/s.
+lengths that is 0.7 training steps/s.
+
+And it trains: run side by side against the PyTorch original on the same
+machine and settings, the losses descend together (step 200/600/1000/1400
+— PyTorch 0.150/0.133/0.116/0.098, typenet 0.161/0.126/0.112/0.085; the
+random streams differ, so agreement at this level is the point, not the
+small lead). The heal probe improves the way it should too, with healed
+overtaking grown — the rule is regenerating rather than just drawing.
 
 ### Where the remaining gap is
 

@@ -93,12 +93,34 @@ compares it to the threshold. This counts live neighbours instead, which
 is the same predicate — "this node or any neighbour is above threshold" —
 through a scatter-add rather than a scatter-max, and needs one op fewer.
 
+## Does it actually learn?
+
+Same settings, same recipe, side by side against the PyTorch original
+(Apple M5; heart target, 1024 nodes, k=8, batch 8). Different random
+streams, so the two are not expected to agree step for step — only to
+descend the same way, which they do:
+
+| step | PyTorch loss | typenet loss |
+| ---- | ------------ | ------------ |
+| 200  | 0.1496       | 0.1608       |
+| 400  | 0.1458       | 0.1450       |
+| 600  | 0.1326       | 0.1257       |
+| 800  | 0.1202       | 0.1183       |
+| 1000 | 0.1159       | 0.1120       |
+| 1200 | 0.1037       | 0.0981       |
+| 1400 | 0.0982       | 0.0850       |
+
+And the heal probe, which is the number that matters, improves the way it
+should — healed overtaking grown, meaning the rule is regenerating rather
+than just drawing: PyTorch at step 1000 grown 0.139 / healed 0.132,
+typenet at step 1200 grown 0.100 / healed 0.076. The reference's
+from-scratch 8000-step run finishes at grown 0.046 / healed 0.018.
+
 ## Speed
 
-On an Apple M5, at the reference settings (1024 nodes, batch 8, so 8192
-nodes and 76592 edges, forward + backward + Adam): about **16 ms per
-rolled-out time step**, or ~1 training step/s at the reference rollout
-lengths. PyTorch on MPS does 2.9 steps/s on the same machine.
+At those settings (8192 nodes, 76592 edges, forward + backward + Adam):
+about **16 ms per rolled-out time step**, or **0.7 training steps/s**
+against PyTorch on MPS at **2.7**, so ~4x slower.
 
 The gap is one thing: candle's CPU elementwise kernels are
 single-threaded, so the process sits at 100% of one core out of ten.
