@@ -7,6 +7,12 @@ export declare function evalGraph(graphJson: string, leaves: Float32Array, seed:
 /** Evaluate a plan created by `prepareGraph`. */
 export declare function evalPrepared(handle: number, leaves: Float32Array, seed: number): Readback
 
+/**
+ * How many prepared-graph handles are currently held. Used by tests to
+ * assert that `releaseGraph` / compiled `dispose()` actually frees them.
+ */
+export declare function preparedGraphCount(): number
+
 /** Parse and plan a graph once, returning a handle for `evalPrepared`. */
 export declare function prepareGraph(graphJson: string): number
 

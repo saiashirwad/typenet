@@ -14,6 +14,7 @@ import {
 import {
   disableNative,
   isNativeAvailable,
+  preparedGraphCountNative,
   useNative
 } from "../src/backends/native.ts"
 
@@ -242,5 +243,25 @@ describe.skipIf(!available)("compile (native)", () => {
     configure({ lazy: false })
     const reference = mseLoss(net.forward(x), t)
     expectClose(reference, loss)
+    step.dispose()
+  })
+
+  it("dispose releases the native prepared-graph handle", () => {
+    useNative()
+    const before = preparedGraphCountNative()
+    const compiled = []
+    for (let i = 0; i < 16; i++) {
+      // Distinct graphs so each prepare allocates its own handle.
+      const scale = i + 1
+      const fn = compile((x: AnyTensor) => x.mul(scale).sum())
+      fn(tensor([1, 2, 3, 4]))
+      compiled.push(fn)
+    }
+    expect(preparedGraphCountNative()).toBe(before + 16)
+    for (const fn of compiled) fn.dispose()
+    expect(preparedGraphCountNative()).toBe(before)
+    // dispose is idempotent
+    for (const fn of compiled) fn.dispose()
+    expect(preparedGraphCountNative()).toBe(before)
   })
 })

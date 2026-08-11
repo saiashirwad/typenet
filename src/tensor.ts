@@ -1658,15 +1658,21 @@ export function printGraph(
  * pass and writes the updated values back into the parameter (and
  * optimizer state) buffers on every call. Other forcing points
  * (`.data`, `.item()`, ...) inside `fn` remain unsupported.
+ *
+ * Call `.dispose()` when done to free the native prepared-graph handle
+ * (no-op on the interpreter path, and safe to call more than once).
  */
+export type CompiledFn<
+  Args extends AnyTensor[],
+  R extends AnyTensor | AnyTensor[]
+> = ((
+  ...inputs: { [K in keyof Args]: CompiledInput<Args[K]> }
+) => R) & { dispose(): void }
+
 export function compile<
   Args extends AnyTensor[],
   R extends AnyTensor | AnyTensor[]
->(
-  fn: (...args: Args) => R
-): (
-  ...inputs: { [K in keyof Args]: CompiledInput<Args[K]> }
-) => R {
+>(fn: (...args: Args) => R): CompiledFn<Args, R> {
   type State = {
     placeholders: AnyTensor[]
     outputs: AnyTensor[]
@@ -1917,7 +1923,7 @@ export function compile<
     )
   }
 
-  return ((...inputs: readonly unknown[]) => {
+  const compiled = ((...inputs: readonly unknown[]) => {
     if (!state) state = trace(inputs)
     swapInputs(state, inputs)
     const outputs =
@@ -1925,9 +1931,16 @@ export function compile<
         runNative(state)
       : runInterpreter(state)
     return (state.tuple ? outputs : outputs[0]) as R
-  }) as (
-    ...inputs: { [K in keyof Args]: CompiledInput<Args[K]> }
-  ) => R
+  }) as CompiledFn<Args, R>
+
+  compiled.dispose = () => {
+    const handle = state?.native?.handle
+    if (handle == null) return
+    nativeBackend.releaseGraphNative(handle)
+    state!.native!.handle = null
+  }
+
+  return compiled
 }
 
 /**

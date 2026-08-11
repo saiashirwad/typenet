@@ -21,6 +21,7 @@ export type NativeModule = {
     seed: number
   ): ArrayBuffer
   releaseGraph(handle: number): void
+  preparedGraphCount(): number
   deviceName(): string
 }
 
@@ -166,4 +167,9 @@ export function evalPreparedNative(
 /** Release a prepared graph. */
 export function releaseGraphNative(handle: number): void {
   loadNative()?.releaseGraph(handle)
+}
+
+/** How many prepared-graph handles the native side currently holds. */
+export function preparedGraphCountNative(): number {
+  return loadNative()?.preparedGraphCount() ?? 0
 }

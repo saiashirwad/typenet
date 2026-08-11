@@ -27,7 +27,8 @@ export type {
   DefaultParams,
   ShapeOf,
   ParamsOf,
-  NestedNumbers
+  NestedNumbers,
+  CompiledFn
 } from "./src/tensor.ts"
 
 export {

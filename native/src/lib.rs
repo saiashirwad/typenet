@@ -1011,6 +1011,13 @@ pub fn release_graph(handle: u32) {
     handles().lock().unwrap().remove(&handle);
 }
 
+/// How many prepared-graph handles are currently held. Used by tests to
+/// assert that `releaseGraph` / compiled `dispose()` actually frees them.
+#[napi(js_name = "preparedGraphCount")]
+pub fn prepared_graph_count() -> u32 {
+    handles().lock().unwrap().len() as u32
+}
+
 /// Evaluate a plan created by `prepareGraph`.
 #[napi(js_name = "evalPrepared")]
 pub fn eval_prepared(
