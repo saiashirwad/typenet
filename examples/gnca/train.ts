@@ -298,9 +298,12 @@ function visibleLoss(
  * enough to keep the rule from locking onto one horizon, few enough
  * that the compiled graphs are worth their memory.
  */
+/** loss, mse, and the rolled-out state to write back into the pool. */
+type StepResult = [AnyTensor, AnyTensor, AnyTensor]
+
 const rollouts = new Map<
   number,
-  (x0: AnyTensor) => [AnyTensor, AnyTensor]
+  (x0: AnyTensor) => StepResult
 >()
 
 function trainStep(
@@ -309,7 +312,7 @@ function trainStep(
 ): { loss: number; mse: number; state: Float32Array } {
   let step = rollouts.get(steps)
   if (!step) {
-    step = compile((input: AnyTensor) => {
+    step = compile((input: AnyTensor): StepResult => {
       const noised =
         options.noise > 0 ?
           input.add(
@@ -339,16 +342,13 @@ function trainStep(
       loss.backward()
       clipGradNorm(params, options.clip)
       optimizer.step()
-      return [loss, mse, x] as any
-    }) as any
-    rollouts.set(steps, step!)
+      return [loss, mse, x]
+    })
+    rollouts.set(steps, step)
   }
-  const inputs = tensorFrom(x0, [B * N, C])
-  const [loss, mse, state] = (step as any)(inputs) as [
-    AnyTensor,
-    AnyTensor,
-    AnyTensor
-  ]
+  const [loss, mse, state] = step(
+    tensorFrom(x0, [B * N, C])
+  )
   return {
     loss: loss.item(),
     mse: mse.item(),
