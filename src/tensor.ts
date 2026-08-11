@@ -2152,8 +2152,6 @@ export class Tensor<
     return this as any
   }
 
-  dispose(): void {}
-
   to<const D extends DType>(
     dtype: D
   ): Tensor<S, Merge<P, { dtype: D }>> {

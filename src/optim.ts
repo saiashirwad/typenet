@@ -108,8 +108,6 @@ export abstract class Optimizer {
     for (const p of this.params) p.zeroGrad()
   }
 
-  dispose(): void {}
-
   abstract step(): void
 }
 
@@ -189,7 +187,7 @@ export class SGD extends Optimizer {
       finishGraphUpdates(updates, grads)
   }
 
-  override dispose(): void {
+  dispose(): void {
     this.velocities = null
   }
 }
@@ -325,7 +323,7 @@ export class Adam extends Optimizer {
       finishGraphUpdates(updates, grads)
   }
 
-  override dispose(): void {
+  dispose(): void {
     this.m = []
     this.v = []
     this.graphM = null
