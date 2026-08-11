@@ -21,33 +21,75 @@ import {
   cat,
   uniform
 } from "../../index.ts"
+import type {
+  DimAdd,
+  DimMul,
+  Shape
+} from "../../src/shape.ts"
 import { type Edges, inDegrees } from "./graphs.ts"
 
-type AnyTensor = Tensor<any, any>
+/**
+ * Channels the rule perceives: its own state, the neighbour mean, the
+ * gated difference mean, and one degree scalar.
+ */
+export type Percept<C extends number> = DimAdd<
+  DimMul<3, C>,
+  1
+>
+
+/** The three channel blocks the gate is linear in. */
+export type GateIn<C extends number> = DimMul<3, C>
+
+/**
+ * Assert a shape the algebra will not derive.
+ *
+ * Every dim asserted below is right, and the runtime checks it. But
+ * composing broadcasts over an *unresolved generic* dim leaves TypeScript
+ * holding expressions like `BroadcastDim<C, C>` that it will not simplify
+ * back to `C` — so a chain of ops on a `Tensor<[N, C]>` stops matching
+ * `[N, C]` even though that is exactly what it is. (Each dim rule resolves
+ * on its own; it is the composition that does not.)
+ *
+ * This appears only inside the generic kernel below. Every public
+ * signature in this file is exact, so every *call site* is fully checked —
+ * which is the part that catches mistakes.
+ */
+function shaped<S extends Shape>(
+  t: Tensor<any, any>
+): Tensor<S> {
+  return t as Tensor<S>
+}
 
 /**
  * Everything about the graph the rule needs, as tensors. The graph never
- * changes during a run, so the degree terms are computed once here
- * rather than per step inside the rollout.
+ * changes during a run, so the degree terms are computed once here rather
+ * than per step inside the rollout.
+ *
+ * `N` is the node count and `E` the edge count, both carried in the type,
+ * so a rule cannot be handed a different graph's edge list and the per-edge
+ * tensors inside `forward` stay tied to the state they came from.
  */
-export interface GraphTensors {
-  /** Source node of each edge, shape [E]. */
-  readonly src: AnyTensor
-  /** Destination node of each edge, shape [E]. */
-  readonly dst: AnyTensor
+export interface GraphTensors<
+  N extends number,
+  E extends number = number
+> {
+  /** Source node of each edge. */
+  readonly src: Tensor<[E]>
+  /** Destination node of each edge. */
+  readonly dst: Tensor<[E]>
   /** Node count these indices address. */
-  readonly nodes: number
-  /** 1 / max(in-degree, 1), shape [nodes, 1]. */
-  readonly invDegree: AnyTensor
-  /** log(1 + in-degree), shape [nodes, 1]. */
-  readonly logDegree: AnyTensor
+  readonly nodes: N
+  /** 1 / max(in-degree, 1). */
+  readonly invDegree: Tensor<[N, 1]>
+  /** log(1 + in-degree). */
+  readonly logDegree: Tensor<[N, 1]>
 }
 
 /** Build the rule's view of an edge list. */
-export function graphTensors(
-  edges: Edges,
-  nodes: number
-): GraphTensors {
+export function graphTensors<
+  N extends number,
+  E extends number
+>(edges: Edges<E>, nodes: N): GraphTensors<N, E> {
   const degree = inDegrees(edges, nodes)
   const invDegree = new Float32Array(nodes)
   const logDegree = new Float32Array(nodes)
@@ -56,124 +98,148 @@ export function graphTensors(
     logDegree[i] = Math.log1p(degree[i]!)
   }
   return {
-    src: fromData(edges.src, [edges.count]),
-    dst: fromData(edges.dst, [edges.count]),
+    src: fromData<[E]>(edges.src, [edges.count]),
+    dst: fromData<[E]>(edges.dst, [edges.count]),
     nodes,
-    invDegree: fromData(invDegree, [nodes, 1]),
-    logDegree: fromData(logDegree, [nodes, 1])
+    invDegree: fromData<[N, 1]>(invDegree, [nodes, 1]),
+    logDegree: fromData<[N, 1]>(logDegree, [nodes, 1])
   }
 }
 
-function fromData(
+/** A tensor of the given shape holding `data`. */
+function fromData<S extends Shape>(
   data: Float32Array,
   shape: number[]
-): AnyTensor {
-  const t = Tensor.zeros(shape) as AnyTensor
+): Tensor<S> {
+  const t = Tensor.zeros(shape)
   ;(t.data as Float32Array).set(data)
-  return t
+  return shaped<S>(t)
 }
 
-/** Concatenate several tensors along `dim`; typenet's cat is binary. */
-function concat(
-  parts: AnyTensor[],
-  dim: number
-): AnyTensor {
-  return parts.reduce(
-    (a, b) => cat(a, b, dim as any) as AnyTensor
-  )
-}
-
-export class GraphNCA extends Module {
-  readonly channels: number
-  readonly hidden: number
+/**
+ * The update rule, generic over its channel count `C` and hidden width
+ * `H`. Construct it with literals — `new GraphNCA(16, 128)` — and the
+ * perception width, the gate's three blocks and the state shape are all
+ * derived rather than assumed: handing `forward` a state with the wrong
+ * channel count, or a different graph's edge list, is a compile error.
+ */
+export class GraphNCA<
+  C extends number = 16,
+  H extends number = 128
+> extends Module {
+  readonly channels: C
+  readonly hidden: H
   /** Perception to hidden. Input is three channel blocks plus the degree. */
-  readonly inner: Linear<number, number>
+  readonly inner: Linear<Percept<C>, H>
   /** Hidden to the state increment. Zero-init, so the rule starts as identity. */
-  readonly outer: Linear<number, number>
+  readonly outer: Linear<H, C>
   /** Per-edge, per-channel diffusion conductivity. */
-  readonly gate: Linear<number, number>
+  readonly gate: Linear<GateIn<C>, C>
 
-  constructor(channels = 16, hidden = 128) {
+  constructor(channels: C = 16 as C, hidden: H = 128 as H) {
     super()
     this.channels = channels
     this.hidden = hidden
-    this.inner = new Linear(3 * channels + 1, hidden)
+    // The widths are right by construction, but TypeScript cannot do
+    // arithmetic on a runtime expression, so the derived input dims are
+    // stated. Percept<C> and GateIn<C> are that same arithmetic in types.
+    this.inner = new Linear(
+      3 * channels + 1,
+      hidden
+    ) as Linear<Percept<C>, H>
     this.outer = new Linear(hidden, channels, {
       bias: false
     })
     // Zero the last layer: the initial rule is the identity, so growth
     // starts from a standing seed rather than from noise.
     ;(this.outer.weight.data as Float32Array).fill(0)
-    this.gate = new Linear(3 * channels, channels)
-    // Zero the gate too. 2·sigmoid(0) = 1 exactly, so at init the gate
-    // is plain identity diffusion and a warm start is exact.
+    this.gate = new Linear(
+      3 * channels,
+      channels
+    ) as Linear<GateIn<C>, C>
+    // Zero the gate too. 2·sigmoid(0) = 1 exactly, so at init the gate is
+    // plain identity diffusion and a warm start is exact.
     ;(this.gate.weight.data as Float32Array).fill(0)
     ;(this.gate.bias!.data as Float32Array).fill(0)
   }
 
   /**
-   * One step of the automaton. `x` is [nodes, channels]; for a batch the
-   * copies are stacked into the node dimension and `graph` carries the
-   * correspondingly offset edge list.
+   * One step of the automaton: `[N, C]` state in, `[N, C]` state out.
+   *
+   * `N` is generic because a batch is B copies of the graph stacked into
+   * the node dimension — the same rule runs on one graph or eight side by
+   * side, and `graph` has to be the edge list for whichever it is.
    */
-  forward(
-    x: AnyTensor,
-    graph: GraphTensors,
+  forward<N extends number, E extends number>(
+    x: Tensor<[N, C]>,
+    // NoInfer pins N to the state, so the edge list is *checked* against
+    // it rather than being a second place N could come from. Handing a
+    // batched state the un-batched graph is the mistake this catches, and
+    // it is a silent wrong answer at runtime.
+    graph: GraphTensors<NoInfer<N>, E>,
     updateRate = 0.5
-  ): AnyTensor {
+  ): Tensor<[N, C]> {
     const c = this.channels
     const { src, dst, nodes, invDegree } = graph
 
     // Gather each edge's endpoints once; both terms below need them.
-    const fromNode = x.indexSelect(src)
-    const toNode = x.indexSelect(dst)
-    const meanNeighbour = fromNode
-      .scatterAdd(dst, nodes)
-      .mul(invDegree)
-    const difference = fromNode.sub(toNode)
+    const fromNode: Tensor<[E, C]> = x.indexSelect(src)
+    const toNode: Tensor<[E, C]> = x.indexSelect(dst)
+    const difference: Tensor<[E, C]> = fromNode.sub(toNode)
+
+    /** Sum per-edge messages onto their destination node, and average. */
+    const aggregate = (
+      messages: Tensor<[E, C]>
+    ): Tensor<[N, C]> =>
+      shaped(messages.scatterAdd(dst, nodes).mul(invDegree))
 
     // The gate is linear in [x_src, x_dst, |x_src - x_dst|], so its two
-    // endpoint terms are one matmul over nodes, then gathered per edge.
-    // As a single (E, 3C) matmul over edges it would cost several times
-    // as much — there are many more edges than nodes.
-    const weight = this.gate.weight as AnyTensor
+    // endpoint terms are one matmul over nodes, then gathered per edge. As
+    // a single (E, 3C) matmul over edges it would cost several times as
+    // much — there are many more edges than nodes.
+    const weight = this.gate.weight
     const endpoints = x.matmul(
       cat(weight.narrow(0, 0, c), weight.narrow(0, c, c), 1)
     )
-    const gate = endpoints
-      .narrow(1, 0, c)
-      .indexSelect(src)
-      .add(endpoints.narrow(1, c, c).indexSelect(dst))
-      .add(
-        difference
-          .abs()
-          .matmul(weight.narrow(0, 2 * c, c))
-          .add(this.gate.bias as AnyTensor)
-      )
-      .sigmoid()
-      .mul(2)
-    const meanDifference = gate
-      .mul(difference)
-      .scatterAdd(dst, nodes)
-      .mul(invDegree)
+    const gate: Tensor<[E, C]> = shaped(
+      endpoints
+        .narrow(1, 0, c)
+        .indexSelect(src)
+        .add(endpoints.narrow(1, c, c).indexSelect(dst))
+        .add(
+          difference
+            .abs()
+            .matmul(weight.narrow(0, 2 * c, c))
+            .add(this.gate.bias!)
+        )
+        .sigmoid()
+        .mul(2)
+    )
 
     // log1p(degree) goes LAST, so warm-starting from a checkpoint whose
     // perception lacked it is a plain zero-column pad of the first layer.
-    const perception = concat(
-      [x, meanNeighbour, meanDifference, graph.logDegree],
-      1
+    const perception: Tensor<[N, Percept<C>]> = shaped(
+      cat(
+        cat(
+          cat(x, aggregate(fromNode), 1),
+          aggregate(shaped<[E, C]>(gate.mul(difference))),
+          1
+        ),
+        graph.logDegree,
+        1
+      )
     )
-    const increment = this.outer.forward(
-      this.inner.forward(perception).relu() as any
-    ) as AnyTensor
+    const increment: Tensor<[N, C]> = this.outer.forward(
+      this.inner.forward(perception).relu()
+    )
 
-    // Stochastic per-node update: the classic NCA trick for robustness
-    // to an asynchronous update order. uniform() is a graph node, so a
+    // Stochastic per-node update: the classic NCA trick for robustness to
+    // an asynchronous update order. uniform() is a graph node, so a
     // compiled step redraws this mask on every call.
-    const mask = uniform([nodes, 1] as [number, number]).lt(
-      updateRate
-    ) as AnyTensor
-    return x.add(increment.mul(mask))
+    const mask: Tensor<[N, 1]> = shaped(
+      uniform([nodes, 1]).lt(updateRate)
+    )
+    return shaped(x.add(increment.mul(mask)))
   }
 }
 
@@ -182,25 +248,31 @@ export class GraphNCA extends Module {
  * graph equivalent of the growing NCA's 3×3 alive mask.
  *
  * The reference takes a max of alpha over neighbours and compares. This
- * counts live neighbours instead: the same predicate ("any neighbour
- * above threshold") through a scatter-add rather than a scatter-max.
+ * counts live neighbours instead: the same predicate ("any neighbour above
+ * threshold") through a scatter-add rather than a scatter-max.
  */
-export function aliveMask(
-  x: AnyTensor,
-  graph: GraphTensors,
+export function aliveMask<
+  N extends number,
+  E extends number,
+  C extends number
+>(
+  x: Tensor<[N, C]>,
+  graph: GraphTensors<NoInfer<N>, E>,
   threshold = 0.1
-): AnyTensor {
-  const live = x.narrow(1, 3, 1).gt(threshold)
+): Tensor<[N, 1]> {
+  const live: Tensor<[N, 1]> = x
+    .narrow(1, 3, 1)
+    .gt(threshold)
   const liveNeighbours = live
     .indexSelect(graph.src)
     .scatterAdd(graph.dst, graph.nodes)
-  return live.add(liveNeighbours).gt(0)
+  return shaped(live.add(liveNeighbours).gt(0))
 }
 
 /**
  * All-empty node states except one seed node, whose alpha and hidden
- * channels start at 1. Flat [batch · nodes, channels], the layout the
- * rule takes.
+ * channels start at 1. Flat [batch · nodes, channels], the layout the rule
+ * takes.
  */
 export function seedState(
   batch: number,

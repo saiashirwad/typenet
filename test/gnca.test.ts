@@ -126,7 +126,9 @@ const pos = {
 const edges = knnGraph(pos, reference.k)
 
 function buildModel(): {
-  model: GraphNCA
+  // The fixture's channel count is read from JSON, so it is `number`
+  // rather than a literal — see the type tests for the literal case.
+  model: GraphNCA<number, number>
   params: AnyTensor[]
 } {
   const model = new GraphNCA(C, reference.hidden)
@@ -143,7 +145,7 @@ function buildModel(): {
 
 /** The rollout the fixture recorded: alive-mask, step, mask again. */
 function rollout(
-  model: GraphNCA,
+  model: GraphNCA<number, number>,
   x0: AnyTensor,
   graph: ReturnType<typeof graphTensors>
 ): { state: AnyTensor; loss: AnyTensor; mse: AnyTensor } {

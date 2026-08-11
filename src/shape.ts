@@ -11,14 +11,20 @@ export type Shape = number[]
 export type IsDynamic<S extends Shape> =
   number[] extends S ? true : false
 
-type NumAdd<A extends number, B extends number> =
+/**
+ * Dimension arithmetic, for shapes derived from a generic dim — a percept
+ * of `3 * C + 1` channels, say. Each fails open to `number` when either
+ * operand is not a literal, which is how the rest of the algebra treats an
+ * unknown dim: a wildcard that checks nothing rather than an error.
+ */
+export type DimAdd<A extends number, B extends number> =
   number extends A ? number
   : number extends B ? number
   : Call<Numbers.Add<A, B>> extends infer R extends number ?
     R
   : number
 
-type NumMul<A extends number, B extends number> =
+export type DimMul<A extends number, B extends number> =
   number extends A ? number
   : number extends B ? number
   : Call<Numbers.Mul<A, B>> extends infer R extends number ?
@@ -76,7 +82,7 @@ export type Product<
   : S extends (
     [infer X extends number, ...infer Xs extends number[]]
   ) ?
-    Product<Xs, NumMul<Acc, X>>
+    Product<Xs, DimMul<Acc, X>>
   : Acc
 
 export type NumEl<S extends Shape> = Product<S>
@@ -89,7 +95,7 @@ export type NormalizeDim<
   D extends number
 > =
   number extends D ? number
-  : IsNegative<D> extends true ? NumAdd<S["length"], D>
+  : IsNegative<D> extends true ? DimAdd<S["length"], D>
   : D
 
 export type IsValidDim<S extends Shape, D extends number> =
@@ -285,7 +291,7 @@ type ProductSkipNegOne<
   ) ?
     X extends -1 ?
       ProductSkipNegOne<Xs, Acc>
-    : ProductSkipNegOne<Xs, NumMul<Acc, X>>
+    : ProductSkipNegOne<Xs, DimMul<Acc, X>>
   : Acc
 
 type CountNegOnes<
@@ -315,7 +321,7 @@ export type ViewCheck<S extends Shape, V extends number[]> =
       Product<V> extends Product<S> ?
         unknown
       : ErrorMessage<`Cannot view tensor of shape ${ShowShape<S>} as ${ShowShape<V>} (${Product<S>} vs ${Product<V>} elements)`>
-    : NumMul<
+    : DimMul<
       ProductSkipNegOne<V>,
       NumDiv<Product<S>, ProductSkipNegOne<V>>
     > extends Product<S> ?
@@ -451,7 +457,7 @@ type NormalizeUnsqueezeDim<
 > =
   number extends D ? number
   : IsNegative<D> extends true ?
-    NumAdd<NumAdd<S["length"], 1>, D>
+    DimAdd<DimAdd<S["length"], 1>, D>
   : D
 
 export type UnsqueezeCheck<
@@ -519,7 +525,7 @@ type CatDim<
 > = ReplaceAt<
   A,
   I,
-  NumAdd<A[I & keyof A] & number, B[I & keyof B] & number>
+  DimAdd<A[I & keyof A] & number, B[I & keyof B] & number>
 >
 
 export type Cat<

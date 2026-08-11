@@ -266,7 +266,10 @@ const optimizer = new Adam(params, { lr: options.lr })
 function rollout(
   x0: AnyTensor,
   steps: number,
-  graph: GraphTensors
+  // Dims come from command-line flags, so they are `number` — a wildcard
+  // the shape algebra accepts anywhere. A model written with literal
+  // channel counts gets them checked; a CLI cannot.
+  graph: GraphTensors<number>
 ): AnyTensor {
   let x = x0
   for (let i = 0; i < steps; i++) {

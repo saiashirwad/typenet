@@ -18,10 +18,10 @@ export interface Points {
  * A directed edge list, both directions present. `src[i] -> dst[i]`.
  * Held as float32 because that is what typenet index tensors are.
  */
-export interface Edges {
+export interface Edges<E extends number = number> {
   readonly src: Float32Array
   readonly dst: Float32Array
-  readonly count: number
+  readonly count: E
 }
 
 export function point(

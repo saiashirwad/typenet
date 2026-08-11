@@ -367,7 +367,9 @@ function _gatherScatter<
   type _1 = Expect<Equal<typeof gathered.shape, [4096, 16]>>
 
   const aggregated = gathered.scatterAdd(src, 1024)
-  type _2 = Expect<Equal<typeof aggregated.shape, [1024, 16]>>
+  type _2 = Expect<
+    Equal<typeof aggregated.shape, [1024, 16]>
+  >
 
   // an inner dim keeps the outer ones
   const channels = nodes.indexSelect(zeros([3]), 1)
@@ -402,4 +404,63 @@ function _compare(a: Tensor<[2, 3]>, b: Tensor<[3]>) {
   a.maximum(zeros([4]))
 
   return { mask, limited, outer }
+}
+
+// The graph cellular automaton's rule, as a worked example of shapes doing
+// real work: the perception width and the gate's blocks are derived from
+// the channel count, and the state comes back the shape it went in.
+
+import {
+  GraphNCA,
+  aliveMask,
+  type GraphTensors,
+  type Percept
+} from "../examples/gnca/model.ts"
+
+function _gnca(
+  nodes: Tensor<[1024, 16]>,
+  batched: Tensor<[8192, 16]>,
+  graph: GraphTensors<1024, 9574>,
+  batchedGraph: GraphTensors<8192, 76592>,
+  wrongChannels: Tensor<[1024, 8]>,
+  wrongNodes: Tensor<[512, 16]>
+) {
+  const rule = new GraphNCA(16, 128)
+
+  // The derived widths are literals, not `number`.
+  type _1 = Expect<Equal<Percept<16>, 49>>
+  type _2 = Expect<
+    Equal<typeof rule.inner.weight.shape, [49, 128]>
+  >
+  type _3 = Expect<
+    Equal<typeof rule.gate.weight.shape, [48, 16]>
+  >
+  type _4 = Expect<
+    Equal<typeof rule.outer.weight.shape, [128, 16]>
+  >
+
+  // A step returns the state's own shape, for one graph or a batch.
+  const next = rule.forward(nodes, graph)
+  type _5 = Expect<Equal<typeof next.shape, [1024, 16]>>
+  const nextBatch = rule.forward(batched, batchedGraph)
+  type _6 = Expect<
+    Equal<typeof nextBatch.shape, [8192, 16]>
+  >
+
+  // The alive mask is one column per node.
+  const alive = aliveMask(nodes, graph)
+  type _7 = Expect<Equal<typeof alive.shape, [1024, 1]>>
+  const masked = nodes.mul(alive)
+  type _8 = Expect<Equal<typeof masked.shape, [1024, 16]>>
+
+  // @ts-expect-error a rule built for 16 channels cannot step an 8-channel state
+  rule.forward(wrongChannels, graph)
+
+  // @ts-expect-error the state and the graph must agree on the node count
+  rule.forward(wrongNodes, graph)
+
+  // @ts-expect-error and a batched state needs the batched edge list
+  rule.forward(batched, graph)
+
+  return { next, nextBatch, alive }
 }
