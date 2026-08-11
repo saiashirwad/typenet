@@ -111,6 +111,34 @@ One commit per numbered task, messages in the repo's lowercase style. Your
 scratch files (`examples/basic.ts`, `examples/_gatdsl.ts`,
 `examples/_yieldshape.ts`) stay uncommitted, they're yours.
 
+## Phase E — graph neural nets, and training one at speed
+
+Target: describe and train the graph cellular automaton in
+`~/code/graph-cellular-automata`. Landed — see the Phase E section of
+`LAZY.md` for the ops added (gather/scatter, narrow, comparisons, clamp,
+in-graph randomness, compilable Adam, gradient clipping), the stack-safety
+rewrite, the device-default finding, and the optimization pass that took a
+rolled-out training step from 141 ms to ~16 ms per time step.
+
+`examples/gnca` is the port; `test/gnca.test.ts` checks it against the
+PyTorch original rather than trusting it.
+
+Gate: forward and every gradient within 3e-5 relative of PyTorch, in all
+four execution modes — passed. It trains.
+
+Still open, and both are real projects rather than tasks:
+
+8. **Parallel elementwise kernels.** candle's CPU elementwise ops are
+   single-threaded, which is the whole of the remaining ~3x against
+   PyTorch on MPS: one core busy out of ten. Either give the fused loop
+   evaluator strided views so it can win outright (it already has fusion,
+   rayon and BLAS, and trails candle only on `permute`/`narrow`, which are
+   free views there), or parallelize candle's kernels upstream.
+9. **Gradient checkpointing.** Peak memory is every activation the
+   backward pass needs — the same as PyTorch, ~3.4 GB at the reference
+   settings, and linear in rollout length. Recomputing instead of storing
+   would trade that for compute.
+
 ## Current status
 
 - [x] Phase 1: lazy graph (commit 304fe6c)
@@ -122,3 +150,7 @@ scratch files (`examples/basic.ts`, `examples/_gatdsl.ts`,
 - [x] Phase C task 5 — .named() + printGraph() graph dumps
 - [x] Phase C task 6 — type-algebra hardening
 - [x] Phase D — graph optimization: tiny-graph evaluator + fusion + plan cache
+- [x] Phase E — gather/scatter + the rest of the graph-CA op set, stack
+      safety, CPU device default, 9x on a rolled-out training step
+- [ ] Parallel elementwise kernels (the remaining ~3x vs PyTorch MPS)
+- [ ] Gradient checkpointing (peak memory is linear in rollout length)

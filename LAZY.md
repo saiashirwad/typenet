@@ -496,6 +496,167 @@ Known limitations:
   identical graphs with different leaf orderings get separate plans
   (harmless, just more plans).
 
+## Phase E — graph neural nets, and the speed to train one
+
+Status: implemented (2026-08-11). The target was the graph cellular
+automaton in `~/code/graph-cellular-automata`: typenet had to be able to
+describe that model and train it. It can, and `test/gnca.test.ts` proves
+the description is faithful rather than merely plausible — a PyTorch
+script dumps a graph, weights, a rollout, its loss and every gradient,
+and the test rebuilds the graph from the same positions and compares.
+Edge list identical, state and all five parameter gradients within 3e-5
+relative, in eager mode, the interpreter, natively, and compiled.
+
+### Ops added
+
+- **`indexSelect` / `scatterAdd`** — gather rows by index, and sum rows
+  into an output by index. Each is the other's gradient, and between them
+  they are message passing: with an edge list as the index, "read each
+  edge's source state" and "sum each node's incoming messages". Index
+  tensors hold integral values in f32 (there is no integer dtype; an f32
+  mantissa addresses 16.7M rows exactly), converted to u32 once per
+  evaluation on the candle path.
+- **`narrow`** — was internal, used only by `cat`'s backward. Slicing a
+  block of channels out of a state tensor, or splitting a weight matrix
+  into the pieces of a fused layer, is not something a tensor library can
+  leave private. Its gradient is a scatter over the window's indices.
+- **`maximum` / `minimum` / `clamp`** — the gradient goes wholly to
+  whichever operand won, which makes `clamp` fall out as their
+  composition with the piecewise gradient it should have.
+- **`gt` / `ge` / `lt` / `le` / `eq`** — 1/0 masks that deliberately stop
+  gradients, since a step function has zero derivative wherever it has
+  one.
+- **`uniform` / `normal`** — random values as *graph nodes*, redrawn on
+  every evaluation. A compiled step is traced once and replayed thousands
+  of times, so a stochastic update mask baked in at trace time would be
+  one fixed sample; feeding noise in as data would mean generating and
+  copying megabytes per step. The generator is counter-based — element i
+  of stream s under seed k is a pure hash of (k, s, i) — so there is no
+  state to thread through the evaluator, every element is independent,
+  and the same arithmetic in Rust makes uniform draws match across all
+  paths exactly (normal draws to f32 rounding, since ln and cos are only
+  specified that closely). The seed is an argument of the eval call, not
+  part of the graph JSON, so a replayed graph keeps its prepared plan.
+  `Tensor.rand`/`randn` are untouched: they draw once and hand back fixed
+  data, which is what parameter init wants.
+- **`Adam` inside `compile()`** — used to throw, because bias correction
+  divides by `1 - beta^t` and a graph traced once would freeze t at 1.
+  The step count rides along as a graph leaf like the moments do, with
+  `beta^t` as `exp(t·ln beta)` since that is the only way to raise a
+  constant to a tensor power with the ops available. Tracks eager Adam to
+  four decimals over 40 steps, including the early steps where the
+  corrections are furthest from 1.
+- **`clipGradNorm`** — rescales gradients to a maximum joint L2 norm. In
+  lazy/compiled mode it rewrites them as graph expressions, so a compiled
+  step clips in the same pass it computes and applies.
+
+### Stack safety
+
+A rolled-out automaton differentiated end to end is a graph tens of
+thousands of nodes deep, and every walker in `src/tensor.ts` recursed, so
+any such graph died with a stack overflow before reaching a kernel. Two
+shared iterative traversals replace five recursive ones: `topoOrder` over
+the lazy graph (used by the interpreter, serialization, `printGraph` and
+`compile`'s trace) and `tapeOrder` over the autograd tape. Both return
+post-order, which also lets the interpreter evaluate bottom-up instead of
+recursing through `force()`. `test/deep.test.ts` builds 40000-node chains;
+all six of its cases fail with `RangeError` on the previous code.
+
+### The device default was wrong
+
+Metal looked like the obvious accelerator and it is not. Measured on an
+Apple M5 with candle 0.9:
+
+| workload                              | candle CPU | candle Metal |
+| ------------------------------------- | ---------- | ------------ |
+| matmul chain, 10 × [256,256]@[256,256] | 11.4 ms    | 13.1 ms      |
+| matmul chain, 10 × [512,512]@[512,512] | 46.0 ms    | 51.5 ms      |
+| elementwise chain, 20 ops on [1024²]  | 61.5 ms    | 40.6 ms      |
+| graph-CA step, per rolled-out step    | 20.4 ms    | 141 ms       |
+
+Accelerate does the matmul work on the CPU side, so Metal never wins
+there; it wins only on purely elementwise graphs, by ~1.5x. On the
+gather/scatter graphs message passing produces it loses by ~7x —
+`index_select`/`index_add` have slow Metal kernels and the graphs are
+many small dispatches. So non-tiny graphs go to the CPU device now, with
+`useNative({ device: "gpu" })` to opt back in. The JS side picks the
+target (`pickTarget` in `src/tensor.ts`) because it knows the graph's
+total size before anything crosses the FFI boundary; `TYPENET_EVALUATOR`
+overrides it for measurement.
+
+### Making it fast
+
+`TYPENET_PROFILE=1` reports wall time, call count and throughput per op
+kind — enough to tell a bandwidth problem from a dispatch problem without
+a sampling profiler. It found, in order:
+
+- **No buffer was ever released.** The candle path held every node's
+  tensor for the whole evaluation. It now counts consumers and drops a
+  buffer once nothing else will read it, so a rollout holds what the
+  backward pass needs rather than every activation it ever produced.
+- **Every matmul operand was made contiguous.** Backward transposes one
+  operand of every gradient matmul, so this copied both matrices on the
+  way in. candle reads strides itself; an operand is only materialized
+  when its batch dims genuinely need broadcasting. matmul went from 763
+  to 3295 M elem/s.
+- **The fused loop evaluator matched op kinds by string, per element.**
+  Dispatch cost more than the arithmetic it was dispatching. Kinds
+  resolve to enums at plan time now, a group whose inputs all share the
+  output shape skips coordinate arithmetic entirely, passes spread over
+  cores with rayon, matmul goes through Accelerate's sgemm, and
+  narrow/cat copy contiguous blocks instead of computing an index per
+  element. 36x faster on this workload.
+- **Composed kernels did more passes than they need.** sigmoid was five
+  kernels and two allocations; `(tanh(x/2)+1)/2` is three, and does not
+  overflow for large negative x either.
+- **The first parallel scatter-add was worse than useless**: it chunked
+  the whole flat output but sized chunks from one dimension, so a
+  32-column gradient became 87000 chunks each rescanning the full index.
+  Slices along the dims outside the scattered one never collide, so those
+  are the unit of work now.
+
+Net effect on the graph-CA training step (1024 nodes × batch 8 = 8192
+nodes, 76592 edges, forward + backward + Adam): **141 ms → ~16 ms per
+rolled-out time step**, about 9x. At the reference recipe's rollout
+lengths that is ~1 training step/s.
+
+### Where the remaining gap is
+
+PyTorch on MPS does 2.9 steps/s on the same machine and settings, so this
+is still ~3x slower. The reason is visible in the profile and it is not
+subtle: **candle's CPU elementwise kernels are single-threaded**. The
+process sits at 100% of one core out of ten while `mul`, `reduce`,
+`scatterAdd` and the activations — 70% of the remaining time — run on
+that one core. candle's matmul is parallel (the `gemm` crate uses rayon),
+which is why matmul is no longer the top cost.
+
+Two ways to close it, neither small:
+
+1. Make the fused loop evaluator win outright. It already has fusion,
+   rayon and BLAS, and is 2.4x behind candle only because candle's
+   `permute` and `narrow` are free strided *views* where this evaluator
+   copies. Adding layouts/strides to it is the missing piece — and is
+   most of what building a tensor runtime means.
+2. Parallelize candle's CPU elementwise kernels upstream.
+
+This is the same conclusion effect-torch reached from the other
+direction: it owns its CPU and Metal kernels, with fusion regions and a
+frozen-program arena, rather than leaning on a general tensor library.
+The scaffolding here (prepared plans, fusion groups, liveness, profiling)
+is in place for either route.
+
+### Known limitations
+
+- **Fixed rollout length per compiled graph.** The reference samples any
+  length in [48, 80] per step; `examples/gnca` draws from five evenly
+  spaced lengths in that range, one compiled graph each. Variable enough
+  to keep the rule off one horizon, few enough that the graphs are worth
+  their memory.
+- Peak memory is what PyTorch holds for the same rollout — every
+  activation the backward pass needs, ~3.4 GB at the reference settings.
+  Gradient checkpointing would trade compute for it; not implemented.
+- The loop evaluator's `permute` and `broadcastTo` still materialize.
+
 ## How to resume
 
 1. `git checkout lazy-native`

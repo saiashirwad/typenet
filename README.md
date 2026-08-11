@@ -98,7 +98,25 @@ x.mul(y).add(x).pow(2).sum().backward()
 x.grad // Tensor<[2]>
 ```
 
-Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, `matmul`, reductions, and shape ops; broadcasts are reduced correctly. `noGrad(fn)` disables taping, `.detach()` cuts the graph. Every gradient is checked against finite differences in `test/autograd.test.ts`.
+Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, `matmul`, reductions, shape ops, and gather/scatter; broadcasts are reduced correctly. `noGrad(fn)` disables taping, `.detach()` cuts the graph. Every backward rule is checked against central finite differences in `test/gradcheck.test.ts`, in both eager and lazy modes.
+
+## Compiled training steps
+
+`compile(fn)` traces a function once and replays the graph on every call. A whole training step fits inside one — forward, backward, gradient clipping and the optimizer update all evaluated in a single pass, with nothing read back to JavaScript in between:
+
+```ts
+const step = compile((x: Tensor<[B, 2]>, y: Tensor<[B, 1]>) => {
+  const loss = ((net.forward(x) - y) ** 2).mean()
+  optim.zeroGrad()
+  loss.backward()
+  clipGradNorm(net.parameters(), 1)
+  optim.step()
+  return loss
+})
+for (let i = 0; i < 1000; i++) step(X, Y)
+```
+
+The graph can be deep: a cellular automaton rolled out over dozens of time steps and differentiated end to end is tens of thousands of nodes, which is fine. Two limits follow from tracing once: JavaScript control flow that depends on tensor *values* cannot be captured (shape-dependent control flow is fine, shapes are known at trace time), and the graph has a fixed depth, so a variable-length loop needs one compiled graph per length.
 
 ## API sketch
 
@@ -113,24 +131,91 @@ a.add(b); a.sub(b); a.mul(b); a.div(b); a.pow(2)
 a.neg(); a.exp(); a.log(); a.sqrt(); a.abs()
 a.relu(); a.sigmoid(); a.tanh(); a.softmax(1); a.logSoftmax(1)
 a.matmul(b); a.dot(b)
+a.maximum(b); a.minimum(b); a.clamp(-1, 1)
+a.gt(0); a.ge(0); a.lt(0); a.le(0); a.eq(0) // 1/0 masks, no gradient
 
 // reductions
 a.sum(); a.sum(1); a.sum(-1, true); a.mean(); a.max(); a.argmax(1)
 
 // shape
 a.view([3, -1]); a.reshape([2, 3]); a.squeeze(); a.unsqueeze(-1)
-a.transpose(0, 2); a.permute(2, 0, 1); a.T
+a.transpose(0, 2); a.permute(2, 0, 1); a.T; a.narrow(1, 0, 4)
 Tensor.stack([a, b], 0); Tensor.cat(a, b, 1)
+
+// gather and scatter, for message passing on a graph
+x.indexSelect(src)              // each edge's source state
+messages.scatterAdd(dst, nodes) // each node's incoming messages
+
+// random values redrawn on every evaluation, unlike rand/randn
+uniform([n, 1]); normal([n, c]); configure({ seed: 0 })
 
 // nn / optim
 new Linear(784, 128) // weights Tensor<[784, 128]>
 net.parameters(); mseLoss(pred, target); crossEntropy(logits, targets)
 new SGD(params, { lr, momentum?, weightDecay? })
 new Adam(params, { lr?, betas?, eps?, weightDecay? })
+clipGradNorm(params, 1) // between backward() and step()
 
 // data out
 a.item(); a.get(1, 2); a.toArray() // NestedArray<S>, typed nesting depth
 ```
+
+## Graphs and message passing
+
+`indexSelect` and `scatterAdd` are each other's gradient, and between
+them they express message passing. With an edge list as the index,
+gathering is "read each edge's source node" and scattering is "sum each
+node's incoming messages":
+
+```ts
+const messages = x.indexSelect(src).sub(x.indexSelect(dst)).tanh()
+const aggregated = messages.scatterAdd(dst, nodes).mul(invDegree)
+```
+
+Index tensors hold integral values in `float32` — there is no integer
+dtype, and an f32 mantissa addresses 16.7M rows exactly.
+
+`examples/gnca` is a full application of this: a graph cellular automaton
+that grows a pattern from one seed node and heals after damage, ported
+from [graph-cellular-automata](https://github.com/saiashirwad/graph-cellular-automata)
+and checked against the PyTorch original in `test/gnca.test.ts` — same
+graph, same rollout, same gradients to 3e-5.
+
+```sh
+pnpm gnca --steps 200          # train
+pnpm vite-node examples/gnca/bench.ts
+```
+
+## Native backend
+
+Eager mode runs typed-array kernels in JavaScript. Lazy and compiled
+graphs can instead go to a Rust addon built on [candle](https://github.com/huggingface/candle):
+
+```sh
+pnpm build:native            # needs a Rust toolchain
+```
+
+```ts
+useNative()                    // candle on the CPU device
+useNative({ device: "gpu" })   // the best accelerator available
+```
+
+CPU is the default, which is not the obvious choice. Measured on an Apple
+M5, candle's CPU device (Accelerate for matmul) matches Metal on chained
+large matmuls, loses to it by ~1.5x on purely elementwise graphs, and
+beats it by ~7x on the gather/scatter graphs message passing produces —
+Metal's `index_select`/`index_add` kernels are slow and such graphs are
+made of many small dispatches. Reach for `"gpu"` when a workload is
+dominated by large elementwise tensors.
+
+Graphs small enough that a kernel launch would cost more than the
+arithmetic (≤ 65536 elements) skip candle altogether and run on a fused
+loop evaluator: chains of elementwise ops collapse into single passes, so
+their intermediate values never reach memory.
+
+`TYPENET_EVALUATOR=loops|cpu|gpu` overrides the choice and
+`TYPENET_PROFILE=1` reports wall time and throughput per op kind, for
+measuring one against another.
 
 ## Development
 
