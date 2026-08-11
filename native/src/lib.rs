@@ -1878,6 +1878,19 @@ fn op_kind(node: &Node) -> &str {
     }
 }
 
+/// The value of a node that is a one-element leaf, read straight out of
+/// the leaf buffer. Constants coerced from JS numbers land here, and
+/// reading them this way costs nothing — no device readback, since the
+/// leaf buffer is host memory that has not been uploaded yet.
+fn scalar_leaf(graph: &Graph, leaves: &[f32], at: usize) -> Option<f32> {
+    match &graph.nodes[at] {
+        Node::Leaf { offset, shape, .. } if prod(shape) == 1 => {
+            leaves.get(*offset).copied()
+        }
+        _ => None,
+    }
+}
+
 /// The u32 form of an index node, converted on first use and kept.
 fn cached_index(
     cache: &mut [Option<Tensor>],
@@ -1944,7 +1957,29 @@ fn run_graph(
                 a,
                 b,
                 ..
-            } => eval_binary(kind, *parameter, get(*a)?, get(*b)?)?,
+            } => {
+                // Scaling or shifting by a constant is a one-element
+                // operand, and candle's broadcast path walks a general
+                // strided index for it — measured 6x slower per element
+                // than the same op between equal shapes. `affine`
+                // (x·mul + add) is one fused kernel, and for these three
+                // ops the rewrite is exact, not an approximation.
+                let sa = scalar_leaf(graph, leaves, *a);
+                let sb = scalar_leaf(graph, leaves, *b);
+                match (kind.as_str(), sa, sb) {
+                    ("mul", _, Some(s)) => get(*a)?.affine(s as f64, 0.0)?,
+                    ("mul", Some(s), _) => get(*b)?.affine(s as f64, 0.0)?,
+                    ("add", _, Some(s)) => get(*a)?.affine(1.0, s as f64)?,
+                    ("add", Some(s), _) => get(*b)?.affine(1.0, s as f64)?,
+                    ("sub", _, Some(s)) => {
+                        get(*a)?.affine(1.0, -(s as f64))?
+                    }
+                    ("sub", Some(s), _) => {
+                        get(*b)?.affine(-1.0, s as f64)?
+                    }
+                    _ => eval_binary(kind, *parameter, get(*a)?, get(*b)?)?,
+                }
+            }
             Node::Unary {
                 kind,
                 parameter,
