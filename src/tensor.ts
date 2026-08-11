@@ -65,6 +65,8 @@ export type BinaryOp =
 
 export type ReduceOp = "sum" | "max" | "argmax"
 
+export type RandomKind = "uniform" | "normal"
+
 export type TensorParams = {
   requires_grad: boolean
   dtype: DType
@@ -146,6 +148,14 @@ type LazyNodeBody =
       length: number
       input: AnyTensor
       index: AnyTensor
+    }
+  | {
+      op: "random"
+      kind: RandomKind
+      // Identifies this node's own stream, so two random nodes in one
+      // graph never draw the same numbers. Fixed when the node is
+      // built, which keeps a compiled graph's structure stable.
+      stream: number
     }
 
 type LazyNode = LazyNodeBody & {
@@ -268,8 +278,18 @@ let lazyMode = false
 
 export function configure(options: {
   lazy?: boolean
+  /**
+   * Reseeds `uniform()` / `normal()`. A run replays identically given
+   * the same seed and the same sequence of operations. Does not affect
+   * `Tensor.rand` / `Tensor.randn`, which use `Math.random`.
+   */
+  seed?: number
 }): void {
   if (options.lazy !== undefined) lazyMode = options.lazy
+  if (options.seed !== undefined) {
+    randomSeed = options.seed >>> 0
+    streamCounter = 0
+  }
 }
 
 export function isLazy(): boolean {
@@ -753,6 +773,123 @@ function rawCat(
   return makeRaw(out, outShape, dtype)
 }
 
+// --- random numbers inside the graph ------------------------------
+// A compiled training step is traced once and replayed thousands of
+// times, so anything stochastic in it — a dropout-style update mask,
+// input noise — has to be drawn per replay rather than baked in at
+// trace time. That rules out feeding randomness in as data, which
+// would mean generating and copying megabytes per step.
+//
+// So random values come from a graph node, and the generator is
+// counter-based: element `i` of stream `s` under seed `k` is a pure
+// hash of (k, s, i). No state to carry, every element independent,
+// and the identical arithmetic on the Rust side means all three
+// execution paths agree element for element.
+
+/** murmur3's 32-bit finalizer, in its stronger (Stafford 13) variant. */
+function hash32(x: number): number {
+  x = (x ^ (x >>> 16)) >>> 0
+  x = Math.imul(x, 0x7feb352d) >>> 0
+  x = (x ^ (x >>> 15)) >>> 0
+  x = Math.imul(x, 0x846ca68b) >>> 0
+  return (x ^ (x >>> 16)) >>> 0
+}
+
+/** Uniform in [0, 1) from 24 mantissa bits of a hashed counter. */
+function unitFloat(seed: number, stream: number, i: number) {
+  return (
+    (hash32((hash32(seed ^ Math.imul(stream, 0x9e3779b9)) ^ i) >>> 0) >>>
+      8) *
+    2 ** -24
+  )
+}
+
+// The seed every evaluation draws from, advanced per evaluation so a
+// replayed graph gets fresh numbers. configure({ seed }) resets it, and
+// a run replays exactly given the same seed and the same sequence of
+// operations.
+let randomSeed = 0x2545f491
+let streamCounter = 0
+// Seed of the evaluation in progress, so a random node reached by the
+// interpreter knows which draw it belongs to.
+let activeSeed = 0
+
+function nextSeed(): number {
+  randomSeed = hash32(randomSeed + 0x9e3779b9)
+  return randomSeed
+}
+
+function rawRandom(
+  kind: RandomKind,
+  shape: readonly number[],
+  stream: number,
+  dtype: DType
+): AnyTensor {
+  if (lazyMode)
+    return makeLazy({ op: "random", kind, stream }, shape, dtype)
+  return makeRaw(
+    randomData(kind, prod(shape), stream, activeSeed, dtype),
+    shape,
+    dtype
+  )
+}
+
+function randomData(
+  kind: RandomKind,
+  n: number,
+  stream: number,
+  seed: number,
+  dtype: DType
+): TypedArray {
+  const out = new (arrayCtor(dtype))(n)
+  if (kind === "uniform")
+    for (let i = 0; i < n; i++)
+      out[i] = unitFloat(seed, stream, i)
+  // Box-Muller per element from two independent draws: stateless, so
+  // element i does not depend on how many were drawn before it.
+  else
+    for (let i = 0; i < n; i++) {
+      const u = 1 - unitFloat(seed, stream, 2 * i)
+      const v = unitFloat(seed, stream, 2 * i + 1)
+      out[i] =
+        Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
+    }
+  return out
+}
+
+/**
+ * Uniform values in [0, 1), redrawn on every evaluation.
+ *
+ * Unlike {@link Tensor.rand}, which draws once and hands back fixed
+ * data, this is a node in the graph: a compiled function gets fresh
+ * numbers on every call, which is what a stochastic update rule needs.
+ * In eager mode there is no graph to defer to, so it draws immediately.
+ *
+ * Seeded by `configure({ seed })`, not `Math.random`.
+ */
+export function uniform<const Sh extends Shape>(
+  shape: Sh
+): Tensor<Sh, DefaultParams> {
+  return rawRandom(
+    "uniform",
+    shape,
+    streamCounter++,
+    "float32"
+  ) as any
+}
+
+/** Standard normal values, redrawn per evaluation. See {@link uniform}. */
+export function normal<const Sh extends Shape>(
+  shape: Sh
+): Tensor<Sh, DefaultParams> {
+  return rawRandom(
+    "normal",
+    shape,
+    streamCounter++,
+    "float32"
+  ) as any
+}
+
 // --- gather / scatter ---------------------------------------------
 // The two ops message passing on a graph is built from, and each
 // other's gradient: indexSelect reads row index[j] of the input into
@@ -915,6 +1052,18 @@ function evalNode(node: LazyNode): AnyTensor {
         node.dim,
         node.length
       )
+    case "random":
+      return makeRaw(
+        randomData(
+          node.kind,
+          prod(node.shape),
+          node.stream,
+          activeSeed,
+          node.dtype
+        ),
+        node.shape,
+        node.dtype
+      )
   }
 }
 
@@ -972,6 +1121,9 @@ function topoOrder(
  * `force()` calls inside it never recurse.
  */
 function evalInterpreted(roots: AnyTensor[]): void {
+  // One seed per evaluation: every random node in this pass draws from
+  // it, and the next pass over the same graph draws different numbers.
+  activeSeed = nextSeed()
   for (const t of topoOrder(roots)) {
     const storage = t._storage
     if (storage.kind !== "lazy") continue
@@ -1160,6 +1312,17 @@ function serializeLazyGraph(roots: AnyTensor[]): {
           index: ref(node.index)
         })
         break
+      case "random":
+        // The stream id is part of the graph's structure; the seed is
+        // not, so it travels as an argument of the eval call and a
+        // replayed graph keeps hitting the same prepared plan.
+        nodes.push({
+          op: "random",
+          kind: node.kind,
+          stream: node.stream,
+          shape: node.shape
+        })
+        break
     }
   }
 
@@ -1205,7 +1368,8 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
   if (!serialized) return false
   const data = nativeBackend.evalGraphNative(
     serialized.json,
-    serialized.leaves
+    serialized.leaves,
+    nextSeed()
   )
   let offset = 0
   serialized.rootShapes.forEach((shape, i) => {
@@ -1308,6 +1472,8 @@ function nodeInputs(node: LazyNode): AnyTensor[] {
     case "indexSelect":
     case "scatterAdd":
       return [node.input, node.index]
+    case "random":
+      return []
   }
 }
 
@@ -1423,6 +1589,10 @@ export function printGraph(
               ["length", node.length]
             ]
           )} ${tail}`
+        case "random":
+          return `${lhs} = random.${node.kind}()${attrs([
+            ["stream", node.stream]
+          ])} ${tail}`
       }
     })
     .join("\n")
@@ -1646,7 +1816,8 @@ export function compile<
     })
     const data = nativeBackend.evalGraphNative(
       native.json,
-      leaves
+      leaves,
+      nextSeed()
     )
     let offset = 0
     const take = (shape: number[]): Float32Array => {

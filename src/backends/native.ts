@@ -9,7 +9,11 @@ import { createRequire } from "node:module"
  */
 
 export type NativeModule = {
-  evalGraph(graphJson: string, leaves: Float32Array): ArrayBuffer
+  evalGraph(
+    graphJson: string,
+    leaves: Float32Array,
+    seed: number
+  ): ArrayBuffer
   deviceName(): string
 }
 
@@ -62,11 +66,14 @@ export function isNativeEnabled(): boolean {
 
 /**
  * Evaluate a serialized lazy graph in one FFI hop. Internal — called
- * from force() in src/tensor.ts.
+ * from force() in src/tensor.ts. `seed` drives any random nodes in the
+ * graph; it is an argument rather than part of the JSON so that
+ * replaying a graph keeps hitting the same prepared plan.
  */
 export function evalGraphNative(
   graphJson: string,
-  leaves: Float32Array
+  leaves: Float32Array,
+  seed: number
 ): Float32Array {
   const mod = loadNative()
   if (!mod)
@@ -74,7 +81,9 @@ export function evalGraphNative(
       "@typenet/native is not built. Run `pnpm build:native`."
     )
   try {
-    return new Float32Array(mod.evalGraph(graphJson, leaves))
+    return new Float32Array(
+      mod.evalGraph(graphJson, leaves, seed >>> 0)
+    )
   } catch (error) {
     throw new Error(
       `native backend: ${error instanceof Error ? error.message : String(error)}`

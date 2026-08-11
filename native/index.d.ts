@@ -2,4 +2,4 @@
 /* eslint-disable */
 export declare function deviceName(): string
 
-export declare function evalGraph(graphJson: string, leaves: Float32Array): Readback
+export declare function evalGraph(graphJson: string, leaves: Float32Array, seed: number): Readback

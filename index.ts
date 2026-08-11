@@ -6,6 +6,8 @@ export {
   full,
   rand,
   randn,
+  uniform,
+  normal,
   eye,
   arange,
   scalar,
@@ -20,6 +22,7 @@ export {
 } from "./src/tensor.ts"
 export type {
   DType,
+  RandomKind,
   TensorParams,
   DefaultParams,
   ShapeOf,

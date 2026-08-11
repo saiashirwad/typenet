@@ -116,6 +116,13 @@ enum Node {
         input: usize,
         index: usize,
     },
+    /// Random values, drawn fresh on every evaluation from a hash of
+    /// (eval seed, stream, element index) — see `random_data`.
+    Random {
+        kind: String,
+        stream: u32,
+        shape: Vec<usize>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,6 +163,7 @@ fn node_inputs(node: &Node) -> Vec<usize> {
         Node::OneHot { input, .. } => vec![*input],
         Node::IndexSelect { input, index, .. } => vec![*input, *index],
         Node::ScatterAdd { input, index, .. } => vec![*input, *index],
+        Node::Random { .. } => vec![],
     }
 }
 
@@ -241,10 +249,59 @@ fn node_shapes(graph: &Graph) -> candle_core::Result<Vec<Vec<usize>>> {
                 s[*dim] = *length;
                 s
             }
+            Node::Random { shape, .. } => shape.clone(),
         };
         shapes.push(shape);
     }
     Ok(shapes)
+}
+
+// ---------------------------------------------------------------------------
+// Counter-based random numbers. Element `i` of stream `s` under seed `k`
+// is a pure hash of (k, s, i): no state to thread through the evaluator,
+// every element independent, and the same arithmetic as the TS side
+// (hash32 / unitFloat in src/tensor.ts). Uniform draws therefore match
+// exactly across paths — integer mixing and an exact power-of-two scale;
+// normal draws match to f32 rounding, since ln and cos are only
+// specified that closely. The seed is an argument of the eval call, not
+// part of the graph JSON, so a replayed compiled graph keeps its plan.
+// ---------------------------------------------------------------------------
+
+/// murmur3's 32-bit finalizer, Stafford 13 variant.
+#[inline]
+fn hash32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^ (x >> 16)
+}
+
+/// Uniform in [0, 1) from 24 mantissa bits of a hashed counter.
+#[inline]
+fn unit_float(seed: u32, stream: u32, i: u32) -> f32 {
+    let mixed = hash32(hash32(seed ^ stream.wrapping_mul(0x9e37_79b9)) ^ i);
+    (mixed >> 8) as f32 * (1.0 / 16_777_216.0)
+}
+
+fn random_data(kind: &str, n: usize, stream: u32, seed: u32) -> candle_core::Result<Vec<f32>> {
+    match kind {
+        "uniform" => Ok((0..n).map(|i| unit_float(seed, stream, i as u32)).collect()),
+        // Box-Muller per element from two independent draws, so element i
+        // does not depend on how many were drawn before it.
+        "normal" => Ok((0..n)
+            .map(|i| {
+                // f64 transcendentals, like the JS side, so the two stay
+                // within f32 rounding of each other.
+                let u = 1.0 - unit_float(seed, stream, 2 * i as u32) as f64;
+                let v = unit_float(seed, stream, 2 * i as u32 + 1) as f64;
+                ((-2.0 * u.ln()).sqrt() * (2.0 * std::f64::consts::PI * v).cos()) as f32
+            })
+            .collect()),
+        other => Err(candle_core::Error::Msg(format!(
+            "unknown random kind: {other}"
+        ))),
+    }
 }
 
 fn is_elementwise(node: &Node) -> bool {
@@ -884,7 +941,7 @@ fn exec_group(
 
 /// Whole-graph execution from a prepared plan: leaf copies + raw loops,
 /// no parsing or planning. Returns all roots concatenated.
-fn execute(prep: &PreparedGraph, leaves: &[f32]) -> candle_core::Result<Vec<f32>> {
+fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Result<Vec<f32>> {
     let graph = &prep.graph;
     let n = graph.nodes.len();
     let mut buffers: Vec<Option<Vec<f32>>> = (0..n).map(|_| None).collect();
@@ -972,6 +1029,11 @@ fn execute(prep: &PreparedGraph, leaves: &[f32]) -> candle_core::Result<Vec<f32>
                 *dim,
                 *length,
             )?,
+            Node::Random {
+                kind,
+                stream,
+                shape,
+            } => random_data(kind, prod(shape), *stream, seed)?,
         };
         buffers[idx] = Some(out);
     }
@@ -1352,6 +1414,7 @@ fn run_graph(
     graph: &Graph,
     leaves: &[f32],
     device: &Device,
+    seed: u32,
 ) -> candle_core::Result<Vec<Tensor>> {
     let roots: Vec<usize> = match &graph.roots {
         Some(roots) => roots.clone(),
@@ -1488,6 +1551,15 @@ fn run_graph(
                     *dim,
                 )?
             }
+            Node::Random {
+                kind,
+                stream,
+                shape,
+            } => Tensor::from_vec(
+                random_data(kind, prod(shape), *stream, seed)?,
+                shape.clone(),
+                device,
+            )?,
         };
         outputs[idx] = Some(out);
     }
@@ -1571,19 +1643,19 @@ fn vec_readback(mut vec: Vec<f32>) -> Readback {
 }
 
 #[napi(js_name = "evalGraph")]
-pub fn eval_graph(graph_json: String, leaves: Float32Array) -> Result<Readback> {
+pub fn eval_graph(graph_json: String, leaves: Float32Array, seed: u32) -> Result<Readback> {
     // Tiny CPU-pinned graphs bypass candle entirely (plan/exec evaluator).
     // serializeLazyGraph emits `device` last, so the suffix check avoids a
     // full JSON parse on the hot path (plan-cache hits).
     if graph_json.ends_with("\"device\":\"cpu\"}") {
         let prep = prepared(&graph_json)?;
-        let data = execute(&prep, &leaves).map_err(to_napi_err)?;
+        let data = execute(&prep, &leaves, seed).map_err(to_napi_err)?;
         return Ok(vec_readback(data));
     }
     let graph: Graph = serde_json::from_str(&graph_json)
         .map_err(|e| Error::new(Status::InvalidArg, format!("invalid graph JSON: {e}")))?;
     let device = device();
-    let outputs = run_graph(&graph, &leaves, device).map_err(to_napi_err)?;
+    let outputs = run_graph(&graph, &leaves, device, seed).map_err(to_napi_err)?;
     // All roots are read back as one concatenated f32 buffer; the JS
     // side slices it per root using the shapes it already knows.
     device.synchronize().map_err(to_napi_err)?;
