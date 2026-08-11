@@ -9,8 +9,22 @@ which is the PyTorch original and the source of truth for the recipe.
 pnpm gnca                            # train with the reference defaults
 pnpm gnca --steps 200                # a quick run
 pnpm gnca --target star --nodes 512  # a different pattern, smaller graph
+pnpm gnca --init-from runs/gnca-heart.json   # warm start
 pnpm vite-node examples/gnca/bench.ts
 ```
+
+Every probe writes a checkpoint and a picture: `runs/gnca-<target>.json`
+holds the weights *and* the graph they were trained on (the same rule on a
+different graph is a different model), and `runs/gnca-<target>.svg` shows
+target, grown and healed side by side, which is the fastest way to tell
+whether a run is working.
+
+`--init-from` warm-starts from a checkpoint, zero-padding the first
+layer's input columns if the saved percept was narrower. That padding is
+what makes the reference's ablation ladder work: the loaded rule is
+*functionally identical* to begin with, since a zero column contributes
+nothing, so adding a percept feature measures the feature rather than a
+fresh initialisation.
 
 ## The rule
 
@@ -59,6 +73,8 @@ while regeneration stays broken.
 | `damage.ts`  | ways to break a grown pattern: balls, scatter, bands, cuts   |
 | `train.ts`   | the training loop                                           |
 | `bench.ts`   | where the time goes, per rolled-out step and per graph size  |
+| `checkpoint.ts` | saving, resuming, and the zero-padded warm start          |
+| `render.ts`  | node states as an SVG, so a run is inspectable               |
 | `rng.ts`     | seeded host-side sampling                                   |
 
 ## Checked against the original

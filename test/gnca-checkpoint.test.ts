@@ -1,0 +1,219 @@
+// Checkpoints have to round-trip a rule exactly, or a resumed run is a
+// different run — and the zero-padding warm start has to leave the loaded
+// rule functionally identical, which is the whole basis of the reference's
+// ablation ladder.
+
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterEach, describe, expect, it } from "vitest"
+import {
+  Tensor,
+  configure,
+  disableNative
+} from "../index.ts"
+import {
+  checkpointGraph,
+  loadRule,
+  readCheckpoint,
+  saveCheckpoint
+} from "../examples/gnca/checkpoint.ts"
+import {
+  randomGeometricGraph,
+  knnGraph
+} from "../examples/gnca/graphs.ts"
+import {
+  GraphNCA,
+  graphTensors
+} from "../examples/gnca/model.ts"
+import {
+  renderSvg,
+  visible
+} from "../examples/gnca/render.ts"
+import { heart } from "../examples/gnca/targets.ts"
+
+type AnyTensor = Tensor<any, any>
+
+const scratch = mkdtempSync(join(tmpdir(), "typenet-gnca-"))
+
+afterEach(() => {
+  configure({ lazy: false })
+  disableNative()
+})
+
+const graph = randomGeometricGraph({
+  nodes: 60,
+  dim: 2,
+  seed: 2
+})
+const target = heart(graph.pos)
+
+function meta(step: number) {
+  return {
+    step,
+    channels: 8,
+    hidden: 16,
+    target: "heart",
+    center: 0,
+    pos: Array.from(graph.pos.data),
+    dim: 2,
+    edges: {
+      src: Array.from(graph.edges.src),
+      dst: Array.from(graph.edges.dst)
+    },
+    targetRgba: Array.from(target)
+  }
+}
+
+describe("checkpoints", () => {
+  it("round-trips every weight exactly", () => {
+    const saved = new GraphNCA(8, 16)
+    // Non-zero everywhere, so the zero-initialised layers cannot hide a
+    // parameter that never got written.
+    saved.parameters().forEach((p, i) => {
+      const data = p.data as Float32Array
+      for (let j = 0; j < data.length; j++)
+        data[j] = Math.sin(j * 0.7 + i) * 0.4
+    })
+    const path = join(scratch, "round-trip.json")
+    saveCheckpoint(path, meta(120), saved.parameters())
+
+    const loaded = new GraphNCA(8, 16)
+    const padded = loadRule(
+      loaded.parameters(),
+      readCheckpoint(path)
+    )
+    expect(padded).toBe(0)
+    loaded.parameters().forEach((p, i) => {
+      expect(Array.from(p.data), `parameter ${i}`).toEqual(
+        Array.from(saved.parameters()[i]!.data)
+      )
+    })
+  })
+
+  it("carries the graph it was trained on", () => {
+    const path = join(scratch, "graph.json")
+    saveCheckpoint(
+      path,
+      meta(7),
+      new GraphNCA(8, 16).parameters()
+    )
+    const checkpoint = readCheckpoint(path)
+    expect(checkpoint.step).toBe(7)
+    const rebuilt = checkpointGraph(checkpoint)
+    expect(rebuilt.pos.n).toBe(graph.pos.n)
+    expect(rebuilt.edges.count).toBe(graph.edges.count)
+    expect(Array.from(rebuilt.edges.src)).toEqual(
+      Array.from(graph.edges.src)
+    )
+    // and the graph really is the one k-NN would build from those points
+    expect(
+      Array.from(knnGraph(rebuilt.pos, 8).src)
+    ).toEqual(Array.from(graph.edges.src))
+  })
+
+  it("warm-starts a wider percept without changing the rule", () => {
+    // A checkpoint whose first layer is narrower — the reference's case
+    // is a percept that gained the degree feature. Zero-padding the new
+    // input columns must leave the rule's output bit-identical, since a
+    // zero column contributes nothing.
+    const narrow = new GraphNCA(8, 16)
+    narrow.parameters().forEach((p, i) => {
+      const data = p.data as Float32Array
+      for (let j = 0; j < data.length; j++)
+        data[j] = Math.cos(j * 0.3 + i) * 0.3
+    })
+    const path = join(scratch, "narrow.json")
+    saveCheckpoint(path, meta(1), narrow.parameters())
+
+    // Fake a wider model by growing only the first layer's input side.
+    const wide = new GraphNCA(8, 16)
+    const first = wide.parameters()[0]!
+    const grown = Tensor.zeros([
+      first.shape[0]! + 3,
+      first.shape[1]!
+    ]) as AnyTensor
+    const params = [grown, ...wide.parameters().slice(1)]
+    const padded = loadRule(params, readCheckpoint(path))
+    expect(padded).toBe(3 * first.shape[1]!)
+
+    const saved = narrow.parameters()[0]!.data
+    const loaded = grown.data
+    for (let i = 0; i < saved.length; i++)
+      expect(loaded[i]).toBe(saved[i])
+    // the padding really is zero
+    for (let i = saved.length; i < loaded.length; i++)
+      expect(loaded[i]).toBe(0)
+  })
+
+  it("rejects a checkpoint from a different model", () => {
+    const path = join(scratch, "mismatch.json")
+    saveCheckpoint(
+      path,
+      meta(1),
+      new GraphNCA(8, 16).parameters()
+    )
+    expect(() =>
+      loadRule(
+        new GraphNCA(16, 16).parameters(),
+        readCheckpoint(path)
+      )
+    ).toThrow(/model wants/)
+  })
+})
+
+describe("rendering", () => {
+  it("draws one circle per live node, and skips the dead", () => {
+    const nodes = graph.pos.n
+    const svg = renderSvg(
+      graph.pos.data,
+      2,
+      [visible(target, nodes, 4)],
+      { nodes, labels: ["target"] }
+    )
+    const circles = svg.match(/<circle/g)?.length ?? 0
+    const live = Array.from(
+      { length: nodes },
+      (_, i) => target[i * 4 + 3]!
+    ).filter(a => a >= 0.02).length
+    expect(circles).toBe(live)
+    expect(live).toBeGreaterThan(0)
+    expect(svg).toContain("target")
+    expect(svg.startsWith("<svg")).toBe(true)
+  })
+
+  it("puts three frames side by side", () => {
+    const nodes = graph.pos.n
+    const frame = visible(target, nodes, 4)
+    const svg = renderSvg(
+      graph.pos.data,
+      2,
+      [frame, frame, frame],
+      {
+        size: 100,
+        nodes
+      }
+    )
+    // three panels of 100 with two 12px gaps
+    expect(svg).toContain('width="324"')
+  })
+
+  it("survives a rolled-out state with values outside [0, 1]", () => {
+    const nodes = graph.pos.n
+    const graphs = graphTensors(graph.edges, nodes)
+    const model = new GraphNCA(8, 16)
+    let x = Tensor.zeros([nodes, 8]) as AnyTensor
+    ;(x.data as Float32Array).fill(5) // deliberately out of range
+    configure({ lazy: true })
+    x = model.forward(x, graphs, 1)
+    configure({ lazy: false })
+    const svg = renderSvg(
+      graph.pos.data,
+      2,
+      [visible(x.data as Float32Array, nodes, 8)],
+      { nodes }
+    )
+    expect(svg).not.toContain("NaN")
+    expect(svg).toMatch(/fill="rgb\(255,255,255\)"/)
+  })
+})

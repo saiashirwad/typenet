@@ -42,6 +42,13 @@ import {
 } from "./model.ts"
 import { rng } from "./rng.ts"
 import { TARGETS } from "./targets.ts"
+import {
+  loadRule,
+  readCheckpoint,
+  saveCheckpoint
+} from "./checkpoint.ts"
+import { renderSvg, visible } from "./render.ts"
+import { writeFileSync } from "node:fs"
 
 type AnyTensor = Tensor<any, any>
 
@@ -76,6 +83,10 @@ const options = {
   updateRate: number("update-rate", 0.5),
   clip: number("clip", 1),
   target: text("target", "heart"),
+  /** Suffix for the checkpoint and picture filenames. */
+  tag: text("tag", ""),
+  /** Checkpoint to warm-start the rule from. */
+  initFrom: text("init-from", ""),
   graph: text("graph", "auto"),
   beta: number("beta", 0.05),
   seed: number("seed", 0),
@@ -364,7 +375,12 @@ const probeHole = damage.ball(pos, inPattern, {
 function healProbe(
   grow = 80,
   heal = 160
-): { grown: number; healed: number } {
+): {
+  grown: number
+  healed: number
+  grownState: Float32Array
+  healedState: Float32Array
+} {
   const state = seedState(1, N, C, center)
   const run = (from: Float32Array, steps: number) => {
     let x = tensorFrom(from, [N, C]) as AnyTensor
@@ -387,8 +403,71 @@ function healProbe(
   configure({ lazy: false })
   return {
     grown: grownError,
-    healed: sampleError(healedState, 0)
+    healed: sampleError(healedState, 0),
+    grownState,
+    healedState
   }
+}
+
+// -------------------------------------------------- checkpoints, pictures ---
+
+const checkpointPath =
+  text("save", "") ||
+  `runs/gnca-${options.target}${options.tag ? `-${options.tag}` : ""}.json`
+const svgPath =
+  text("svg", "") ||
+  checkpointPath.replace(/\.json$/, ".svg")
+
+function save(step: number): void {
+  saveCheckpoint(
+    checkpointPath,
+    {
+      step,
+      channels: C,
+      hidden: options.hidden,
+      target: options.target,
+      center,
+      pos: Array.from(pos.data),
+      dim: pos.dim,
+      edges: {
+        src: Array.from(edges.src),
+        dst: Array.from(edges.dst)
+      },
+      targetRgba: Array.from(targetData)
+    },
+    params
+  )
+}
+
+/** Target, grown and healed side by side, so the run is inspectable. */
+function drawProbe(probe: {
+  grownState: Float32Array
+  healedState: Float32Array
+}): void {
+  writeFileSync(
+    svgPath,
+    renderSvg(
+      pos.data,
+      pos.dim,
+      [
+        visible(targetData, N, 4),
+        visible(probe.grownState, N, C),
+        visible(probe.healedState, N, C)
+      ],
+      { labels: ["target", "grown", "healed"], nodes: N }
+    )
+  )
+}
+
+if (options.initFrom) {
+  const padded = loadRule(
+    params,
+    readCheckpoint(options.initFrom)
+  )
+  console.log(
+    `warm-started from ${options.initFrom}` +
+      (padded > 0 ? ` (zero-padded ${padded} weights)` : "")
+  )
 }
 
 // -------------------------------------------------------------- training ---
@@ -498,14 +577,21 @@ for (let step = 1; step <= options.steps; step++) {
     )
   }
   if (step % options.probe === 0) {
-    const { grown, healed } = healProbe()
+    const probe = healProbe()
     console.log(
-      `    probe: grown ${grown.toFixed(4)}  healed ${healed.toFixed(4)}`
+      `    probe: grown ${probe.grown.toFixed(4)}  ` +
+        `healed ${probe.healed.toFixed(4)}`
     )
+    save(step)
+    drawProbe(probe)
   }
 }
 
-const { grown, healed } = healProbe()
+const probe = healProbe()
+save(options.steps)
+drawProbe(probe)
 console.log(
-  `done. probe: grown ${grown.toFixed(4)}  healed ${healed.toFixed(4)}`
+  `done. probe: grown ${probe.grown.toFixed(4)}  ` +
+    `healed ${probe.healed.toFixed(4)}`
 )
+console.log(`saved ${checkpointPath} and ${svgPath}`)
