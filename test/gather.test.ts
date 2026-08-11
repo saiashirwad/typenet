@@ -440,3 +440,67 @@ describe("empty dimensions", () => {
     )
   })
 })
+
+describe.skipIf(!isNativeAvailable())(
+  "large reductions",
+  () => {
+    // Summing away the outer dim of a tall matrix takes a BLAS route
+    // above 4096 rows, which reassociates the summation. Check both
+    // sides of the threshold against eager, since only the tall case
+    // takes the new path.
+    it.each([4095, 4096, 20000])(
+      "sums %i rows the same as eager",
+      rows => {
+        const cols = 12
+        const x = Tensor.rand([rows, cols]) as AnyTensor
+        const build = () => x.sub(0.5).sum(0)
+        configure({ lazy: false })
+        const eager = build()
+        useNative()
+        configure({ lazy: true })
+        const native = build()
+        expect(native.shape).toEqual([cols])
+        const a = eager.data
+        const b = native.data
+        for (let i = 0; i < cols; i++)
+          expect(
+            Math.abs(a[i]! - b[i]!) /
+              Math.max(1, Math.abs(a[i]!)),
+            `column ${i}: ${b[i]} vs eager ${a[i]}`
+          ).toBeLessThan(1e-5)
+      }
+    )
+
+    it("keeps the dim when asked", () => {
+      const x = Tensor.rand([8192, 3]) as AnyTensor
+      useNative()
+      configure({ lazy: true })
+      const kept = x.sum(0, true)
+      expect(kept.shape).toEqual([1, 3])
+      configure({ lazy: false })
+      const eager = x.sum(0, true)
+      for (let i = 0; i < 3; i++)
+        expect(kept.get(0, i)).toBeCloseTo(
+          eager.get(0, i),
+          2
+        )
+    })
+
+    it("still reduces the inner dim correctly", () => {
+      const x = Tensor.rand([8192, 5]) as AnyTensor
+      configure({ lazy: false })
+      const eager = x.sum(1)
+      useNative()
+      configure({ lazy: true })
+      const native = x.sum(1)
+      expect(native.shape).toEqual([8192])
+      let worst = 0
+      for (let i = 0; i < 8192; i++)
+        worst = Math.max(
+          worst,
+          Math.abs(eager.data[i]! - native.data[i]!)
+        )
+      expect(worst).toBeLessThan(1e-5)
+    })
+  }
+)

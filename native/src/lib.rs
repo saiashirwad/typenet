@@ -1786,13 +1786,47 @@ fn reinsert_dim(t: Tensor, dim: usize, keepdim: bool) -> candle_core::Result<Ten
     if keepdim { t.unsqueeze(dim) } else { Ok(t) }
 }
 
+/// Summing away the outer dim of a row-major matrix is a sequential read
+/// with one accumulator per column, but candle does it at 801 M elem/s
+/// against 2521 for the inner dim — the wrong way round. A row of ones
+/// times the matrix is the same sum through Accelerate at 3295, so above a
+/// size where the setup is noise, take that route. It reassociates the
+/// summation, which for f32 is a difference of about 1e-6 relative, and
+/// blocked accumulation is if anything the more accurate of the two.
+///
+/// This is the bias-gradient shape, so it shows up twice per rolled-out
+/// step of a message-passing rollout.
+const GEMV_SUM_MIN_ROWS: usize = 4096;
+
 fn eval_reduce(
     kind: &str,
     dim: usize,
     keepdim: bool,
     a: &Tensor,
+    ones: &mut HashMap<usize, Tensor>,
 ) -> candle_core::Result<Tensor> {
     match kind {
+        "sum"
+            if dim == 0
+                && a.rank() == 2
+                && a.dim(0)? >= GEMV_SUM_MIN_ROWS =>
+        {
+            let rows = a.dim(0)?;
+            let row = match ones.get(&rows) {
+                Some(row) => row.clone(),
+                None => {
+                    let row = Tensor::ones((1, rows), DType::F32, a.device())?;
+                    ones.insert(rows, row.clone());
+                    row
+                }
+            };
+            let summed = row.matmul(&a.contiguous()?)?;
+            if keepdim {
+                Ok(summed)
+            } else {
+                summed.reshape(a.dim(1)?)
+            }
+        }
         "sum" => reinsert_dim(a.sum(dim)?, dim, keepdim),
         "max" => reinsert_dim(a.max(dim)?, dim, keepdim),
         "argmax" => {
@@ -1920,6 +1954,8 @@ fn run_graph(
     // u32 cast. Convert once and keep it for as long as the f32 original
     // is alive.
     let mut indices: Vec<Option<Tensor>> = (0..n).map(|_| None).collect();
+    // Rows of ones for the gemv-style sums below, one per width needed.
+    let mut ones: HashMap<usize, Tensor> = HashMap::new();
     for (idx, node) in graph.nodes.iter().enumerate() {
         if !prep.live[idx] {
             continue;
@@ -2029,7 +2065,7 @@ fn run_graph(
                 dim,
                 keepdim,
                 input,
-            } => eval_reduce(kind, *dim, *keepdim, get(*input)?)?,
+            } => eval_reduce(kind, *dim, *keepdim, get(*input)?, &mut ones)?,
             Node::ReduceAll { kind, input } => {
                 let flat = get(*input)?.contiguous()?.flatten_all()?;
                 let out = match kind.as_str() {
