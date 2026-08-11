@@ -637,7 +637,20 @@ process sits at 100% of one core out of ten while `mul`, `reduce`,
 that one core. candle's matmul is parallel (the `gemm` crate uses rayon),
 which is why matmul is no longer the top cost.
 
-Two ways to close it, neither small:
+Two specific candle kernels also underperform, and both are measurable
+with the microbenchmarks the profiling work produced:
+
+- `sum(dim 0)` of a row-major `[R, C]` runs at 801 M elem/s while
+  `sum(dim 1)` of the same tensor does 2521 — backwards from what the
+  layout implies, since reducing dim 0 is a sequential read with C
+  accumulators. This is the bias-gradient shape, twice per rolled-out
+  step, ~13% of the total. It could be expressed as `ones(1, R) @ x`,
+  which goes through Accelerate at 3295 M elem/s, at the cost of a
+  different (probably better) summation order.
+- `tanh` is the slowest elementwise op left at ~1200 M elem/s, and
+  sigmoid is built on it.
+
+Two ways to close the parallelism gap, neither small:
 
 1. Make the fused loop evaluator win outright. It already has fusion,
    rayon and BLAS, and is 2.4x behind candle only because candle's
