@@ -638,9 +638,11 @@ fn plan_fusion(
     shapes: &[Vec<usize>],
     live: &[bool],
     is_root: &[bool],
-) -> FusionPlan {
+) -> (FusionPlan, Vec<usize>) {
     let n = graph.nodes.len();
-    // Consumer counts over live edges only.
+    // Consumer counts over live edges only. A node read twice by one
+    // consumer counts twice, which is what the countdown needs. Used by
+    // fusion (single-consumer chain rule) and by the candle evaluator.
     let mut consumers = vec![0usize; n];
     for (i, node) in graph.nodes.iter().enumerate() {
         if !live[i] {
@@ -687,7 +689,7 @@ fn plan_fusion(
             groups.push(members);
         }
     }
-    FusionPlan { group_of, groups }
+    (FusionPlan { group_of, groups }, consumers)
 }
 
 /// Row-major strides of `shape` aligned against `out_shape` (broadcast:
@@ -836,7 +838,7 @@ impl PreparedGraph {
         for &r in &roots {
             is_root[r] = true;
         }
-        let fusion = plan_fusion(&graph, &shapes, &live, &is_root);
+        let (fusion, consumers) = plan_fusion(&graph, &shapes, &live, &is_root);
 
         let buffer_child = |c: usize, target: &[usize]| ChildRef {
             source: ChildSource::Buffer(c),
@@ -939,19 +941,6 @@ impl PreparedGraph {
             });
         }
 
-        // Consumer counts over live edges only. A node read twice by one
-        // consumer counts twice, which is what the countdown needs. Used
-        // by the candle evaluator, which has no fusion groups, so a
-        // node's readers are exactly the nodes listing it as an input.
-        let mut consumers = vec![0usize; n];
-        for (i, node) in graph.nodes.iter().enumerate() {
-            if !live[i] {
-                continue;
-            }
-            for input in node_inputs(node) {
-                consumers[input] += 1;
-            }
-        }
         let target = Target::parse(graph.device.as_deref());
 
         Ok(PreparedGraph {
