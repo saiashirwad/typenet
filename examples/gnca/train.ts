@@ -28,7 +28,9 @@ import {
 import * as damage from "./damage.ts"
 import {
   type Edges,
+  type Points,
   batchEdges,
+  knnGraph,
   nearestNode,
   randomGeometricGraph,
   wattsStrogatzGraph
@@ -41,7 +43,8 @@ import {
   seedState
 } from "./model.ts"
 import { rng } from "./rng.ts"
-import { TARGETS } from "./targets.ts"
+import { type Target, TARGETS } from "./targets.ts"
+import { POINTCLOUDS, loadCloud } from "./pointclouds.ts"
 import {
   loadRule,
   readCheckpoint,
@@ -88,6 +91,11 @@ const options = {
   /** Checkpoint to warm-start the rule from. */
   initFrom: text("init-from", ""),
   graph: text("graph", "auto"),
+  /** Where the .npz surface clouds live, for the mesh targets. */
+  clouds: text(
+    "clouds",
+    "../graph-cellular-automata/data/pointclouds"
+  ),
   beta: number("beta", 0.05),
   seed: number("seed", 0),
   report: number("report", 20),
@@ -130,41 +138,78 @@ function text(name: string, fallback: string): string {
 configure({ seed: options.seed })
 if (options.native && isNativeAvailable()) useNative()
 
-const spec = TARGETS[options.target]
-if (!spec)
+// Three kinds of target: a surface point cloud (the graph *is* the mesh),
+// a pattern on the Watts-Strogatz ring, or a pattern painted onto a random
+// geometric graph.
+const isCloud = options.target in POINTCLOUDS
+const useRing =
+  !isCloud &&
+  (options.graph === "ws" ||
+    (options.graph === "auto" && options.target === "ring"))
+if (!isCloud && !TARGETS[options.target])
   throw new Error(
-    `unknown target ${options.target}; try one of ${Object.keys(TARGETS).join(", ")}`
+    `unknown target ${options.target}; patterns: ` +
+      `${Object.keys(TARGETS).join(", ")}; surface clouds: ` +
+      `${Object.keys(POINTCLOUDS).join(", ")}`
   )
 
-const dim = spec.seedAt.length
-const useRing =
-  options.graph === "ws" ||
-  (options.graph === "auto" && options.target === "ring")
-const built =
-  useRing ?
-    wattsStrogatzGraph({
-      nodes: options.nodes,
-      k: options.k,
-      beta: options.beta,
-      seed: options.seed
-    })
-  : randomGeometricGraph({
-      nodes: options.nodes,
-      k: options.k,
-      seed: options.seed,
-      dim
-    })
-const pos = built.pos
-const edges: Edges = built.edges
+let pos: Points
+let edges: Edges
+let targetData: Target
+let seedAt: number[]
+let kind: string
+
+if (isCloud) {
+  const path = `${options.clouds}/${options.target}.npz`
+  let cloud
+  try {
+    cloud = loadCloud(path, { nodes: options.nodes })
+  } catch (error) {
+    throw new Error(
+      `could not load the ${options.target} cloud from ${path}: ` +
+        `${error instanceof Error ? error.message : String(error)}\n` +
+        `Point --clouds at a directory of .npz clouds; the reference ` +
+        `repo builds them with scripts/fetch_pointclouds.py.`
+    )
+  }
+  pos = cloud.pos
+  targetData = cloud.target
+  seedAt = cloud.seedAt
+  // Clouds are denser than a random cube, so they want more neighbours.
+  edges = knnGraph(pos, flags.has("k") ? options.k : 12)
+  kind = "surface cloud"
+} else {
+  const spec = TARGETS[options.target]!
+  seedAt = spec.seedAt
+  const built =
+    useRing ?
+      wattsStrogatzGraph({
+        nodes: options.nodes,
+        k: options.k,
+        beta: options.beta,
+        seed: options.seed
+      })
+    : randomGeometricGraph({
+        nodes: options.nodes,
+        k: options.k,
+        seed: options.seed,
+        dim: seedAt.length
+      })
+  pos = built.pos
+  edges = built.edges
+  targetData = spec.build(pos)
+  kind = useRing ? "ring" : "geometric"
+}
+
+const dim = pos.dim
 const N = pos.n
 const C = options.channels
 const B = options.batch
-const targetData = spec.build(pos)
-const center = nearestNode(pos, spec.seedAt)
+const center = nearestNode(pos, seedAt)
 const inPattern = damage.patternNodes(targetData)
 
 console.log(
-  `${options.target}: ${dim}-d ${useRing ? "ring" : "geometric"} graph, ` +
+  `${options.target}: ${dim}-d ${kind}, ` +
     `${N} nodes, ${edges.count} edges, ${inPattern.length} in the pattern`
 )
 console.log(

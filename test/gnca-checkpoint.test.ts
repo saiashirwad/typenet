@@ -3,7 +3,7 @@
 // rule functionally identical, which is the whole basis of the reference's
 // ablation ladder.
 
-import { mkdtempSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -31,6 +31,10 @@ import {
   visible
 } from "../examples/gnca/render.ts"
 import { heart } from "../examples/gnca/targets.ts"
+import {
+  POINTCLOUDS,
+  loadCloud
+} from "../examples/gnca/pointclouds.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -215,5 +219,69 @@ describe("rendering", () => {
     )
     expect(svg).not.toContain("NaN")
     expect(svg).toMatch(/fill="rgb\(255,255,255\)"/)
+  })
+})
+
+// Surface point clouds — the targets the reference's own experiments use.
+// The .npz reader has to handle ZIP64 (numpy writes it) and the values have
+// to match the reference exactly, so the fixture records what Python
+// produced for the same file.
+const CLOUD_DIR =
+  "../graph-cellular-automata/data/pointclouds"
+const bunnyPath = `${CLOUD_DIR}/bunny.npz`
+const haveBunny = existsSync(bunnyPath)
+
+describe.skipIf(!haveBunny)("point clouds", () => {
+  it("reads the bunny exactly as numpy does", () => {
+    const cloud = loadCloud(bunnyPath)
+    expect(cloud.pos.n).toBe(1536)
+    expect(cloud.pos.dim).toBe(3)
+    expect(cloud.seedAt).toEqual([0.5, 0.85, 0.55])
+
+    // From gnca.pointclouds.load_cloud("bunny") in the reference repo.
+    const firstPos = [0.114559, 0.579978, 0.507694]
+    const firstRgba = [0.584566, 0.031965, 0, 1]
+    firstPos.forEach((v, i) =>
+      expect(cloud.pos.data[i]).toBeCloseTo(v, 6)
+    )
+    firstRgba.forEach((v, i) =>
+      expect(cloud.target[i]).toBeCloseTo(v, 6)
+    )
+
+    // The longest axis fills [0.08, 0.92]; every node is on the surface,
+    // so alpha is 1 everywhere rather than a fraction of the graph.
+    let lo = Infinity
+    let hi = -Infinity
+    for (let i = 0; i < cloud.pos.n; i++) {
+      lo = Math.min(lo, cloud.pos.data[i * 3]!)
+      hi = Math.max(hi, cloud.pos.data[i * 3]!)
+    }
+    expect(lo).toBeCloseTo(0.08, 4)
+    expect(hi).toBeCloseTo(0.92, 4)
+    let alpha = 0
+    for (let i = 0; i < cloud.pos.n; i++)
+      alpha += cloud.target[i * 4 + 3]!
+    expect(alpha).toBe(cloud.pos.n)
+  })
+
+  it("subsamples evenly, keeping the shape in the unit cube", () => {
+    const cloud = loadCloud(bunnyPath, { nodes: 400 })
+    expect(cloud.pos.n).toBe(400)
+    for (let i = 0; i < cloud.pos.data.length; i++) {
+      expect(cloud.pos.data[i]).toBeGreaterThanOrEqual(0)
+      expect(cloud.pos.data[i]).toBeLessThanOrEqual(1)
+    }
+    // and a k-NN graph over it is connected enough to be useful
+    const edges = knnGraph(cloud.pos, 12)
+    expect(edges.count).toBeGreaterThan(400 * 12)
+  })
+
+  it("names the clouds the reference names", () => {
+    expect(Object.keys(POINTCLOUDS).sort()).toEqual([
+      "armadillo",
+      "bunny",
+      "spot",
+      "teapot"
+    ])
   })
 })

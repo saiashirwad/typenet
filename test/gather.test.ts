@@ -444,50 +444,77 @@ describe("empty dimensions", () => {
 describe.skipIf(!isNativeAvailable())(
   "large reductions",
   () => {
-    // Summing away the outer dim of a tall matrix takes a BLAS route
-    // above 4096 rows, which reassociates the summation. Check both
-    // sides of the threshold against eager, since only the tall case
-    // takes the new path.
+    // Summing away the outer dim of a tall matrix takes a BLAS route above
+    // 4096 rows, which reassociates the summation. Comparing it to the
+    // sequential sum would be the wrong test: a sum of 20000 terms of
+    // magnitude 0.5 that cancels down to ~3 has an absolute error set by
+    // the *terms*, so the two orders legitimately differ by far more than
+    // the result's last digits. What matters is that the new route is no
+    // less accurate, so both are measured against an f64 reference.
+    const build = (rows: number, cols: number) => {
+      const x = Tensor.zeros([rows, cols]) as AnyTensor
+      const data = x.data as Float32Array
+      // deterministic, and deliberately near-cancelling
+      for (let i = 0; i < data.length; i++)
+        data[i] = Math.sin(i * 12.9898) * 0.5
+      const exact = new Float64Array(cols)
+      for (let i = 0; i < rows; i++)
+        for (let c = 0; c < cols; c++)
+          exact[c]! += data[i * cols + c]!
+      let terms = 0
+      for (const v of data) terms += Math.abs(v)
+      return { x, exact, terms: terms / cols }
+    }
+
     it.each([4095, 4096, 20000])(
-      "sums %i rows the same as eager",
+      "sums %i rows at least as accurately as eager",
       rows => {
         const cols = 12
-        const x = Tensor.rand([rows, cols]) as AnyTensor
-        const build = () => x.sub(0.5).sum(0)
+        const { x, exact, terms } = build(rows, cols)
         configure({ lazy: false })
-        const eager = build()
+        const eager = x.sum(0)
         useNative()
         configure({ lazy: true })
-        const native = build()
+        const native = x.sum(0)
         expect(native.shape).toEqual([cols])
-        const a = eager.data
-        const b = native.data
-        for (let i = 0; i < cols; i++)
+        // The f32 error band for a sum of this many terms of this size.
+        const band = terms * 1e-5
+        for (let c = 0; c < cols; c++) {
+          const eagerError = Math.abs(
+            eager.data[c]! - exact[c]!
+          )
+          const nativeError = Math.abs(
+            native.data[c]! - exact[c]!
+          )
           expect(
-            Math.abs(a[i]! - b[i]!) /
-              Math.max(1, Math.abs(a[i]!)),
-            `column ${i}: ${b[i]} vs eager ${a[i]}`
-          ).toBeLessThan(1e-5)
+            nativeError,
+            `column ${c}: ${native.data[c]} vs exact ${exact[c]}`
+          ).toBeLessThan(band)
+          // and not materially worse than the order it replaced
+          expect(
+            nativeError,
+            `column ${c}: native error ${nativeError} vs eager ${eagerError}`
+          ).toBeLessThan(Math.max(eagerError * 8, band))
+        }
       }
     )
 
     it("keeps the dim when asked", () => {
-      const x = Tensor.rand([8192, 3]) as AnyTensor
+      const cols = 3
+      const { x, exact, terms } = build(8192, cols)
       useNative()
       configure({ lazy: true })
       const kept = x.sum(0, true)
-      expect(kept.shape).toEqual([1, 3])
-      configure({ lazy: false })
-      const eager = x.sum(0, true)
-      for (let i = 0; i < 3; i++)
-        expect(kept.get(0, i)).toBeCloseTo(
-          eager.get(0, i),
-          2
-        )
+      expect(kept.shape).toEqual([1, cols])
+      for (let c = 0; c < cols; c++)
+        expect(
+          Math.abs(kept.get(0, c) - exact[c]!)
+        ).toBeLessThan(terms * 1e-5)
     })
 
     it("still reduces the inner dim correctly", () => {
-      const x = Tensor.rand([8192, 5]) as AnyTensor
+      // Short sums, so this one can be exact to f32 rounding.
+      const { x } = build(8192, 5)
       configure({ lazy: false })
       const eager = x.sum(1)
       useNative()
@@ -500,7 +527,7 @@ describe.skipIf(!isNativeAvailable())(
           worst,
           Math.abs(eager.data[i]! - native.data[i]!)
         )
-      expect(worst).toBeLessThan(1e-5)
+      expect(worst).toBeLessThan(1e-6)
     })
   }
 )

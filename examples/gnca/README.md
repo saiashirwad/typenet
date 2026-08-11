@@ -9,6 +9,7 @@ which is the PyTorch original and the source of truth for the recipe.
 pnpm gnca                            # train with the reference defaults
 pnpm gnca --steps 200                # a quick run
 pnpm gnca --target star --nodes 512  # a different pattern, smaller graph
+pnpm gnca --target bunny --nodes 1536      # a mesh surface, 3-d
 pnpm gnca --init-from runs/gnca-heart.json   # warm start
 pnpm vite-node examples/gnca/bench.ts
 ```
@@ -25,6 +26,26 @@ what makes the reference's ablation ladder work: the loaded rule is
 *functionally identical* to begin with, since a zero column contributes
 nothing, so adding a percept feature measures the feature rather than a
 fresh initialisation.
+
+## Targets
+
+Eight procedural patterns (`heart`, `star`, `annulus`, `lobes`, `ring`
+in 2-d; `sphere`, `torus`, `jack` in 3-d) and four mesh surface clouds
+(`bunny`, `spot`, `armadillo`, `teapot`).
+
+The clouds are the better 3-d targets and the ones the reference's own
+experiments use: the procedural shells paint a thin surface inside a random
+cube, so only a fifth of the graph is the pattern and a demo looks like
+dust, whereas on a cloud every node sits on the mesh, alpha is 1
+everywhere, and colour comes from the surface normal — so a regrown ear
+comes back in a colour you can check.
+
+They load from the reference repo's `.npz` files, which is why
+`pointclouds.ts` contains a small zip and `.npy` reader; numpy writes
+ZIP64, so the reader goes through the central directory rather than
+trusting the local headers' sizes. Point `--clouds` elsewhere if your
+copies live elsewhere. The loader is checked against Python's values for
+the same file, to six decimals.
 
 ## The rule
 
@@ -70,6 +91,7 @@ while regeneration stays broken.
 | `model.ts`   | the update rule, the alive mask, the seed state             |
 | `graphs.ts`  | k-NN, random geometric and Watts-Strogatz graph builders     |
 | `targets.ts` | the eight patterns, 2-d and 3-d, sampled at node positions  |
+| `pointclouds.ts` | mesh surface clouds as targets, with a small .npz reader |
 | `damage.ts`  | ways to break a grown pattern: balls, scatter, bands, cuts   |
 | `train.ts`   | the training loop                                           |
 | `bench.ts`   | where the time goes, per rolled-out step and per graph size  |
