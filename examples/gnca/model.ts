@@ -16,6 +16,7 @@
 
 import { cat, Linear, Module, Tensor, uniform } from "../../index.ts"
 import type { DimAdd, DimMul, Shape } from "../../src/shape.ts"
+import { fromFlat } from "../../src/tensor.ts"
 import { type Edges, inDegrees } from "./graphs.ts"
 
 /**
@@ -87,9 +88,7 @@ function fromData<S extends Shape>(
   data: Float32Array,
   shape: number[],
 ): Tensor<S> {
-  const t = Tensor.zeros(shape)
-  ;(t.data as Float32Array).set(data)
-  return t as unknown as Tensor<S>
+  return fromFlat(data, shape) as unknown as Tensor<S>
 }
 
 /**

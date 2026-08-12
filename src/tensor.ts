@@ -134,6 +134,17 @@ export function makeRaw(
   return makeStorage({ kind: "cpu", data }, shape, dtype)
 }
 
+/** CPU tensor from a flat buffer, using the buffer as storage when it already matches `dtype`. */
+export function fromFlat(
+  data: ArrayLike<number>,
+  shape: readonly number[],
+  dtype: DType = "float32",
+): AnyTensor {
+  const ctor = arrayCtor(dtype)
+  const buf = data instanceof ctor ? data : ctor.from(data)
+  return makeRaw(buf, shape, dtype)
+}
+
 export function makeStorage(
   storage: TensorStorage,
   shape: readonly number[],
@@ -339,11 +350,12 @@ export class Tensor<
   }
 
   toArray(): NestedArray<S> {
+    const strides = contiguousStrides(this.shape)
     const build = (dim: number, offset: number): any => {
       if (dim === this.shape.length) {
         return this.data[offset]!
       }
-      const stride = contiguousStrides(this.shape)[dim]!
+      const stride = strides[dim]!
       const out = new Array(this.shape[dim]!)
       for (let i = 0; i < this.shape[dim]!; i++) {
         out[i] = build(dim + 1, offset + i * stride)
@@ -639,7 +651,7 @@ export class Tensor<
     other: Tensor<S2, any> & BroadcastCheck<S, S2>,
   ): Tensor<Broadcast<S, S2>, P>
   gt(other: AnyTensor | number): AnyTensor {
-    return rawBinary(this, coerce(other, this), "gt")
+    return this.compare(other, "gt")
   }
 
   ge(other: number): Tensor<S, P>
@@ -647,7 +659,7 @@ export class Tensor<
     other: Tensor<S2, any> & BroadcastCheck<S, S2>,
   ): Tensor<Broadcast<S, S2>, P>
   ge(other: AnyTensor | number): AnyTensor {
-    return rawBinary(this, coerce(other, this), "ge")
+    return this.compare(other, "ge")
   }
 
   lt(other: number): Tensor<S, P>
@@ -655,7 +667,7 @@ export class Tensor<
     other: Tensor<S2, any> & BroadcastCheck<S, S2>,
   ): Tensor<Broadcast<S, S2>, P>
   lt(other: AnyTensor | number): AnyTensor {
-    return rawBinary(this, coerce(other, this), "lt")
+    return this.compare(other, "lt")
   }
 
   le(other: number): Tensor<S, P>
@@ -663,7 +675,7 @@ export class Tensor<
     other: Tensor<S2, any> & BroadcastCheck<S, S2>,
   ): Tensor<Broadcast<S, S2>, P>
   le(other: AnyTensor | number): AnyTensor {
-    return rawBinary(this, coerce(other, this), "le")
+    return this.compare(other, "le")
   }
 
   eq(other: number): Tensor<S, P>
@@ -671,7 +683,14 @@ export class Tensor<
     other: Tensor<S2, any> & BroadcastCheck<S, S2>,
   ): Tensor<Broadcast<S, S2>, P>
   eq(other: AnyTensor | number): AnyTensor {
-    return rawBinary(this, coerce(other, this), "eq")
+    return this.compare(other, "eq")
+  }
+
+  private compare(
+    other: AnyTensor | number,
+    op: "gt" | "ge" | "lt" | "le" | "eq",
+  ): AnyTensor {
+    return rawBinary(this, coerce(other, this), op)
   }
 
   pow(exponent: number): Tensor<S, P> {
@@ -751,26 +770,26 @@ export class Tensor<
   softmax<D extends number>(
     dim: D & DimCheck<S, D>,
   ): Tensor<S, P> {
-    const shifted = this.sub(
-      this.max(dim as number as any, true).detach() as any,
-    )
-    const e = shifted.exp()
-    return e.div(
-      (e as AnyTensor).sum(dim as any, true) as any,
-    ) as any
+    const { e } = this.softmaxShift(dim as number)
+    return e.div(e.sum(dim as any, true) as any) as any
   }
 
   logSoftmax<D extends number>(
     dim: D & DimCheck<S, D>,
   ): Tensor<S, P> {
+    const { shifted, e } = this.softmaxShift(dim as number)
+    return shifted.sub(
+      e.sum(dim as any, true).log() as any,
+    ) as any
+  }
+
+  private softmaxShift(
+    dim: number,
+  ): { shifted: AnyTensor; e: AnyTensor } {
     const shifted = this.sub(
-      this.max(dim as number as any, true).detach() as any,
+      this.max(dim as any, true).detach() as any,
     ) as AnyTensor
-    const logSumExp = shifted
-      .exp()
-      .sum(dim as any, true)
-      .log()
-    return shifted.sub(logSumExp as any) as any
+    return { shifted, e: shifted.exp() }
   }
 
   matmul<S2 extends Shape>(

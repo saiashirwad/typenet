@@ -32,10 +32,7 @@ export type IsDynamic<S extends Shape> = number[] extends S ? true : false
 export type DimAdd<A extends number, B extends number> =
     IsExact<B, 0> extends true ? A
   : IsExact<A, 0> extends true ? B
-  : DimAddFold<A, B>
-
-type DimAddFold<A extends number, B extends number> =
-    number extends A ? number
+  : number extends A ? number
   : number extends B ? number
   : Call<Numbers.Add<A, B>> extends infer R extends number ? R
   : number
@@ -49,10 +46,7 @@ export type DimMul<A extends number, B extends number> =
   : IsExact<B, 1> extends true ? A
   : IsExact<A, 0> extends true ? 0
   : IsExact<A, 1> extends true ? B
-  : DimMulFold<A, B>
-
-type DimMulFold<A extends number, B extends number> =
-    number extends A ? number
+  : number extends A ? number
   : number extends B ? number
   : Call<Numbers.Mul<A, B>> extends infer R extends number ? R
   : number
@@ -68,11 +62,11 @@ type NumDiv<A extends number, B extends number> =
   : Call<Numbers.Div<A, B>> extends infer R extends number ? R
   : number
 
-export type Reverse<T extends any[], Acc extends any[] = []> = T extends [infer H, ...infer R] ? Reverse<R, [H, ...Acc]> : Acc
+type Reverse<T extends any[], Acc extends any[] = []> = T extends [infer H, ...infer R] ? Reverse<R, [H, ...Acc]> : Acc
 
-export type Init<S extends Shape> = S extends [...infer R extends number[], any] ? R : never
+type Init<S extends Shape> = S extends [...infer R extends number[], any] ? R : never
 
-export type Last<S extends Shape> = S extends [...any[], infer L extends number] ? L : never
+type Last<S extends Shape> = S extends [...any[], infer L extends number] ? L : never
 
 type HasDup<T extends number[], Seen extends number = never> =
     T extends [
@@ -83,17 +77,15 @@ type HasDup<T extends number[], Seen extends number = never> =
     : HasDup<Xs, Seen | X>
   : false
 
-export type ShowShape<S extends Shape, Acc extends string = ""> =
+type ShowShape<S extends Shape, Acc extends string = ""> =
     IsDynamic<S> extends true ? `[...]`
   : S extends [infer X extends number, ...infer Xs extends number[]] ? ShowShape<Xs, Acc extends "" ? `${X}` : `${Acc}, ${X}`>
   : `[${Acc}]`
 
-export type Product<S extends Shape, Acc extends number = 1> =
+type Product<S extends Shape, Acc extends number = 1> =
     IsDynamic<S> extends true ? number
   : S extends [infer X extends number, ...infer Xs extends number[]] ? Product<Xs, DimMul<Acc, X>>
   : Acc
-
-export type NumEl<S extends Shape> = Product<S>
 
 type IsNegative<D extends number> = `${D}` extends `-${string}` ? true : false
 

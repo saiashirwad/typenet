@@ -91,6 +91,31 @@ export function isNativeEnabled(): boolean {
   return nativeEnabled && loadNative() !== null
 }
 
+const MISSING_ADDON = "@typenet/native is not built. Run `pnpm build:native`."
+
+function withNative<T>(fn: (mod: NativeModule) => T): T
+function withNative<T>(
+  fn: (mod: NativeModule) => T,
+  fallback: () => T,
+): T
+function withNative<T>(
+  fn: (mod: NativeModule) => T,
+  fallback?: () => T,
+): T {
+  const mod = loadNative()
+  if (!mod) {
+    if (fallback) return fallback()
+    throw new Error(MISSING_ADDON)
+  }
+  try {
+    return fn(mod)
+  } catch (error) {
+    throw new Error(
+      `native backend: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+}
+
 /**
  * Evaluate a serialized lazy graph in one FFI hop. Internal — called
  * from force() in src/tensor.ts. `seed` drives any random nodes in the
@@ -102,21 +127,7 @@ export function evalGraphNative(
   leaves: Float32Array,
   seed: number,
 ): Float32Array {
-  const mod = loadNative()
-  if (!mod) {
-    throw new Error(
-      "@typenet/native is not built. Run `pnpm build:native`.",
-    )
-  }
-  try {
-    return new Float32Array(
-      mod.evalGraph(graphJson, leaves, seed >>> 0),
-    )
-  } catch (error) {
-    throw new Error(
-      `native backend: ${error instanceof Error ? error.message : String(error)}`,
-    )
-  }
+  return withNative(mod => new Float32Array(mod.evalGraph(graphJson, leaves, seed >>> 0)))
 }
 
 /**
@@ -130,19 +141,7 @@ export function evalGraphNative(
 export function prepareGraphNative(
   graphJson: string,
 ): number {
-  const mod = loadNative()
-  if (!mod) {
-    throw new Error(
-      "@typenet/native is not built. Run `pnpm build:native`.",
-    )
-  }
-  try {
-    return mod.prepareGraph(graphJson)
-  } catch (error) {
-    throw new Error(
-      `native backend: ${error instanceof Error ? error.message : String(error)}`,
-    )
-  }
+  return withNative(mod => mod.prepareGraph(graphJson))
 }
 
 /** Evaluate a graph prepared by {@link prepareGraphNative}. */
@@ -151,29 +150,15 @@ export function evalPreparedNative(
   leaves: Float32Array,
   seed: number,
 ): Float32Array {
-  const mod = loadNative()
-  if (!mod) {
-    throw new Error(
-      "@typenet/native is not built. Run `pnpm build:native`.",
-    )
-  }
-  try {
-    return new Float32Array(
-      mod.evalPrepared(handle, leaves, seed >>> 0),
-    )
-  } catch (error) {
-    throw new Error(
-      `native backend: ${error instanceof Error ? error.message : String(error)}`,
-    )
-  }
+  return withNative(mod => new Float32Array(mod.evalPrepared(handle, leaves, seed >>> 0)))
 }
 
-/** Release a prepared graph. */
+/** Release a prepared graph. No-op when the addon is not loaded. */
 export function releaseGraphNative(handle: number): void {
-  loadNative()?.releaseGraph(handle)
+  withNative(mod => mod.releaseGraph(handle), () => undefined)
 }
 
 /** How many prepared-graph handles the native side currently holds. */
 export function preparedGraphCountNative(): number {
-  return loadNative()?.preparedGraphCount() ?? 0
+  return withNative(mod => mod.preparedGraphCount(), () => 0)
 }

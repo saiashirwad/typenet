@@ -1,5 +1,5 @@
 import type { DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts"
-import { Tensor } from "./tensor.ts"
+import { fromFlat, Tensor } from "./tensor.ts"
 import type { TensorParams } from "./tensor.ts"
 
 type AnyTensor = Tensor<any, any>
@@ -78,46 +78,47 @@ export interface Layer<
   ): Tensor<[B, NoInfer<Out>], P>
 }
 
-export class ReLU extends Module {
-  forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>,
-  ): Tensor<S, P> {
-    return x.relu()
-  }
-}
-
-export class LeakyReLU extends Module {
-  constructor(private negativeSlope = 0.01) {
+class Activation extends Module {
+  constructor(
+    private readonly apply: (x: AnyTensor) => AnyTensor,
+  ) {
     super()
   }
+
   forward<S extends Shape, P extends TensorParams>(
     x: Tensor<S, P>,
   ): Tensor<S, P> {
-    return x.leakyRelu(this.negativeSlope)
+    return this.apply(x) as any
   }
 }
 
-export class Tanh extends Module {
-  forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>,
-  ): Tensor<S, P> {
-    return x.tanh()
+export class ReLU extends Activation {
+  constructor() {
+    super(x => x.relu())
   }
 }
 
-export class Sigmoid extends Module {
-  forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>,
-  ): Tensor<S, P> {
-    return x.sigmoid()
+export class LeakyReLU extends Activation {
+  constructor(negativeSlope = 0.01) {
+    super(x => x.leakyRelu(negativeSlope))
   }
 }
 
-export class Softmax extends Module {
-  forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>,
-  ): Tensor<S, P> {
-    return x.softmax(-1 as any) as any
+export class Tanh extends Activation {
+  constructor() {
+    super(x => x.tanh())
+  }
+}
+
+export class Sigmoid extends Activation {
+  constructor() {
+    super(x => x.sigmoid())
+  }
+}
+
+export class Softmax extends Activation {
+  constructor() {
+    super(x => x.softmax(-1 as any) as any)
   }
 }
 
@@ -271,13 +272,4 @@ export function crossEntropy<
     .sum()
     .neg()
     .div(batch!) as any
-}
-
-function fromFlat(
-  data: Float32Array,
-  shape: number[],
-): AnyTensor {
-  const t = Tensor.zeros(shape as [number, number])
-  t.data.set(data)
-  return t as AnyTensor
 }

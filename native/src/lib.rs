@@ -995,9 +995,7 @@ fn handles() -> &'static Mutex<HashMap<u32, Arc<PreparedGraph>>> {
 /// Parse and plan a graph once, returning a handle for `evalPrepared`.
 #[napi(js_name = "prepareGraph")]
 pub fn prepare_graph(graph_json: String) -> Result<u32> {
-    let graph: Graph = serde_json::from_str(&graph_json)
-        .map_err(|e| Error::new(Status::InvalidArg, format!("invalid graph JSON: {e}")))?;
-    let prep = Arc::new(PreparedGraph::prepare(graph).map_err(to_napi_err)?);
+    let prep = prepared(&graph_json)?;
     let mut next = NEXT_HANDLE.lock().unwrap();
     let handle = *next;
     *next += 1;
@@ -1758,14 +1756,21 @@ fn tiny_cat(
     out
 }
 
-fn tiny_one_hot(classes: usize, data: &[f32]) -> candle_core::Result<Vec<f32>> {
-    let mut out = vec![0f32; data.len() * classes];
-    for (i, &v) in data.iter().enumerate() {
+fn validate_one_hot_targets(classes: usize, values: &[f32]) -> candle_core::Result<()> {
+    for &v in values {
         if v.fract() != 0.0 || v < 0.0 || v >= classes as f32 {
             return Err(candle_core::Error::Msg(format!(
                 "oneHot: target {v} out of range for {classes} classes"
             )));
         }
+    }
+    Ok(())
+}
+
+fn tiny_one_hot(classes: usize, data: &[f32]) -> candle_core::Result<Vec<f32>> {
+    validate_one_hot_targets(classes, data)?;
+    let mut out = vec![0f32; data.len() * classes];
+    for (i, &v) in data.iter().enumerate() {
         out[i * classes + v as usize] = 1.0;
     }
     Ok(out)
@@ -1859,13 +1864,7 @@ fn eval_reduce(
 fn eval_one_hot(classes: usize, a: &Tensor) -> candle_core::Result<Tensor> {
     let flat = a.contiguous()?.flatten_all()?;
     let values = flat.to_vec1::<f32>()?;
-    for &v in &values {
-        if v.fract() != 0.0 || v < 0.0 || v >= classes as f32 {
-            return Err(candle_core::Error::Msg(format!(
-                "oneHot: target {v} out of range for {classes} classes"
-            )));
-        }
-    }
+    validate_one_hot_targets(classes, &values)?;
     let n = values.len();
     let targets = flat
         .to_dtype(DType::U32)?

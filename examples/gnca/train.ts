@@ -15,6 +15,7 @@
 
 import { writeFileSync } from "node:fs"
 import { Adam, clipGradNorm, compile, configure, isNativeAvailable, nativeDevice, nativeDeviceMode, normal, Tensor, useNative } from "../../index.ts"
+import { fromFlat } from "../../src/tensor.ts"
 import { loadRule, readCheckpoint, saveCheckpoint } from "./checkpoint.ts"
 import * as damage from "./damage.ts"
 import { batchEdges, type Edges, knnGraph, nearestNode, type Points, randomGeometricGraph, wattsStrogatzGraph } from "./graphs.ts"
@@ -209,9 +210,7 @@ function tensorFrom(
   data: Float32Array,
   shape: number[],
 ): AnyTensor {
-  const t = Tensor.zeros(shape) as AnyTensor
-  ;(t.data as Float32Array).set(data)
-  return t
+  return fromFlat(data, shape)
 }
 
 function tile(

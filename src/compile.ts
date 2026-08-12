@@ -7,7 +7,7 @@
 
 import * as nativeBackend from "./backends/native.ts"
 import { nextSeed } from "./kernels.ts"
-import { force, forceMany, lazily, serializeLazyGraph, topoOrder } from "./lazy.ts"
+import { force, forceMany, formatLazyOp, lazily, serializeLazyGraph, topoOrder } from "./lazy.ts"
 import { type CpuStorage, type LazyStorage, prod, shapesEqual, showShape, type TensorStorage } from "./storage.ts"
 import { type AnyTensor, makeRaw, Tensor } from "./tensor.ts"
 
@@ -83,89 +83,7 @@ export function printGraph(
       const shape = showShape(t.shape)
       const tail = `${shape} ${t.dtype}${rootSet.has(t) ? " ; root" : ""}`
       if (!node) return `${lhs} = leaf ${tail}`
-      const arg = (u: AnyTensor) => label(u)
-      const attrs = (pairs: [string, unknown][]): string =>
-        pairs.length === 0
-          ? ""
-          : ` {${pairs.map(([k, v]) => `${k}=${v}`).join(", ")}}`
-      const param = (p: number): [string, unknown][] => p === 0 ? [] : [["parameter", p]]
-      switch (node.op) {
-        case "binary":
-          return `${lhs} = ${node.kind}(${arg(node.a)}, ${arg(node.b)})${attrs(param(node.parameter))} ${tail}`
-        case "unary":
-          return `${lhs} = ${node.kind}(${arg(node.input)})${attrs(param(node.parameter))} ${tail}`
-        case "matmul":
-          return `${lhs} = matmul(${arg(node.a)}, ${arg(node.b)}) ${tail}`
-        case "reduce":
-          return `${lhs} = reduce.${node.kind}(${arg(node.input)})${
-            attrs(
-              [
-                ["dim", node.dim],
-                ...(node.keepdim
-                  ? ([["keepdim", node.keepdim]] as [
-                    string,
-                    unknown,
-                  ][])
-                  : []),
-              ],
-            )
-          } ${tail}`
-        case "reduceAll":
-          return `${lhs} = reduceAll.${node.kind}(${arg(node.input)}) ${tail}`
-        case "broadcastTo":
-          return `${lhs} = broadcastTo(${arg(node.input)}) ${tail}`
-        case "permute":
-          return `${lhs} = permute(${arg(node.input)})${
-            attrs(
-              [["order", `[${node.order.join(", ")}]`]],
-            )
-          } ${tail}`
-        case "view":
-          return `${lhs} = view(${arg(node.input)}) ${tail}`
-        case "narrow":
-          return `${lhs} = narrow(${arg(node.input)})${
-            attrs(
-              [
-                ["dim", node.dim],
-                ["start", node.start],
-                ["length", node.length],
-              ],
-            )
-          } ${tail}`
-        case "cat":
-          return `${lhs} = cat(${arg(node.a)}, ${arg(node.b)})${
-            attrs(
-              [["dim", node.dim]],
-            )
-          } ${tail}`
-        case "oneHot":
-          return `${lhs} = oneHot(${arg(node.input)})${
-            attrs(
-              [["classes", node.classes]],
-            )
-          } ${tail}`
-        case "indexSelect":
-          return `${lhs} = indexSelect(${arg(node.input)}, ${arg(node.index)})${
-            attrs(
-              [["dim", node.dim]],
-            )
-          } ${tail}`
-        case "scatterAdd":
-          return `${lhs} = scatterAdd(${arg(node.input)}, ${arg(node.index)})${
-            attrs(
-              [
-                ["dim", node.dim],
-                ["length", node.length],
-              ],
-            )
-          } ${tail}`
-        case "random":
-          return `${lhs} = random.${node.kind}()${
-            attrs([
-              ["stream", node.stream],
-            ])
-          } ${tail}`
-      }
+      return `${lhs} = ${formatLazyOp(node, label)} ${tail}`
     })
     .join("\n")
 }

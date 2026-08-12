@@ -67,27 +67,189 @@ function lazily<T>(fn: () => T): T {
   }
 }
 
+// One descriptor per lazy op: tensor inputs, JSON fields, and how
+// printGraph names the node. nodeInputs / serializeLazyGraph /
+// printGraph all read this; evalNode stays a dispatch because it
+// calls a different raw* kernel per op.
+type TensorField = "a" | "b" | "input" | "index"
+type JsonField =
+  | TensorField
+  | "kind"
+  | "parameter"
+  | "dim"
+  | "keepdim"
+  | "order"
+  | "start"
+  | "length"
+  | "classes"
+  | "stream"
+  | "shape"
+
+type OpDesc = {
+  tensors: readonly TensorField[]
+  json: readonly JsonField[]
+  printName: "op" | "kind" | "dotted"
+  printAttrs: readonly {
+    key: Exclude<JsonField, TensorField | "shape">
+    skipIf?: unknown
+    format?: "list"
+  }[]
+}
+
+const OP_DESC: Record<LazyNode["op"], OpDesc> = {
+  binary: {
+    tensors: ["a", "b"],
+    json: ["kind", "parameter", "a", "b", "shape"],
+    printName: "kind",
+    printAttrs: [{ key: "parameter", skipIf: 0 }],
+  },
+  unary: {
+    tensors: ["input"],
+    json: ["kind", "parameter", "input"],
+    printName: "kind",
+    printAttrs: [{ key: "parameter", skipIf: 0 }],
+  },
+  matmul: {
+    tensors: ["a", "b"],
+    json: ["a", "b"],
+    printName: "op",
+    printAttrs: [],
+  },
+  reduce: {
+    tensors: ["input"],
+    json: ["kind", "dim", "keepdim", "input"],
+    printName: "dotted",
+    printAttrs: [
+      { key: "dim" },
+      { key: "keepdim", skipIf: false },
+    ],
+  },
+  reduceAll: {
+    tensors: ["input"],
+    json: ["kind", "input"],
+    printName: "dotted",
+    printAttrs: [],
+  },
+  broadcastTo: {
+    tensors: ["input"],
+    json: ["input", "shape"],
+    printName: "op",
+    printAttrs: [],
+  },
+  permute: {
+    tensors: ["input"],
+    json: ["order", "input"],
+    printName: "op",
+    printAttrs: [{ key: "order", format: "list" }],
+  },
+  view: {
+    tensors: ["input"],
+    json: ["input", "shape"],
+    printName: "op",
+    printAttrs: [],
+  },
+  narrow: {
+    tensors: ["input"],
+    json: ["dim", "start", "length", "input"],
+    printName: "op",
+    printAttrs: [
+      { key: "dim" },
+      { key: "start" },
+      { key: "length" },
+    ],
+  },
+  cat: {
+    tensors: ["a", "b"],
+    json: ["a", "b", "dim"],
+    printName: "op",
+    printAttrs: [{ key: "dim" }],
+  },
+  oneHot: {
+    tensors: ["input"],
+    json: ["classes", "input"],
+    printName: "op",
+    printAttrs: [{ key: "classes" }],
+  },
+  indexSelect: {
+    tensors: ["input", "index"],
+    json: ["dim", "input", "index"],
+    printName: "op",
+    printAttrs: [{ key: "dim" }],
+  },
+  scatterAdd: {
+    tensors: ["input", "index"],
+    json: ["dim", "length", "input", "index"],
+    printName: "op",
+    printAttrs: [{ key: "dim" }, { key: "length" }],
+  },
+  random: {
+    tensors: [],
+    json: ["kind", "stream", "shape"],
+    printName: "dotted",
+    printAttrs: [{ key: "stream" }],
+  },
+}
+
+function nodeFields(
+  node: LazyNode,
+): LazyNode & Record<string, unknown> {
+  return node as LazyNode & Record<string, unknown>
+}
+
 function nodeInputs(node: LazyNode): AnyTensor[] {
-  switch (node.op) {
-    case "binary":
-    case "matmul":
-    case "cat":
-      return [node.a, node.b]
-    case "unary":
-    case "reduce":
-    case "reduceAll":
-    case "broadcastTo":
-    case "permute":
-    case "view":
-    case "narrow":
-    case "oneHot":
-      return [node.input]
-    case "indexSelect":
-    case "scatterAdd":
-      return [node.input, node.index]
-    case "random":
-      return []
+  const rec = nodeFields(node)
+  return OP_DESC[node.op].tensors.map(k => rec[k] as AnyTensor)
+}
+
+/** SSA-ish `op(inputs) {attrs}` used by printGraph. */
+function formatLazyOp(
+  node: LazyNode,
+  arg: (t: AnyTensor) => string,
+): string {
+  const desc = OP_DESC[node.op]
+  const rec = nodeFields(node)
+  const name = desc.printName === "kind"
+    ? String(rec.kind)
+    : desc.printName === "dotted"
+    ? `${node.op}.${rec.kind}`
+    : node.op
+  const args = desc.tensors
+    .map(k => arg(rec[k] as AnyTensor))
+    .join(", ")
+  const pairs: [string, unknown][] = []
+  for (const attr of desc.printAttrs) {
+    const value = rec[attr.key]
+    if (attr.skipIf !== undefined && value === attr.skipIf) {
+      continue
+    }
+    const shown = attr.format === "list"
+      ? `[${(value as number[]).join(", ")}]`
+      : value
+    pairs.push([attr.key, shown])
   }
+  const extra = pairs.length === 0
+    ? ""
+    : ` {${pairs.map(([k, v]) => `${k}=${v}`).join(", ")}}`
+  return `${name}(${args})${extra}`
+}
+
+function serializeNode(
+  node: LazyNode,
+  ref: (t: AnyTensor) => number,
+): SerializedNode {
+  const desc = OP_DESC[node.op]
+  const rec = nodeFields(node)
+  const out: SerializedNode = { op: node.op }
+  for (const field of desc.json) {
+    if (field === "shape") {
+      out.shape = [...node.shape]
+    } else if ((desc.tensors as readonly string[]).includes(field)) {
+      out[field] = ref(rec[field] as AnyTensor)
+    } else {
+      out[field] = rec[field]
+    }
+  }
+  return out
 }
 
 function makeLazy(
@@ -338,123 +500,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     work += prod(node.shape)
     // Every input precedes `t` in topological order, so its index is
     // already assigned.
-    const ref = (u: AnyTensor): number => index.get(u)!
-    switch (node.op) {
-      case "binary":
-        nodes.push({
-          op: "binary",
-          kind: node.kind,
-          parameter: node.parameter,
-          a: ref(node.a),
-          b: ref(node.b),
-          shape: node.shape,
-        })
-        break
-      case "unary":
-        nodes.push({
-          op: "unary",
-          kind: node.kind,
-          parameter: node.parameter,
-          input: ref(node.input),
-        })
-        break
-      case "matmul":
-        nodes.push({
-          op: "matmul",
-          a: ref(node.a),
-          b: ref(node.b),
-        })
-        break
-      case "reduce":
-        nodes.push({
-          op: "reduce",
-          kind: node.kind,
-          dim: node.dim,
-          keepdim: node.keepdim,
-          input: ref(node.input),
-        })
-        break
-      case "reduceAll":
-        nodes.push({
-          op: "reduceAll",
-          kind: node.kind,
-          input: ref(node.input),
-        })
-        break
-      case "broadcastTo":
-        nodes.push({
-          op: "broadcastTo",
-          input: ref(node.input),
-          shape: node.shape,
-        })
-        break
-      case "permute":
-        nodes.push({
-          op: "permute",
-          order: node.order,
-          input: ref(node.input),
-        })
-        break
-      case "view":
-        nodes.push({
-          op: "view",
-          input: ref(node.input),
-          shape: node.shape,
-        })
-        break
-      case "narrow":
-        nodes.push({
-          op: "narrow",
-          dim: node.dim,
-          start: node.start,
-          length: node.length,
-          input: ref(node.input),
-        })
-        break
-      case "cat":
-        nodes.push({
-          op: "cat",
-          a: ref(node.a),
-          b: ref(node.b),
-          dim: node.dim,
-        })
-        break
-      case "oneHot":
-        nodes.push({
-          op: "oneHot",
-          classes: node.classes,
-          input: ref(node.input),
-        })
-        break
-      case "indexSelect":
-        nodes.push({
-          op: "indexSelect",
-          dim: node.dim,
-          input: ref(node.input),
-          index: ref(node.index),
-        })
-        break
-      case "scatterAdd":
-        nodes.push({
-          op: "scatterAdd",
-          dim: node.dim,
-          length: node.length,
-          input: ref(node.input),
-          index: ref(node.index),
-        })
-        break
-      case "random":
-        // The stream id is part of the graph's structure; the seed is
-        // not, so it travels as an argument of the eval call and a
-        // replayed graph keeps hitting the same prepared plan.
-        nodes.push({
-          op: "random",
-          kind: node.kind,
-          stream: node.stream,
-          shape: node.shape,
-        })
-        break
-    }
+    nodes.push(serializeNode(node, u => index.get(u)!))
   }
 
   const rootIndices = roots.map(root => index.get(root)!)
@@ -535,7 +581,7 @@ export function forceMany(ts: AnyTensor[]): void {
   for (const t of ts) force(t)
 }
 
-export { eagerly, force, lazily, lazyMode, makeLazy, serializeLazyGraph, topoOrder }
+export { eagerly, force, formatLazyOp, lazily, lazyMode, makeLazy, serializeLazyGraph, topoOrder }
 // CpuStorage/LazyStorage are re-exported so compile.ts can narrow
 // storages without a second import hop back through tensor.ts.
 export type { CpuStorage, LazyStorage, TensorStorage }

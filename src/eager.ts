@@ -28,6 +28,33 @@ import {
 } from "./storage.ts"
 import { type AnyTensor, type DefaultParams, makeRaw, makeStorage, type Tensor } from "./tensor.ts"
 
+// Shared odometer for the three strided kernels: walk `shape` in
+// row-major order and keep one running offset per stride vector.
+function forEachStrided(
+  shape: readonly number[],
+  strideSets: readonly (readonly number[])[],
+  fn: (i: number, offsets: readonly number[]) => void,
+): void {
+  const n = prod(shape)
+  const rank = shape.length
+  const idx = new Array<number>(rank).fill(0)
+  const offs = strideSets.map(() => 0)
+  for (let i = 0; i < n; i++) {
+    fn(i, offs)
+    for (let d = rank - 1; d >= 0; d--) {
+      idx[d]++
+      for (let s = 0; s < strideSets.length; s++) {
+        offs[s]! += strideSets[s]![d]!
+      }
+      if (idx[d]! < shape[d]!) break
+      idx[d] = 0
+      for (let s = 0; s < strideSets.length; s++) {
+        offs[s]! -= strideSets[s]![d]! * shape[d]!
+      }
+    }
+  }
+}
+
 function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
   if (shapesEqual(t.shape, shape)) return t
   let out = t
@@ -54,7 +81,6 @@ function rawBinary(
   const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
     ? "float64"
     : "float32"
-  const rank = outShape.length
   const sa = broadcastStrides(a.shape, outShape)
   const sb = broadcastStrides(b.shape, outShape)
   if (lazyMode) {
@@ -66,28 +92,16 @@ function rawBinary(
   }
   const n = prod(outShape)
   const out = new (arrayCtor(dtype))(n)
-  const idx = new Array(rank).fill(0)
-  let offA = 0
-  let offB = 0
   const ad = a.data
   const bd = b.data
-  for (let i = 0; i < n; i++) {
+  forEachStrided(outShape, [sa, sb], (i, offs) => {
     out[i] = applyBinary(
       op,
-      ad[offA]!,
-      bd[offB]!,
+      ad[offs[0]!]!,
+      bd[offs[1]!]!,
       parameter,
     )
-    for (let d = rank - 1; d >= 0; d--) {
-      idx[d]++
-      offA += sa[d]!
-      offB += sb[d]!
-      if (idx[d] < outShape[d]!) break
-      idx[d] = 0
-      offA -= sa[d]! * outShape[d]!
-      offB -= sb[d]! * outShape[d]!
-    }
-  }
+  })
   return makeRaw(out, outShape, dtype)
 }
 
@@ -201,22 +215,12 @@ function rawBroadcastTo(
     )
   }
   const n = prod(shape)
-  const rank = shape.length
   const sa = broadcastStrides(a.shape, shape)
   const out = new (arrayCtor(a.dtype))(n)
-  const idx = new Array(rank).fill(0)
-  let off = 0
   const ad = a.data
-  for (let i = 0; i < n; i++) {
-    out[i] = ad[off]!
-    for (let d = rank - 1; d >= 0; d--) {
-      idx[d]++
-      off += sa[d]!
-      if (idx[d] < shape[d]!) break
-      idx[d] = 0
-      off -= sa[d]! * shape[d]!
-    }
-  }
+  forEachStrided(shape, [sa], (i, offs) => {
+    out[i] = ad[offs[0]!]!
+  })
   return makeRaw(out, shape, a.dtype)
 }
 
@@ -224,7 +228,6 @@ function rawPermute(
   a: AnyTensor,
   order: number[],
 ): AnyTensor {
-  const rank = a.shape.length
   const outShape = order.map(i => a.shape[i]!)
   if (lazyMode) {
     return makeLazy(
@@ -235,21 +238,11 @@ function rawPermute(
   }
   const inStrides = contiguousStrides(a.shape)
   const readStrides = order.map(i => inStrides[i]!)
-  const n = a.numel
-  const out = new (arrayCtor(a.dtype))(n)
-  const idx = new Array(rank).fill(0)
-  let off = 0
+  const out = new (arrayCtor(a.dtype))(a.numel)
   const ad = a.data
-  for (let i = 0; i < n; i++) {
-    out[i] = ad[off]!
-    for (let d = rank - 1; d >= 0; d--) {
-      idx[d]++
-      off += readStrides[d]!
-      if (idx[d] < outShape[d]!) break
-      idx[d] = 0
-      off -= readStrides[d]! * outShape[d]!
-    }
-  }
+  forEachStrided(outShape, [readStrides], (i, offs) => {
+    out[i] = ad[offs[0]!]!
+  })
   return makeRaw(out, outShape, a.dtype)
 }
 

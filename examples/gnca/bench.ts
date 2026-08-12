@@ -38,7 +38,7 @@ function bench(
   horizons: number[],
 ) {
   const C = 16
-  const { pos, edges } = randomGeometricGraph({
+  const { edges } = randomGeometricGraph({
     nodes,
     dim: 2,
   })

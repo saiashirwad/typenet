@@ -15,6 +15,7 @@ import { batchEdges, knnGraph, nearestNode, randomGeometricGraph } from "../exam
 import { aliveMask, GraphNCA, graphTensors, seedState } from "../examples/gnca/model.ts"
 import { TARGETS } from "../examples/gnca/targets.ts"
 import { Adam, clipGradNorm, compile, configure, disableNative, isNativeAvailable, normal, Tensor, useNative } from "../index.ts"
+import { fromFlat } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any, any>
 
@@ -63,9 +64,7 @@ function tensorFrom(
   values: ArrayLike<number>,
   shape: number[],
 ): AnyTensor {
-  const t = Tensor.zeros(shape) as AnyTensor
-  ;(t.data as Float32Array).set(values)
-  return t
+  return fromFlat(values, shape)
 }
 
 function expectClose(

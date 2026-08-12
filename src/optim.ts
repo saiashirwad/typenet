@@ -41,6 +41,104 @@ function useGraphStep(p: AnyTensor): boolean {
   )
 }
 
+// Number vs tensor algebra so clip / SGD / Adam keep one formula and
+// only the storage (typed arrays vs graph leaves) differs by branch.
+type Algebra<T> = {
+  of(n: number): T
+  add(a: T, b: T | number): T
+  sub(a: T, b: T): T
+  mul(a: T, b: T | number): T
+  div(a: T, b: T | number): T
+  sqrt(a: T): T
+  min1(a: T): T
+}
+
+const nums: Algebra<number> = {
+  of: n => n,
+  add: (a, b) => a + (b as number),
+  sub: (a, b) => a - b,
+  mul: (a, b) => a * (b as number),
+  div: (a, b) => a / (b as number),
+  sqrt: Math.sqrt,
+  min1: a => Math.min(a, 1),
+}
+
+const tensors: Algebra<AnyTensor> = {
+  of: n => Tensor.scalar(n),
+  add: (a, b) => a.add(b as never),
+  sub: (a, b) => a.sub(b),
+  mul: (a, b) => a.mul(b as never),
+  div: (a, b) => a.div(b as never),
+  sqrt: a => a.sqrt(),
+  min1: a => a.minimum(1),
+}
+
+function clipScale<T>(
+  A: Algebra<T>,
+  sumSq: T,
+  maxNorm: number,
+): T {
+  return A.min1(
+    A.div(A.of(maxNorm), A.add(A.sqrt(sumSq), 1e-6)),
+  )
+}
+
+function sgdUpdate<T>(
+  A: Algebra<T>,
+  p: T,
+  g: T,
+  velocity: T | null,
+  lr: number,
+  momentum: number,
+  weightDecay: number,
+): { nextP: T; nextV: T | null } {
+  let grad = g
+  if (weightDecay !== 0) {
+    grad = A.add(grad, A.mul(p, weightDecay))
+  }
+  let nextV: T | null = null
+  if (momentum > 0 && velocity !== null) {
+    nextV = A.add(A.mul(velocity, momentum), grad)
+    grad = nextV
+  }
+  return { nextP: A.sub(p, A.mul(grad, lr)), nextV }
+}
+
+function adamUpdate<T>(
+  A: Algebra<T>,
+  p: T,
+  g: T,
+  m: T,
+  v: T,
+  bc1: T | number,
+  bc2: T | number,
+  lr: number,
+  beta1: number,
+  beta2: number,
+  eps: number,
+  weightDecay: number,
+): { nextP: T; nextM: T; nextV: T } {
+  let grad = g
+  if (weightDecay !== 0) {
+    grad = A.add(grad, A.mul(p, weightDecay))
+  }
+  const nextM = A.add(A.mul(m, beta1), A.mul(grad, 1 - beta1))
+  const nextV = A.add(
+    A.mul(v, beta2),
+    A.mul(A.mul(grad, grad), 1 - beta2),
+  )
+  const mHat = A.div(nextM, bc1)
+  const vHat = A.div(nextV, bc2)
+  return {
+    nextP: A.sub(
+      p,
+      A.div(A.mul(mHat, lr), A.add(A.sqrt(vHat), eps)),
+    ),
+    nextM,
+    nextV,
+  }
+}
+
 /**
  * Scale every gradient down so their combined L2 norm is at most
  * `maxNorm`, leaving them alone when it already is. The standard fix for
@@ -71,11 +169,10 @@ export function clipGradNorm(
       for (const p of withGrads.slice(1)) {
         total = total.add(p.grad!.pow(2).sum())
       }
-      // maxNorm / (norm + 1e-6), never scaling up
-      const scale = Tensor.scalar(maxNorm)
-        .div(total.sqrt().add(1e-6))
-        .minimum(1)
-      for (const p of withGrads) p.grad = p.grad!.mul(scale)
+      const scale = clipScale(tensors, total, maxNorm)
+      for (const p of withGrads) {
+        p.grad = tensors.mul(p.grad!, scale) as typeof p.grad
+      }
       return null
     })
   }
@@ -83,8 +180,7 @@ export function clipGradNorm(
   for (const p of withGrads) {
     for (const g of p.grad!.data) total += g * g
   }
-  const norm = Math.sqrt(total)
-  const scale = Math.min(maxNorm / (norm + 1e-6), 1)
+  const scale = clipScale(nums, total, maxNorm)
   if (scale < 1) {
     for (const p of withGrads) {
       const data = p.grad!.data
@@ -93,7 +189,7 @@ export function clipGradNorm(
       }
     }
   }
-  return norm
+  return Math.sqrt(total)
 }
 
 export abstract class Optimizer {
@@ -152,41 +248,48 @@ export class SGD extends Optimizer {
           // Build the update as graph expressions instead of a
           // CPU-side loop over `.data`; finishGraphUpdates forces
           // them (or, inside compile(), hands them to the tracer).
-          let grad = g as AnyTensor
-          if (this.weightDecay !== 0) {
-            grad = grad.add(p.mul(this.weightDecay))
-          }
+          let velocity: AnyTensor | null = null
           if (this.momentum > 0) {
             if (!this.graphVelocities) {
               this.graphVelocities = this.params.map(
                 q => Tensor.zeros(q.shape) as AnyTensor,
               )
             }
-            const v = this.graphVelocities[pi]!
-            const nextV = v.mul(this.momentum).add(grad)
-            updates.push({ target: v, expr: nextV })
-            grad = nextV
+            velocity = this.graphVelocities[pi]!
           }
-          updates.push({
-            target: p,
-            expr: p.sub(grad.mul(this.lr)),
-          })
+          const next = sgdUpdate(
+            tensors,
+            p,
+            g as AnyTensor,
+            velocity,
+            this.lr,
+            this.momentum,
+            this.weightDecay,
+          )
+          if (velocity && next.nextV) {
+            updates.push({ target: velocity, expr: next.nextV })
+          }
+          updates.push({ target: p, expr: next.nextP })
           grads.push(g)
           return
         }
         const data = p.data
         const gd = g.data
+        const vel = this.momentum > 0
+          ? this.velocities![pi]!
+          : null
         for (let i = 0; i < data.length; i++) {
-          let grad = gd[i]!
-          if (this.weightDecay !== 0) {
-            grad += this.weightDecay * data[i]!
-          }
-          if (this.momentum > 0) {
-            const v = this.velocities![pi]!
-            v[i] = this.momentum * v[i]! + grad
-            grad = v[i]!
-          }
-          data[i]! -= this.lr * grad
+          const next = sgdUpdate(
+            nums,
+            data[i]!,
+            gd[i]!,
+            vel ? vel[i]! : null,
+            this.lr,
+            this.momentum,
+            this.weightDecay,
+          )
+          data[i] = next.nextP
+          if (vel && next.nextV !== null) vel[i] = next.nextV
         }
       })
     })
@@ -282,31 +385,26 @@ export class Adam extends Optimizer {
               q => Tensor.zeros(q.shape) as AnyTensor,
             )
           }
-          let grad = g as AnyTensor
-          if (this.weightDecay !== 0) {
-            grad = grad.add(p.mul(this.weightDecay))
-          }
           const m = this.graphM[pi]!
           const v = this.graphV[pi]!
-          const nextM = m
-            .mul(this.beta1)
-            .add(grad.mul(1 - this.beta1))
-          const nextV = v
-            .mul(this.beta2)
-            .add(grad.mul(grad).mul(1 - this.beta2))
           const bc = corrections()
-          const mHat = nextM.div(bc.one)
-          const vHat = nextV.div(bc.two)
-          updates.push({ target: m, expr: nextM })
-          updates.push({ target: v, expr: nextV })
-          updates.push({
-            target: p,
-            expr: p.sub(
-              mHat
-                .mul(this.lr)
-                .div(vHat.sqrt().add(this.eps)),
-            ),
-          })
+          const next = adamUpdate(
+            tensors,
+            p,
+            g as AnyTensor,
+            m,
+            v,
+            bc.one,
+            bc.two,
+            this.lr,
+            this.beta1,
+            this.beta2,
+            this.eps,
+            this.weightDecay,
+          )
+          updates.push({ target: m, expr: next.nextM })
+          updates.push({ target: v, expr: next.nextV })
+          updates.push({ target: p, expr: next.nextP })
           grads.push(g)
           return
         }
@@ -315,16 +413,23 @@ export class Adam extends Optimizer {
         const m = this.m[pi]!
         const v = this.v[pi]!
         for (let i = 0; i < data.length; i++) {
-          let grad = gd[i]!
-          if (this.weightDecay !== 0) {
-            grad += this.weightDecay * data[i]!
-          }
-          m[i] = this.beta1 * m[i]! + (1 - this.beta1) * grad
-          v[i] = this.beta2 * v[i]!
-            + (1 - this.beta2) * grad * grad
-          const mHat = m[i]! / bc1
-          const vHat = v[i]! / bc2
-          data[i]! -= (this.lr * mHat) / (Math.sqrt(vHat) + this.eps)
+          const next = adamUpdate(
+            nums,
+            data[i]!,
+            gd[i]!,
+            m[i]!,
+            v[i]!,
+            bc1,
+            bc2,
+            this.lr,
+            this.beta1,
+            this.beta2,
+            this.eps,
+            this.weightDecay,
+          )
+          m[i] = next.nextM
+          v[i] = next.nextV
+          data[i] = next.nextP
         }
       })
     })
