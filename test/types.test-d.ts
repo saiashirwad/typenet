@@ -3,6 +3,8 @@ import type {
   Broadcast,
   CanBroadcast,
   Cat,
+  DimAdd,
+  DimMul,
   InferShape,
   MatMul,
   NormalizeDim,
@@ -451,3 +453,31 @@ function _gnca(
 
   return { next, nextBatch, alive }
 }
+
+// ---- smart constructors: eager rewrite rules, deferral as residual ----
+
+type _sc1 = Expect<Equal<DimAdd<3, 4>, 7>>
+type _sc2 = Expect<Equal<DimMul<6, 7>, 42>>
+type _sc3 = Expect<Equal<DimAdd<number, 3>, number>>
+type _sc4 = Expect<Equal<DimMul<number, 3>, number>>
+type _sc5 = Expect<Equal<DimMul<5, 0>, 0>>
+
+// a deferred constructor re-fires at instantiation
+type PlusOne<C extends number> = DimAdd<C, 1>
+type _sc6 = Expect<Equal<PlusOne<3>, 4>>
+type Times3Plus1<C extends number> = DimAdd<DimMul<3, C>, 1>
+type _sc7 = Expect<Equal<Times3Plus1<32>, 97>>
+
+// identity rules reduce EAGERLY, inside a generic body, no instantiation
+function _scGeneric<N extends number, C extends number>() {
+  const a: C = null as any as DimAdd<C, 0>
+  const b: C = null as any as DimMul<C, 1>
+  const c: 0 = null as any as DimMul<C, 0>
+  const d: [N, C] = null as any as Broadcast<[N, C], [N, C]>
+  const e: [C] = null as any as Broadcast<[C], [1]>
+  return [a, b, c, d, e]
+}
+
+// deferred dims still interpolate into error messages, resolved at the edge
+type DimMsg<C extends number> = `dim is ${DimAdd<3, C>}`
+type _sc8 = Expect<Equal<DimMsg<5>, "dim is 8">>

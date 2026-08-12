@@ -11,48 +11,59 @@ export type IsDynamic<S extends Shape> = number[] extends S ? true : false
 
 /**
  * Dimension arithmetic, for shapes derived from a generic dim — a percept
- * of `3 * C + 1` channels, say. Each fails open to `number` when either
- * operand is not a literal, which is how the rest of the algebra treats an
- * unknown dim: a wildcard that checks nothing rather than an error.
+ * of `3 * C + 1` channels, say.
+ *
+ * These are smart constructors: unconditional rewrite rules first, literal
+ * folding last. One law of type-level evaluation drives the design:
+ *
+ *   The first guard that mentions a naked generic defers the WHOLE chain.
+ *
+ * Deferral is not a failure — it is the residual. TS re-fires the
+ * constructor when the generic is instantiated, so `DimAdd<C, 1>` hovers as
+ * `DimAdd<C, 1>` inside a generic body and becomes `4` the moment `C` is
+ * `3`. The rewrite rules exist for what must reduce NOW, so their guards
+ * mention only one operand at a time, right operand first: `DimAdd<C, 0>`
+ * is `C` even while `C` is unresolved, whereas `DimAdd<0, C>` defers (and
+ * resolves identically at instantiation).
+ *
+ * A dim that is the wide `number` — not a literal, not a generic — remains
+ * a wildcard that checks nothing rather than an error.
  */
 export type DimAdd<A extends number, B extends number> =
+    IsExact<B, 0> extends true ? A
+  : IsExact<A, 0> extends true ? B
+  : DimAddFold<A, B>
+
+type DimAddFold<A extends number, B extends number> =
     number extends A ? number
   : number extends B ? number
   : Call<Numbers.Add<A, B>> extends infer R extends number ? R
   : number
 
-type Tuple<N extends number, Acc extends any[] = []> = Acc["length"] extends N ? Acc : Tuple<N, [...Acc, 0]>
-
-export type Add<A extends number, B extends number> = [...Tuple<A>, ...Tuple<B>]["length"]
-
-export type MulTuple<
-  A extends any[],
-  B extends any[],
-  Acc extends any[] = [],
-> =
-    B["length"] extends 0 ? Acc
-  : B extends [infer _, ...infer Tail] ? MulTuple<A, Tail, [...Acc, ...A]>
-  : []
-
-// @ts-expect-error asdf
-type Mul<A extends number, B extends number> = MulTuple<Tuple<A>, Tuple<B>>["length"]
-
-export function DimAdd<const A extends number, const B extends number>(a: A, b: B): Add<A, B> {
+export function DimAdd<const A extends number, const B extends number>(a: A, b: B): DimAdd<A, B> {
   return (a + b) as any
 }
 
 export type DimMul<A extends number, B extends number> =
+    IsExact<B, 0> extends true ? 0
+  : IsExact<B, 1> extends true ? A
+  : IsExact<A, 0> extends true ? 0
+  : IsExact<A, 1> extends true ? B
+  : DimMulFold<A, B>
+
+type DimMulFold<A extends number, B extends number> =
     number extends A ? number
   : number extends B ? number
   : Call<Numbers.Mul<A, B>> extends infer R extends number ? R
   : number
 
-export function DimMul<const A extends number, const B extends number>(a: A, b: B): Mul<A, B> {
+export function DimMul<const A extends number, const B extends number>(a: A, b: B): DimMul<A, B> {
   return (a * b) as any
 }
 
 type NumDiv<A extends number, B extends number> =
-    number extends A ? number
+    IsExact<B, 1> extends true ? A
+  : number extends A ? number
   : number extends B ? number
   : Call<Numbers.Div<A, B>> extends infer R extends number ? R
   : number
@@ -126,31 +137,28 @@ type InsertAt<
 
 type IsExact<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
 
-// The size-1 cases come first, deliberately. IsExact compares invariantly,
-// which TypeScript cannot decide while either side is an unresolved
-// generic, so it defers the conditional into a union of the branches.
-// Leading with `IsExact<X, Y>` leaves `BroadcastDim<C, 1>` unresolved, and
-// `Tensor<[N, C]>.mul(column)` then stops having type `Tensor<[N, C]>` —
-// multiplying by a column being the commonest thing a graph rule does.
-// Leading with the 1-cases costs nothing: when the other dim is also a
-// generic, every branch of the deferred chain yields the same dim anyway.
+/**
+ * Broadcast one dim — the single rewrite system for broadcast
+ * compatibility: `BroadcastRev` accumulates it into the result shape,
+ * `CanBroadcastRev` detects its `never`. (There used to be a separate
+ * `DimCompatible` chain to keep in sync by hand; a missing wildcard case in
+ * one of the two was how `[number, 2] + [4, 2]` once became a silent
+ * `[never, 2]`.)
+ *
+ * Guard order obeys the law on `DimAdd`: the size-1 cases come first
+ * because each guard mentions only ONE operand, so `BroadcastDim<C, 1>`
+ * reduces to `C` even while `C` is an unresolved generic — the case that
+ * keeps `Tensor<[N, C]>.mul(column)` typed as `Tensor<[N, C]>` once
+ * instantiated. The price: `BroadcastDim<N, N>` defers behind the first
+ * guard, but every branch of that deferred chain yields `N`.
+ */
 type BroadcastDim<X extends number, Y extends number> =
     IsExact<Y, 1> extends true ? X
   : IsExact<X, 1> extends true ? Y
-  : IsExact<X, Y> extends true ? X
   : IsExact<X, number> extends true ? Y
   : IsExact<Y, number> extends true ? X
-  : X extends Y ? X
+  : IsExact<X, Y> extends true ? X
   : never
-
-type DimCompatible<X extends number, Y extends number> =
-    IsExact<X, Y> extends true ? true
-  : IsExact<X, 1> extends true ? true
-  : IsExact<Y, 1> extends true ? true
-  : IsExact<X, number> extends true ? true
-  : IsExact<Y, number> extends true ? true
-  : X extends Y ? true
-  : false
 
 type CanBroadcastRev<A extends Shape, B extends Shape> =
     A extends [
@@ -158,8 +166,9 @@ type CanBroadcastRev<A extends Shape, B extends Shape> =
       ...infer Xs extends number[],
     ] ?
       B extends [infer Y extends number, ...infer Ys extends number[]] ?
-        DimCompatible<X, Y> extends true ? CanBroadcastRev<Xs, Ys>
-      : false
+        IsExact<X, Y> extends true ? CanBroadcastRev<Xs, Ys>
+      : [BroadcastDim<X, Y>] extends [never] ? false
+      : CanBroadcastRev<Xs, Ys>
     : true
   : true
 
@@ -228,7 +237,6 @@ export type MatMul<A extends Shape, B extends Shape> =
   : B["length"] extends 1 ? Init<A>
   : [...Broadcast<BatchDims<A>, BatchDims<B>>, Last<Init<A>>, Last<B>]
 
-/** Fails open on deferred types, for the reason spelled out on `BroadcastCheck`. */
 export type MatMulCheck<A extends Shape, B extends Shape> =
     IsDynamic<A> extends true ? unknown
   : IsDynamic<B> extends true ? unknown
