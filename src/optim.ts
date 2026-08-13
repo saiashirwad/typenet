@@ -1,5 +1,6 @@
 import { noGrad } from "./autograd.ts"
 import { _activeUpdateTrace } from "./compile.ts"
+import { rawBinary, rawUnary } from "./ir.ts"
 import { forceMany, isLazy } from "./lazy.ts"
 import { Tensor } from "./tensor.ts"
 import type { Tensor as TensorType } from "./tensor.ts"
@@ -53,14 +54,20 @@ const nums: Algebra<number> = {
   min1: a => Math.min(a, 1),
 }
 
+// A file-local untyped algebra over the raw dispatchers: optimizer
+// formulas relate shapes the public BroadcastCheck cannot see, and the
+// step runs under noGrad, so the tape-attaching typed methods buy
+// nothing here.
+const asTensor = (v: AnyTensor | number): AnyTensor => typeof v === "number" ? Tensor.scalar(v) as AnyTensor : v
+
 const tensors: Algebra<AnyTensor> = {
   of: n => Tensor.scalar(n),
-  add: (a, b) => a.add(b as never),
-  sub: (a, b) => a.sub(b),
-  mul: (a, b) => a.mul(b as never),
-  div: (a, b) => a.div(b as never),
-  sqrt: a => a.sqrt(),
-  min1: a => a.minimum(1),
+  add: (a, b) => rawBinary(a, asTensor(b), "add"),
+  sub: (a, b) => rawBinary(a, b, "sub"),
+  mul: (a, b) => rawBinary(a, asTensor(b), "mul"),
+  div: (a, b) => rawBinary(a, asTensor(b), "div"),
+  sqrt: a => rawUnary(a, "sqrt"),
+  min1: a => rawBinary(a, asTensor(1), "minimum"),
 }
 
 function clipScale<T>(

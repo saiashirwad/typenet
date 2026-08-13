@@ -2,42 +2,8 @@ import type { AnyTensor } from "./tensor.ts"
 
 export type DType = "float32" | "float64"
 
-export type UnaryOp =
-  | "pow"
-  | "neg"
-  | "exp"
-  | "log"
-  | "sqrt"
-  | "abs"
-  | "relu"
-  | "leakyRelu"
-  | "sigmoid"
-  | "tanh"
-  | "scalePowGrad"
-
-export type BinaryOp =
-  | "add"
-  | "sub"
-  | "mul"
-  | "div"
-  | "maximum"
-  | "minimum"
-  | "gt"
-  | "ge"
-  | "lt"
-  | "le"
-  | "eq"
-  | "negDiv"
-  | "halfDiv"
-  | "mulSign"
-  | "reluGrad"
-  | "leakyReluGrad"
-  | "sigmoidGrad"
-  | "tanhGrad"
-
-export type ReduceOp = "sum" | "max" | "argmax"
-
-export type RandomKind = "uniform" | "normal"
+export type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
+import type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
 
 export type TypedArray = Float32Array | Float64Array
 

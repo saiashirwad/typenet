@@ -1,24 +1,23 @@
 import * as nativeBackend from "./backends/native.ts"
 import {
-  rawBinary,
-  rawBroadcastTo,
-  rawCat,
-  rawIndexSelect,
-  rawMatmul,
-  rawNarrow,
-  rawOneHot,
-  rawPermute,
-  rawReduce,
-  rawReduceAll,
-  rawScatterAdd,
-  rawUnary,
-  reshapeRaw,
+  evalBinaryEager,
+  evalBroadcastToEager,
+  evalCatEager,
+  evalIndexSelectEager,
+  evalMatmulEager,
+  evalNarrowEager,
+  evalOneHotEager,
+  evalPermuteEager,
+  evalRandomEager,
+  evalReduceAllEager,
+  evalReduceEager,
+  evalScatterAddEager,
+  evalUnaryEager,
 } from "./eager.ts"
-import { getActiveSeed, nextSeed, randomData, reseed, setActiveSeed } from "./kernels.ts"
-import { type CpuStorage, type DType, type LazyNode, type LazyNodeBody, type LazyStorage, prod, showShape, type TensorStorage } from "./storage.ts"
-import { _internal, type AnyTensor, makeRaw, makeStorage } from "./tensor.ts"
-
-let lazyMode = false
+import { isLazyMode, nodeInputs, type SerializedNode, serializeNode, setLazyMode, topoOrder } from "./ir.ts"
+import { nextSeed, reseed, setActiveSeed } from "./kernels.ts"
+import { type CpuStorage, type LazyNode, type LazyStorage, prod, showShape } from "./storage.ts"
+import { _internal, type AnyTensor } from "./tensor.ts"
 
 export function configure(options: {
   lazy?: boolean
@@ -29,349 +28,113 @@ export function configure(options: {
    */
   seed?: number
 }): void {
-  if (options.lazy !== undefined) lazyMode = options.lazy
+  if (options.lazy !== undefined) setLazyMode(options.lazy)
   if (options.seed !== undefined) reseed(options.seed)
 }
 
 export function isLazy(): boolean {
-  return lazyMode
+  return isLazyMode()
 }
 
 function eagerly<T>(fn: () => T): T {
-  const prev = lazyMode
-  lazyMode = false
+  const prev = isLazyMode()
+  setLazyMode(false)
   try {
     return fn()
   } finally {
-    lazyMode = prev
+    setLazyMode(prev)
   }
 }
 
 function lazily<T>(fn: () => T): T {
-  const prev = lazyMode
-  lazyMode = true
+  const prev = isLazyMode()
+  setLazyMode(true)
   try {
     return fn()
   } finally {
-    lazyMode = prev
+    setLazyMode(prev)
   }
 }
 
-type TensorField = "a" | "b" | "input" | "index"
-type JsonField =
-  | TensorField
-  | "kind"
-  | "parameter"
-  | "dim"
-  | "keepdim"
-  | "order"
-  | "start"
-  | "length"
-  | "classes"
-  | "stream"
-  | "shape"
-
-type OpDesc = {
-  tensors: readonly TensorField[]
-  json: readonly JsonField[]
-  printName: "op" | "kind" | "dotted"
-  printAttrs: readonly {
-    key: Exclude<JsonField, TensorField | "shape">
-    skipIf?: unknown
-    format?: "list"
-  }[]
-}
-
-const OP_DESC: Record<LazyNode["op"], OpDesc> = {
-  binary: {
-    tensors: ["a", "b"],
-    json: ["kind", "parameter", "a", "b", "shape"],
-    printName: "kind",
-    printAttrs: [{ key: "parameter", skipIf: 0 }],
-  },
-  unary: {
-    tensors: ["input"],
-    json: ["kind", "parameter", "input", "shape"],
-    printName: "kind",
-    printAttrs: [{ key: "parameter", skipIf: 0 }],
-  },
-  matmul: {
-    tensors: ["a", "b"],
-    json: ["a", "b", "shape"],
-    printName: "op",
-    printAttrs: [],
-  },
-  reduce: {
-    tensors: ["input"],
-    json: ["kind", "dim", "keepdim", "input", "shape"],
-    printName: "dotted",
-    printAttrs: [
-      { key: "dim" },
-      { key: "keepdim", skipIf: false },
-    ],
-  },
-  reduceAll: {
-    tensors: ["input"],
-    json: ["kind", "input", "shape"],
-    printName: "dotted",
-    printAttrs: [],
-  },
-  broadcastTo: {
-    tensors: ["input"],
-    json: ["input", "shape"],
-    printName: "op",
-    printAttrs: [],
-  },
-  permute: {
-    tensors: ["input"],
-    json: ["order", "input", "shape"],
-    printName: "op",
-    printAttrs: [{ key: "order", format: "list" }],
-  },
-  view: {
-    tensors: ["input"],
-    json: ["input", "shape"],
-    printName: "op",
-    printAttrs: [],
-  },
-  narrow: {
-    tensors: ["input"],
-    json: ["dim", "start", "length", "input", "shape"],
-    printName: "op",
-    printAttrs: [
-      { key: "dim" },
-      { key: "start" },
-      { key: "length" },
-    ],
-  },
-  cat: {
-    tensors: ["a", "b"],
-    json: ["a", "b", "dim", "shape"],
-    printName: "op",
-    printAttrs: [{ key: "dim" }],
-  },
-  oneHot: {
-    tensors: ["input"],
-    json: ["classes", "input", "shape"],
-    printName: "op",
-    printAttrs: [{ key: "classes" }],
-  },
-  indexSelect: {
-    tensors: ["input", "index"],
-    json: ["dim", "input", "index", "shape"],
-    printName: "op",
-    printAttrs: [{ key: "dim" }],
-  },
-  scatterAdd: {
-    tensors: ["input", "index"],
-    json: ["dim", "length", "input", "index", "shape"],
-    printName: "op",
-    printAttrs: [{ key: "dim" }, { key: "length" }],
-  },
-  random: {
-    tensors: [],
-    json: ["kind", "stream", "shape"],
-    printName: "dotted",
-    printAttrs: [{ key: "stream" }],
-  },
-}
-
-function nodeFields(
-  node: LazyNode,
-): LazyNode & Record<string, unknown> {
-  return node as LazyNode & Record<string, unknown>
-}
-
-function nodeInputs(node: LazyNode): AnyTensor[] {
-  const rec = nodeFields(node)
-  return OP_DESC[node.op].tensors.map(k => rec[k] as AnyTensor)
-}
-
-function formatLazyOp(
-  node: LazyNode,
-  arg: (t: AnyTensor) => string,
-): string {
-  const desc = OP_DESC[node.op]
-  const rec = nodeFields(node)
-  const name = desc.printName === "kind"
-    ? String(rec.kind)
-    : desc.printName === "dotted"
-    ? `${node.op}.${rec.kind}`
-    : node.op
-  const args = desc.tensors
-    .map(k => arg(rec[k] as AnyTensor))
-    .join(", ")
-  const pairs: [string, unknown][] = []
-  for (const attr of desc.printAttrs) {
-    const value = rec[attr.key]
-    if (attr.skipIf !== undefined && value === attr.skipIf) {
-      continue
-    }
-    const shown = attr.format === "list"
-      ? `[${(value as number[]).join(", ")}]`
-      : value
-    pairs.push([attr.key, shown])
-  }
-  const extra = pairs.length === 0
-    ? ""
-    : ` {${pairs.map(([k, v]) => `${k}=${v}`).join(", ")}}`
-  return `${name}(${args})${extra}`
-}
-
-function serializeNode(
-  node: LazyNode,
-  ref: (t: AnyTensor) => number,
-): SerializedNode {
-  const desc = OP_DESC[node.op]
-  const rec = nodeFields(node)
-  const out: SerializedNode = { op: node.op }
-  for (const field of desc.json) {
-    if (field === "shape") {
-      out.shape = [...node.shape]
-    } else if ((desc.tensors as readonly string[]).includes(field)) {
-      out[field] = ref(rec[field] as AnyTensor)
-    } else {
-      out[field] = rec[field]
-    }
-  }
-  return out
-}
-
-function makeLazy(
-  body: LazyNodeBody,
-  shape: readonly number[],
-  dtype: DType,
-): AnyTensor {
-  const node = {
-    ...body,
-    shape: [...shape],
-    dtype,
-  } as LazyNode
-  return makeStorage(
-    { kind: "lazy", node },
-    shape,
-    dtype,
-  )
-}
-
+/**
+ * One IR node, replayed through the eager kernels. Inputs are forced
+ * first, so this never re-enters the dispatchers or flips the mode
+ * flag — eager is the spec, and this is the interpreter reading it.
+ */
 function evalNode(node: LazyNode): AnyTensor {
   switch (node.op) {
     case "binary":
-      return rawBinary(
+      return evalBinaryEager(
         force(node.a),
         force(node.b),
         node.kind,
         node.parameter,
       )
     case "unary":
-      return rawUnary(
+      return evalUnaryEager(
         force(node.input),
         node.kind,
         node.parameter,
       )
     case "matmul":
-      return rawMatmul(force(node.a), force(node.b))
+      return evalMatmulEager(force(node.a), force(node.b))
     case "reduce":
-      return rawReduce(
+      return evalReduceEager(
         force(node.input),
         node.dim,
         node.keepdim,
         node.kind,
       )
     case "reduceAll":
-      return rawReduceAll(force(node.input), node.kind)
+      return evalReduceAllEager(force(node.input), node.kind)
     case "broadcastTo":
-      return rawBroadcastTo(force(node.input), node.shape)
+      return evalBroadcastToEager(
+        force(node.input),
+        node.shape,
+      )
     case "permute":
-      return rawPermute(force(node.input), node.order)
+      return evalPermuteEager(force(node.input), node.order)
     case "view":
-      return reshapeRaw(force(node.input), node.shape)
+      return _internal.makeView(
+        force(node.input),
+        node.shape,
+      )
     case "narrow":
-      return rawNarrow(
+      return evalNarrowEager(
         force(node.input),
         node.dim,
         node.start,
         node.length,
       )
     case "cat":
-      return rawCat(force(node.a), force(node.b), node.dim)
+      return evalCatEager(
+        force(node.a),
+        force(node.b),
+        node.dim,
+      )
     case "oneHot":
-      return rawOneHot(force(node.input), node.classes)
+      return evalOneHotEager(force(node.input), node.classes)
     case "indexSelect":
-      return rawIndexSelect(
+      return evalIndexSelectEager(
         force(node.input),
         force(node.index),
         node.dim,
       )
     case "scatterAdd":
-      return rawScatterAdd(
+      return evalScatterAddEager(
         force(node.input),
         force(node.index),
         node.dim,
         node.length,
       )
     case "random":
-      return makeRaw(
-        randomData(
-          node.kind,
-          prod(node.shape),
-          node.stream,
-          getActiveSeed(),
-          node.dtype,
-        ),
+      return evalRandomEager(
+        node.kind,
         node.shape,
+        node.stream,
         node.dtype,
       )
   }
-}
-
-/**
- * Post-order traversal of the lazy graph reachable from `roots`: every
- * tensor appears after all of its inputs, each exactly once. Leaves
- * (non-lazy tensors) are included, with no inputs of their own.
- *
- * Iterative on purpose. A compiled training step for a cellular
- * automaton rolls the update rule out over dozens of time steps and
- * then differentiates it, which is a graph thousands of nodes deep —
- * far past what recursion survives.
- */
-function topoOrder(
-  roots: readonly AnyTensor[],
-): AnyTensor[] {
-  const order: AnyTensor[] = []
-  const seen = new Set<AnyTensor>()
-  const stack: {
-    t: AnyTensor
-    inputs: AnyTensor[]
-    i: number
-  }[] = []
-  const push = (t: AnyTensor): void => {
-    if (seen.has(t)) return
-    seen.add(t)
-    const source = _internal.sourceOf(t)
-    stack.push({
-      t,
-      // A materialized lazy tensor is a leaf: its value is frozen, so
-      // nothing below it is walked (or re-randomized) again.
-      inputs: source.kind === "lazy" && !_internal.hasValue(t)
-        ? nodeInputs(source.node)
-        : [],
-      i: 0,
-    })
-  }
-  for (const root of roots) {
-    push(root)
-    while (stack.length > 0) {
-      const frame = stack[stack.length - 1]!
-      if (frame.i < frame.inputs.length) {
-        push(frame.inputs[frame.i++]!)
-        continue
-      }
-      stack.pop()
-      order.push(frame.t)
-    }
-  }
-  return order
 }
 
 function evalInterpreted(roots: AnyTensor[]): void {
@@ -383,7 +146,7 @@ function evalInterpreted(roots: AnyTensor[]): void {
     if (source.kind !== "lazy" || _internal.hasValue(t)) {
       continue
     }
-    const result = eagerly(() => evalNode(source.node))
+    const result = evalNode(source.node)
     _internal.setCpu(t, result.data)
   }
 }
@@ -397,10 +160,6 @@ function force(t: AnyTensor): AnyTensor {
     evalInterpreted([t])
   }
   return t
-}
-
-type SerializedNode = Record<string, unknown> & {
-  op: string
 }
 
 // Graphs touching at most this many elements (leaves + intermediate node
@@ -546,5 +305,4 @@ export function forceMany(ts: AnyTensor[]): void {
   for (const t of ts) force(t)
 }
 
-export { eagerly, force, formatLazyOp, lazily, lazyMode, makeLazy, serializeLazyGraph, topoOrder }
-export type { CpuStorage, LazyStorage, TensorStorage }
+export { eagerly, force, lazily, serializeLazyGraph }

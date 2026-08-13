@@ -17,8 +17,8 @@ import {
   rawUnary,
   reshapeRaw,
   sumTo,
-} from "./eager.ts"
-import { eagerly, force, forceMany, lazyMode } from "./lazy.ts"
+} from "./ir.ts"
+import { force } from "./lazy.ts"
 import { resolveView } from "./shape.ts"
 import type {
   Broadcast,

@@ -1,6 +1,7 @@
 import * as nativeBackend from "./backends/native.ts"
+import { formatLazyOp, topoOrder } from "./ir.ts"
 import { nextSeed } from "./kernels.ts"
-import { force, forceMany, formatLazyOp, lazily, serializeLazyGraph, topoOrder } from "./lazy.ts"
+import { force, forceMany, lazily, serializeLazyGraph } from "./lazy.ts"
 import { prod, shapesEqual, showShape } from "./storage.ts"
 import { _internal, type AnyTensor, makeRaw, Tensor } from "./tensor.ts"
 

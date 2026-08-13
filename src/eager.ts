@@ -1,21 +1,15 @@
-import { applyBinary, applyUnary, getActiveSeed, nextStream, randomData } from "./kernels.ts"
-import { lazyMode, makeLazy } from "./lazy.ts"
-import { broadcastShapes, broadcastToShape, catShape, matmulShape, permuteShape, reduceShape, resizeDim, type Shape } from "./shape.ts"
-import {
-  arrayCtor,
-  type BinaryOp,
-  broadcastStrides,
-  contiguousStrides,
-  type DType,
-  normalizeDim,
-  prod,
-  type RandomKind,
-  type ReduceOp,
-  shapesEqual,
-  showShape,
-  type UnaryOp,
-} from "./storage.ts"
-import { _internal, type AnyTensor, makeRaw, type Tensor } from "./tensor.ts"
+import { applyBinary, applyUnary, getActiveSeed, randomData } from "./kernels.ts"
+import type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
+import { broadcastShapes, catShape, matmulShape, reduceShape, resizeDim } from "./shape.ts"
+import { arrayCtor, broadcastStrides, contiguousStrides, type DType, prod } from "./storage.ts"
+import { type AnyTensor, makeRaw } from "./tensor.ts"
+
+// ---------------------------------------------------------------------------
+// The JS eager kernels: one per IR kind, values in, values out. These
+// are the numeric spec — the lazy interpreter replays them per node and
+// the native backend must match them. No kernel consults the lazy flag;
+// dispatch lives in ir.ts.
+// ---------------------------------------------------------------------------
 
 function forEachStrided(
   shape: readonly number[],
@@ -42,27 +36,11 @@ function forEachStrided(
   }
 }
 
-function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
-  if (shapesEqual(t.shape, shape)) return t
-  let out = t
-
-  while (out.shape.length > shape.length) {
-    out = rawSum(out, 0, false)
-  }
-
-  for (let i = 0; i < shape.length; i++) {
-    if (shape[i] === 1 && out.shape[i] !== 1) {
-      out = rawSum(out, i, true)
-    }
-  }
-  return out
-}
-
-function rawBinary(
+export function evalBinaryEager(
   a: AnyTensor,
   b: AnyTensor,
   op: BinaryOp,
-  parameter = 0,
+  parameter: number,
 ): AnyTensor {
   const outShape = broadcastShapes(a.shape, b.shape)
   const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
@@ -70,13 +48,6 @@ function rawBinary(
     : "float32"
   const sa = broadcastStrides(a.shape, outShape)
   const sb = broadcastStrides(b.shape, outShape)
-  if (lazyMode) {
-    return makeLazy(
-      { op: "binary", kind: op, parameter, a, b },
-      outShape,
-      dtype,
-    )
-  }
   const n = prod(outShape)
   const out = new (arrayCtor(dtype))(n)
   const ad = a.data
@@ -92,18 +63,11 @@ function rawBinary(
   return makeRaw(out, outShape, dtype)
 }
 
-function rawUnary(
+export function evalUnaryEager(
   a: AnyTensor,
   op: UnaryOp,
-  parameter = 0,
+  parameter: number,
 ): AnyTensor {
-  if (lazyMode) {
-    return makeLazy(
-      { op: "unary", kind: op, parameter, input: a },
-      a.shape,
-      a.dtype,
-    )
-  }
   const out = new (arrayCtor(a.dtype))(a.data.length)
   for (let i = 0; i < a.data.length; i++) {
     out[i] = applyUnary(op, a.data[i]!, parameter)
@@ -111,30 +75,14 @@ function rawUnary(
   return makeRaw(out, a.shape, a.dtype)
 }
 
-function rawSum(
+export function evalReduceEager(
   a: AnyTensor,
-  dim: number,
-  keepdim: boolean,
-): AnyTensor {
-  return rawReduce(a, dim, keepdim, "sum")
-}
-
-function rawReduce(
-  a: AnyTensor,
-  dim: number,
+  d: number,
   keepdim: boolean,
   op: ReduceOp,
 ): AnyTensor {
-  const d = normalizeDim(dim, a.shape.length)
   const outShape = reduceShape(a.shape, d, false)
   const keepShape = reduceShape(a.shape, d, true)
-  if (lazyMode) {
-    return makeLazy(
-      { op: "reduce", kind: op, dim: d, keepdim, input: a },
-      keepdim ? keepShape : outShape,
-      a.dtype,
-    )
-  }
   const n = prod(outShape)
   const strides = contiguousStrides(a.shape)
   const outer = prod(a.shape.slice(0, d))
@@ -167,17 +115,10 @@ function rawReduce(
   )
 }
 
-function rawReduceAll(
+export function evalReduceAllEager(
   a: AnyTensor,
   op: "sum" | "max",
 ): AnyTensor {
-  if (lazyMode) {
-    return makeLazy(
-      { op: "reduceAll", kind: op, input: a },
-      [],
-      a.dtype,
-    )
-  }
   const init = op === "sum" ? 0 : -Infinity
   let acc = init
   for (let i = 0; i < a.data.length; i++) {
@@ -187,19 +128,10 @@ function rawReduceAll(
   return makeRaw(arrayCtor(a.dtype).of(acc), [], a.dtype)
 }
 
-function rawBroadcastTo(
+export function evalBroadcastToEager(
   a: AnyTensor,
-  shape: number[],
+  shape: readonly number[],
 ): AnyTensor {
-  if (shapesEqual(a.shape, shape)) return a
-  broadcastToShape(a.shape, shape)
-  if (lazyMode) {
-    return makeLazy(
-      { op: "broadcastTo", input: a },
-      shape,
-      a.dtype,
-    )
-  }
   const n = prod(shape)
   const sa = broadcastStrides(a.shape, shape)
   const out = new (arrayCtor(a.dtype))(n)
@@ -210,18 +142,11 @@ function rawBroadcastTo(
   return makeRaw(out, shape, a.dtype)
 }
 
-function rawPermute(
+export function evalPermuteEager(
   a: AnyTensor,
-  order: number[],
+  order: readonly number[],
 ): AnyTensor {
-  const outShape = permuteShape(a.shape, order)
-  if (lazyMode) {
-    return makeLazy(
-      { op: "permute", order, input: a },
-      outShape,
-      a.dtype,
-    )
-  }
+  const outShape = order.map(i => a.shape[i]!)
   const inStrides = contiguousStrides(a.shape)
   const readStrides = order.map(i => inStrides[i]!)
   const out = new (arrayCtor(a.dtype))(a.numel)
@@ -232,7 +157,10 @@ function rawPermute(
   return makeRaw(out, outShape, a.dtype)
 }
 
-function rawMatmul(a: AnyTensor, b: AnyTensor): AnyTensor {
+export function evalMatmulEager(
+  a: AnyTensor,
+  b: AnyTensor,
+): AnyTensor {
   const ar = a.shape.length
   const br = b.shape.length
   const m = a.shape[ar - 2]!
@@ -248,9 +176,6 @@ function rawMatmul(a: AnyTensor, b: AnyTensor): AnyTensor {
   const batchCount = prod(batch)
   const saBatch = broadcastStrides(batchA, batch)
   const sbBatch = broadcastStrides(batchB, batch)
-  if (lazyMode) {
-    return makeLazy({ op: "matmul", a, b }, outShape, dtype)
-  }
   const out = new (arrayCtor(dtype))(batchCount * m * n)
 
   const aMat = m * k
@@ -287,21 +212,13 @@ function rawMatmul(a: AnyTensor, b: AnyTensor): AnyTensor {
   return makeRaw(out, outShape, dtype)
 }
 
-function rawNarrow(
+export function evalNarrowEager(
   a: AnyTensor,
-  dim: number,
+  d: number,
   start: number,
   length: number,
 ): AnyTensor {
-  const d = normalizeDim(dim, a.shape.length)
   const outShape = resizeDim(a.shape, d, length)
-  if (lazyMode) {
-    return makeLazy(
-      { op: "narrow", dim: d, start, length, input: a },
-      outShape,
-      a.dtype,
-    )
-  }
   const strides = contiguousStrides(a.shape)
   const outer = prod(a.shape.slice(0, d))
   const inner = strides[d]!
@@ -320,17 +237,10 @@ function rawNarrow(
   return makeRaw(out, outShape, a.dtype)
 }
 
-function rawOneHot(
+export function evalOneHotEager(
   a: AnyTensor,
   classes: number,
 ): AnyTensor {
-  if (lazyMode) {
-    return makeLazy(
-      { op: "oneHot", classes, input: a },
-      [a.numel, classes],
-      a.dtype,
-    )
-  }
   const out = new (arrayCtor(a.dtype))(a.numel * classes)
   for (let i = 0; i < a.numel; i++) {
     const target = a.data[i]!
@@ -348,7 +258,7 @@ function rawOneHot(
   return makeRaw(out, [a.numel, classes], a.dtype)
 }
 
-function rawCat(
+export function evalCatEager(
   a: AnyTensor,
   b: AnyTensor,
   dim: number,
@@ -357,13 +267,6 @@ function rawCat(
   const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
     ? "float64"
     : "float32"
-  if (lazyMode) {
-    return makeLazy(
-      { op: "cat", a, b, dim },
-      outShape,
-      dtype,
-    )
-  }
   const strides = contiguousStrides(outShape)
   const outer = prod(outShape.slice(0, dim))
   const inner = strides[dim]!
@@ -386,19 +289,12 @@ function rawCat(
   return makeRaw(out, outShape, dtype)
 }
 
-function rawRandom(
+export function evalRandomEager(
   kind: RandomKind,
   shape: readonly number[],
   stream: number,
   dtype: DType,
 ): AnyTensor {
-  if (lazyMode) {
-    return makeLazy(
-      { op: "random", kind, stream },
-      shape,
-      dtype,
-    )
-  }
   return makeRaw(
     randomData(
       kind,
@@ -410,34 +306,6 @@ function rawRandom(
     shape,
     dtype,
   )
-}
-
-/**
- * Uniform values in [0, 1), redrawn on every evaluation.
- *
- * Seeded by `configure({ seed })`, not `Math.random`.
- */
-export function uniform<const Sh extends Shape>(
-  shape: Sh,
-): Tensor<Sh> {
-  return rawRandom(
-    "uniform",
-    shape,
-    nextStream(),
-    "float32",
-  ) as any
-}
-
-/** Standard normal values, redrawn per evaluation. See {@link uniform}. */
-export function normal<const Sh extends Shape>(
-  shape: Sh,
-): Tensor<Sh> {
-  return rawRandom(
-    "normal",
-    shape,
-    nextStream(),
-    "float32",
-  ) as any
 }
 
 // `index` holds integral values in a float
@@ -461,20 +329,13 @@ function checkIndex(
   return value
 }
 
-function rawIndexSelect(
+export function evalIndexSelectEager(
   a: AnyTensor,
   index: AnyTensor,
   dim: number,
 ): AnyTensor {
   const length = index.numel
   const outShape = resizeDim(a.shape, dim, length)
-  if (lazyMode) {
-    return makeLazy(
-      { op: "indexSelect", dim, input: a, index },
-      outShape,
-      a.dtype,
-    )
-  }
   const strides = contiguousStrides(a.shape)
   const outer = prod(a.shape.slice(0, dim))
   const inner = strides[dim]!
@@ -496,20 +357,13 @@ function rawIndexSelect(
   return makeRaw(out, outShape, a.dtype)
 }
 
-function rawScatterAdd(
+export function evalScatterAddEager(
   a: AnyTensor,
   index: AnyTensor,
   dim: number,
   length: number,
 ): AnyTensor {
   const outShape = resizeDim(a.shape, dim, length)
-  if (lazyMode) {
-    return makeLazy(
-      { op: "scatterAdd", dim, length, input: a, index },
-      outShape,
-      a.dtype,
-    )
-  }
   const strides = contiguousStrides(a.shape)
   const outer = prod(a.shape.slice(0, dim))
   const inner = strides[dim]!
@@ -529,41 +383,4 @@ function rawScatterAdd(
     }
   }
   return makeRaw(out, outShape, a.dtype)
-}
-
-function reshapeRaw(
-  t: AnyTensor,
-  shape: number[],
-): AnyTensor {
-  if (t.numel !== prod(shape)) {
-    throw new Error(
-      `Cannot reshape ${showShape(t.shape)} to ${showShape(shape)}`,
-    )
-  }
-  if (lazyMode) {
-    return makeLazy(
-      { op: "view", input: t },
-      shape,
-      t.dtype,
-    )
-  }
-  return _internal.makeView(t, shape)
-}
-
-export { sumTo }
-export {
-  rawBinary,
-  rawBroadcastTo,
-  rawCat,
-  rawIndexSelect,
-  rawMatmul,
-  rawNarrow,
-  rawOneHot,
-  rawPermute,
-  rawReduce,
-  rawReduceAll,
-  rawScatterAdd,
-  rawSum,
-  rawUnary,
-  reshapeRaw,
 }

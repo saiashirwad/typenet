@@ -1,5 +1,5 @@
-import { rawBinary } from "./eager.ts"
-import { eagerly, force, forceMany, lazyMode } from "./lazy.ts"
+import { isLazyMode, rawBinary } from "./ir.ts"
+import { eagerly, force, forceMany } from "./lazy.ts"
 import { arrayCtor, shapesEqual, showShape } from "./storage.ts"
 import { _internal, type AnyTensor, makeRaw } from "./tensor.ts"
 
@@ -84,7 +84,7 @@ function runBackward(
     )
   }
   let seed: AnyTensor
-  const lazyPath = lazyMode
+  const lazyPath = isLazyMode()
     && _internal.sourceOf(root).kind === "lazy"
   if (gradient) {
     if (!shapesEqual(gradient.shape, root.shape)) {
