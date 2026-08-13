@@ -332,6 +332,18 @@ describe.skipIf(!available)("native backend", () => {
   })
 })
 
+describe.skipIf(!available)("native f32 requirement", () => {
+  it("throws on a float64 leaf instead of silently interpreting", () => {
+    useNative()
+    configure({ lazy: true })
+    const wide = tensor([1, 2]).to("float64")
+    const out = wide.add(1)
+    expect(() => out.data).toThrow(
+      /native backend requires float32 CPU leaves/,
+    )
+  })
+})
+
 describe("native backend availability", () => {
   it("reports availability without affecting lazy mode", () => {
     expect(isNativeAvailable()).toBe(available)

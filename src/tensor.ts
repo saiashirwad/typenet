@@ -19,6 +19,7 @@ import {
   sumTo,
 } from "./eager.ts"
 import { eagerly, force, forceMany, lazyMode } from "./lazy.ts"
+import { resolveView } from "./shape.ts"
 import type {
   Broadcast,
   BroadcastCheck,
@@ -959,7 +960,7 @@ export class Tensor<S extends Shape> {
   view<const V extends number[]>(
     shape: V & ViewCheck<S, V>,
   ): Tensor<ResolveView<S, V>> {
-    const resolved = resolveViewRuntime(
+    const resolved = resolveView(
       [...this.shape],
       shape as number[],
     )
@@ -1269,32 +1270,6 @@ function makeMovedData(
   return withGrad(out, "to", [t], g => [g])
 }
 
-function resolveViewRuntime(
-  shape: number[],
-  view: number[],
-): number[] {
-  const negOnes = view.filter(v => v === -1).length
-  if (negOnes > 1) {
-    throw new Error("Only one -1 dim is allowed in view()")
-  }
-  const total = prod(shape)
-  if (negOnes === 1) {
-    const rest = prod(view.filter(v => v !== -1))
-    if (rest === 0 || total % rest !== 0) {
-      throw new Error(
-        `Cannot view tensor of shape ${showShape(shape)} as ${showShape(view)}`,
-      )
-    }
-    return view.map(v => (v === -1 ? total / rest : v))
-  }
-  if (prod(view) !== total) {
-    throw new Error(
-      `Cannot view tensor of shape ${showShape(shape)} as ${showShape(view)} (${total} vs ${prod(view)} elements)`,
-    )
-  }
-  return [...view]
-}
-
 function matmul2(a: AnyTensor, b: AnyTensor): AnyTensor {
   const out = rawMatmul(a, b)
   return withGrad(out, "matmul", [a, b], g => {
@@ -1321,7 +1296,7 @@ export { compile, printGraph } from "./compile.ts"
 export type { CompiledFn } from "./compile.ts"
 export { normal, uniform } from "./eager.ts"
 export { configure, isLazy } from "./lazy.ts"
-export { broadcastShapes } from "./storage.ts"
+export { broadcastShapes } from "./shape.ts"
 export type { DType, RandomKind } from "./storage.ts"
 
 export const tensor = Tensor.of

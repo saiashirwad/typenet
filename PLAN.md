@@ -195,8 +195,9 @@ lands.
 
 ### Native dtype/device support (current behavior)
 
-Native is f32-on-CPU-leaves only, today by silent fallback:
-`serializeLazyGraph` returns null when any leaf is float64 or not on the
-CPU storage kind, and `evalNativeMany` then falls back to the JS
-interpreter. No error is raised. (A hard throw when native is enabled is
-planned; until then the fallback is the documented behavior.)
+Native is f32-on-CPU-leaves only, and with native enabled that is now an
+error: `serializeLazyGraph` throws on a float64 or non-CPU leaf instead
+of silently handing the graph to the JS interpreter. Keep the graph in
+float32 or call `disableNative()`. `TYPENET_CHECK_SHAPES=1` (always on
+in debug builds) makes the Rust side recompute every node shape and
+compare it against the JS-sent one.

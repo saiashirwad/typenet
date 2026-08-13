@@ -9,6 +9,7 @@ import type {
   NormalizeDim,
   Permute,
   ReduceDim,
+  ResizeDim,
   ResolveView,
   Squeeze,
   Stack,
@@ -16,6 +17,7 @@ import type {
   Unsqueeze,
 } from "../src/shape.ts"
 import { fromFlat, ones, randn, Tensor, tensor, zeros } from "../src/tensor.ts"
+import { BROADCAST_CASES, CAT_CASES, MATMUL_CASES, PERMUTE_CASES, REDUCE_CASES, RESIZE_CASES, VIEW_CASES } from "./shape-cases.ts"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
   <T>() => T extends B ? 1 : 2
@@ -67,6 +69,67 @@ type _c1 = Expect<Equal<Cat<[2, 3], [4, 3], 0>, [6, 3]>>
 type _n1 = Expect<Equal<NormalizeDim<[2, 3, 4], -1>, 2>>
 type _i1 = Expect<
   Equal<InferShape<[[1, 2, 3], [4, 5, 6]]>, [2, 3]>
+>
+
+// The shared case table from shape-cases.ts, run through the type
+// algebra; shape.test.ts runs the same rows through the value twins.
+type BCase = typeof BROADCAST_CASES
+type _tb0 = Expect<
+  Equal<Broadcast<BCase[0]["a"], BCase[0]["b"]>, BCase[0]["out"]>
+>
+type _tb1 = Expect<
+  Equal<Broadcast<BCase[1]["a"], BCase[1]["b"]>, BCase[1]["out"]>
+>
+type _tb2 = Expect<
+  Equal<Broadcast<BCase[2]["a"], BCase[2]["b"]>, BCase[2]["out"]>
+>
+type _tb3 = Expect<
+  Equal<Broadcast<BCase[3]["a"], BCase[3]["b"]>, BCase[3]["out"]>
+>
+type MCase = typeof MATMUL_CASES
+type _tm0 = Expect<
+  Equal<MatMul<MCase[0]["a"], MCase[0]["b"]>, MCase[0]["out"]>
+>
+type _tm1 = Expect<
+  Equal<MatMul<MCase[1]["a"], MCase[1]["b"]>, MCase[1]["out"]>
+>
+type VCase = typeof VIEW_CASES
+type _tv0 = Expect<
+  Equal<ResolveView<VCase[0]["s"], VCase[0]["v"]>, VCase[0]["out"]>
+>
+type _tv1 = Expect<
+  Equal<ResolveView<VCase[1]["s"], VCase[1]["v"]>, VCase[1]["out"]>
+>
+type CCase = typeof CAT_CASES
+type _tc0 = Expect<
+  Equal<Cat<CCase[0]["a"], CCase[0]["b"], CCase[0]["dim"]>, CCase[0]["out"]>
+>
+type _tc1 = Expect<
+  Equal<Cat<CCase[1]["a"], CCase[1]["b"], CCase[1]["dim"]>, CCase[1]["out"]>
+>
+type RCase = typeof RESIZE_CASES
+type _tr0 = Expect<
+  Equal<
+    ResizeDim<RCase[0]["s"], RCase[0]["dim"], RCase[0]["length"]>,
+    RCase[0]["out"]
+  >
+>
+type PCase = typeof PERMUTE_CASES
+type _tp0 = Expect<
+  Equal<Permute<PCase[0]["s"], PCase[0]["order"]>, PCase[0]["out"]>
+>
+type DCase = typeof REDUCE_CASES
+type _td0 = Expect<
+  Equal<
+    ReduceDim<DCase[0]["s"], DCase[0]["dim"], DCase[0]["keepdim"]>,
+    DCase[0]["out"]
+  >
+>
+type _td1 = Expect<
+  Equal<
+    ReduceDim<DCase[1]["s"], DCase[1]["dim"], DCase[1]["keepdim"]>,
+    DCase[1]["out"]
+  >
 >
 
 function _tensors() {

@@ -157,25 +157,6 @@ function contiguousStrides(
   return strides
 }
 
-export function broadcastShapes(
-  a: readonly number[],
-  b: readonly number[],
-): number[] {
-  const rank = Math.max(a.length, b.length)
-  const out = new Array<number>(rank)
-  for (let i = 0; i < rank; i++) {
-    const da = a[a.length - 1 - i] ?? 1
-    const db = b[b.length - 1 - i] ?? 1
-    if (da !== db && da !== 1 && db !== 1) {
-      throw new Error(
-        `Cannot broadcast ${showShape(a)} with ${showShape(b)}`,
-      )
-    }
-    out[rank - 1 - i] = Math.max(da, db)
-  }
-  return out
-}
-
 function broadcastStrides(
   from: readonly number[],
   to: readonly number[],

@@ -1,10 +1,9 @@
 import { applyBinary, applyUnary, getActiveSeed, nextStream, randomData } from "./kernels.ts"
 import { lazyMode, makeLazy } from "./lazy.ts"
-import type { Shape } from "./shape.ts"
+import { broadcastShapes, broadcastToShape, catShape, matmulShape, permuteShape, reduceShape, resizeDim, type Shape } from "./shape.ts"
 import {
   arrayCtor,
   type BinaryOp,
-  broadcastShapes,
   broadcastStrides,
   contiguousStrides,
   type DType,
@@ -127,10 +126,8 @@ function rawReduce(
   op: ReduceOp,
 ): AnyTensor {
   const d = normalizeDim(dim, a.shape.length)
-  const outShape = a.shape.filter(
-    (_: number, i: number) => i !== d,
-  )
-  const keepShape = a.shape.map((s: number, i: number) => i === d ? 1 : s)
+  const outShape = reduceShape(a.shape, d, false)
+  const keepShape = reduceShape(a.shape, d, true)
   if (lazyMode) {
     return makeLazy(
       { op: "reduce", kind: op, dim: d, keepdim, input: a },
@@ -195,6 +192,7 @@ function rawBroadcastTo(
   shape: number[],
 ): AnyTensor {
   if (shapesEqual(a.shape, shape)) return a
+  broadcastToShape(a.shape, shape)
   if (lazyMode) {
     return makeLazy(
       { op: "broadcastTo", input: a },
@@ -216,7 +214,7 @@ function rawPermute(
   a: AnyTensor,
   order: number[],
 ): AnyTensor {
-  const outShape = order.map(i => a.shape[i]!)
+  const outShape = permuteShape(a.shape, order)
   if (lazyMode) {
     return makeLazy(
       { op: "permute", order, input: a },
@@ -239,17 +237,11 @@ function rawMatmul(a: AnyTensor, b: AnyTensor): AnyTensor {
   const br = b.shape.length
   const m = a.shape[ar - 2]!
   const k = a.shape[ar - 1]!
-  const k2 = b.shape[br - 2]!
   const n = b.shape[br - 1]!
-  if (k !== k2) {
-    throw new Error(
-      `matmul: inner dimensions do not match (${showShape(a.shape)} @ ${showShape(b.shape)})`,
-    )
-  }
+  const outShape = matmulShape(a.shape, b.shape)
   const batchA = a.shape.slice(0, -2)
   const batchB = b.shape.slice(0, -2)
-  const batch = broadcastShapes(batchA, batchB)
-  const outShape = [...batch, m, n]
+  const batch = outShape.slice(0, -2)
   const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
     ? "float64"
     : "float32"
@@ -302,7 +294,7 @@ function rawNarrow(
   length: number,
 ): AnyTensor {
   const d = normalizeDim(dim, a.shape.length)
-  const outShape = a.shape.map((s: number, i: number) => i === d ? length : s)
+  const outShape = resizeDim(a.shape, d, length)
   if (lazyMode) {
     return makeLazy(
       { op: "narrow", dim: d, start, length, input: a },
@@ -361,7 +353,7 @@ function rawCat(
   b: AnyTensor,
   dim: number,
 ): AnyTensor {
-  const outShape = a.shape.map((s: number, i: number) => i === dim ? s + b.shape[dim]! : s)
+  const outShape = catShape(a.shape, b.shape, dim)
   const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
     ? "float64"
     : "float32"
@@ -475,7 +467,7 @@ function rawIndexSelect(
   dim: number,
 ): AnyTensor {
   const length = index.numel
-  const outShape = a.shape.map((s: number, i: number) => i === dim ? length : s)
+  const outShape = resizeDim(a.shape, dim, length)
   if (lazyMode) {
     return makeLazy(
       { op: "indexSelect", dim, input: a, index },
@@ -510,7 +502,7 @@ function rawScatterAdd(
   dim: number,
   length: number,
 ): AnyTensor {
-  const outShape = a.shape.map((s: number, i: number) => i === dim ? length : s)
+  const outShape = resizeDim(a.shape, dim, length)
   if (lazyMode) {
     return makeLazy(
       { op: "scatterAdd", dim, length, input: a, index },

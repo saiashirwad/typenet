@@ -62,20 +62,28 @@ enum Node {
         kind: String,
         parameter: f64,
         input: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     Matmul {
         a: usize,
         b: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     Reduce {
         kind: String,
         dim: usize,
         keepdim: bool,
         input: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     ReduceAll {
         kind: String,
         input: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     BroadcastTo {
         input: usize,
@@ -84,6 +92,8 @@ enum Node {
     Permute {
         order: Vec<usize>,
         input: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     View {
         input: usize,
@@ -94,21 +104,29 @@ enum Node {
         start: usize,
         length: usize,
         input: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     Cat {
         a: usize,
         b: usize,
         dim: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     OneHot {
         classes: usize,
         input: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     /// Gather rows: out[j] = input[index[j]] along `dim`.
     IndexSelect {
         dim: usize,
         input: usize,
         index: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     /// Scatter-add rows into a zero tensor of `length` rows along `dim`:
     /// out[index[j]] += input[j].
@@ -117,6 +135,8 @@ enum Node {
         length: usize,
         input: usize,
         index: usize,
+        #[serde(default)]
+        shape: Option<Vec<usize>>,
     },
     /// Random values, drawn fresh on every evaluation from a hash of
     /// (eval seed, stream, element index) — see `random_data`.
@@ -175,7 +195,7 @@ fn node_inputs(node: &Node) -> Vec<usize> {
         Node::Leaf { .. } => vec![],
         Node::Binary { a, b, .. } => vec![*a, *b],
         Node::Unary { input, .. } => vec![*input],
-        Node::Matmul { a, b } => vec![*a, *b],
+        Node::Matmul { a, b, .. } => vec![*a, *b],
         Node::Reduce { input, .. } => vec![*input],
         Node::ReduceAll { input, .. } => vec![*input],
         Node::BroadcastTo { input, .. } => vec![*input],
@@ -209,14 +229,47 @@ fn broadcast_dim_vecs(a: &[usize], b: &[usize]) -> candle_core::Result<Vec<usize
 
 /// Output shape of every node, derived from the same shape math the JS
 /// side used — no data touched.
+/// The shape the JS side serialized for a node, when it sent one.
+fn sent_shape(node: &Node) -> Option<&Vec<usize>> {
+    match node {
+        Node::Leaf { shape, .. } => Some(shape),
+        Node::Binary { shape, .. } => Some(shape),
+        Node::BroadcastTo { shape, .. } => Some(shape),
+        Node::View { shape, .. } => Some(shape),
+        Node::Random { shape, .. } => Some(shape),
+        Node::Unary { shape, .. } => shape.as_ref(),
+        Node::Matmul { shape, .. } => shape.as_ref(),
+        Node::Reduce { shape, .. } => shape.as_ref(),
+        Node::ReduceAll { shape, .. } => shape.as_ref(),
+        Node::Permute { shape, .. } => shape.as_ref(),
+        Node::Narrow { shape, .. } => shape.as_ref(),
+        Node::Cat { shape, .. } => shape.as_ref(),
+        Node::OneHot { shape, .. } => shape.as_ref(),
+        Node::IndexSelect { shape, .. } => shape.as_ref(),
+        Node::ScatterAdd { shape, .. } => shape.as_ref(),
+    }
+}
+
+/// Recomputed shapes are compared against the JS-sent ones in debug
+/// builds and under TYPENET_CHECK_SHAPES=1; release trusts JS.
+fn shape_check_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        cfg!(debug_assertions)
+            || std::env::var("TYPENET_CHECK_SHAPES")
+                .map(|v| v == "1")
+                .unwrap_or(false)
+    })
+}
+
 fn node_shapes(graph: &Graph) -> candle_core::Result<Vec<Vec<usize>>> {
     let mut shapes: Vec<Vec<usize>> = Vec::with_capacity(graph.nodes.len());
-    for node in &graph.nodes {
+    for (i, node) in graph.nodes.iter().enumerate() {
         let shape = match node {
             Node::Leaf { shape, .. } => shape.clone(),
             Node::Binary { shape, .. } => shape.clone(),
             Node::Unary { input, .. } => shapes[*input].clone(),
-            Node::Matmul { a, b } => {
+            Node::Matmul { a, b, .. } => {
                 let (sa, sb) = (&shapes[*a], &shapes[*b]);
                 let (ar, br) = (sa.len(), sb.len());
                 let mut out = broadcast_dim_vecs(&sa[..ar - 2], &sb[..br - 2])?;
@@ -240,7 +293,7 @@ fn node_shapes(graph: &Graph) -> candle_core::Result<Vec<Vec<usize>>> {
             }
             Node::ReduceAll { .. } => vec![],
             Node::BroadcastTo { shape, .. } => shape.clone(),
-            Node::Permute { order, input } => {
+            Node::Permute { order, input, .. } => {
                 order.iter().map(|&d| shapes[*input][d]).collect()
             }
             Node::View { shape, .. } => shape.clone(),
@@ -254,13 +307,13 @@ fn node_shapes(graph: &Graph) -> candle_core::Result<Vec<Vec<usize>>> {
                 s[*dim] = *length;
                 s
             }
-            Node::Cat { a, b, dim } => {
+            Node::Cat { a, b, dim, .. } => {
                 let mut s = shapes[*a].clone();
                 s[*dim] += shapes[*b][*dim];
                 s
             }
-            Node::OneHot { classes, input } => vec![prod(&shapes[*input]), *classes],
-            Node::IndexSelect { dim, input, index } => {
+            Node::OneHot { classes, input, .. } => vec![prod(&shapes[*input]), *classes],
+            Node::IndexSelect { dim, input, index, .. } => {
                 let mut s = shapes[*input].clone();
                 s[*dim] = prod(&shapes[*index]);
                 s
@@ -274,6 +327,16 @@ fn node_shapes(graph: &Graph) -> candle_core::Result<Vec<Vec<usize>>> {
             }
             Node::Random { shape, .. } => shape.clone(),
         };
+        if shape_check_enabled() {
+            if let Some(sent) = sent_shape(node) {
+                if sent != &shape {
+                    return Err(candle_core::Error::Msg(format!(
+                        "TYPENET_CHECK_SHAPES: node {i} ({}) recomputed as {shape:?} but JS sent {sent:?}",
+                        op_kind(node)
+                    )));
+                }
+            }
+        }
         shapes.push(shape);
     }
     Ok(shapes)
@@ -1267,7 +1330,7 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
             Node::Binary { .. } | Node::Unary { .. } => {
                 exec_member(prep.ewise[idx].as_ref().unwrap(), &buffers, &[])
             }
-            Node::Matmul { a, b } => {
+            Node::Matmul { a, b, .. } => {
                 cpu_matmul(get(*a)?, &prep.shapes[*a], get(*b)?, &prep.shapes[*b])?
             }
             Node::Reduce {
@@ -1275,12 +1338,13 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
                 dim,
                 keepdim,
                 input,
+                ..
             } => tiny_reduce(kind, *dim, *keepdim, get(*input)?, &prep.shapes[*input])?,
-            Node::ReduceAll { kind, input } => tiny_reduce_all(kind, get(*input)?)?,
+            Node::ReduceAll { kind, input, .. } => tiny_reduce_all(kind, get(*input)?)?,
             Node::BroadcastTo { input, shape } => {
                 tiny_broadcast_to(get(*input)?, &prep.shapes[*input], shape)
             }
-            Node::Permute { order, input } => {
+            Node::Permute { order, input, .. } => {
                 tiny_permute(get(*input)?, &prep.shapes[*input], order)
             }
             // Tiny-path buffers are always contiguous, so a view is free.
@@ -1290,12 +1354,13 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
                 start,
                 length,
                 input,
+                ..
             } => tiny_narrow(get(*input)?, &prep.shapes[*input], *dim, *start, *length),
-            Node::Cat { a, b, dim } => {
+            Node::Cat { a, b, dim, .. } => {
                 tiny_cat(get(*a)?, &prep.shapes[*a], get(*b)?, &prep.shapes[*b], *dim)
             }
-            Node::OneHot { classes, input } => tiny_one_hot(*classes, get(*input)?)?,
-            Node::IndexSelect { dim, input, index } => tiny_index_select(
+            Node::OneHot { classes, input, .. } => tiny_one_hot(*classes, get(*input)?)?,
+            Node::IndexSelect { dim, input, index, .. } => tiny_index_select(
                 get(*input)?,
                 &prep.shapes[*input],
                 get(*index)?,
@@ -1306,6 +1371,7 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
                 length,
                 input,
                 index,
+                ..
             } => tiny_scatter_add(
                 get(*input)?,
                 &prep.shapes[*input],
@@ -2016,8 +2082,9 @@ fn run_graph(
                 kind,
                 parameter,
                 input,
+                ..
             } => eval_unary(kind, *parameter, get(*input)?)?,
-            Node::Matmul { a, b } => {
+            Node::Matmul { a, b, .. } => {
                 let a = get(*a)?;
                 let b = get(*b)?;
                 let ar = a.rank();
@@ -2061,8 +2128,9 @@ fn run_graph(
                 dim,
                 keepdim,
                 input,
+                ..
             } => eval_reduce(kind, *dim, *keepdim, get(*input)?, &mut ones)?,
-            Node::ReduceAll { kind, input } => {
+            Node::ReduceAll { kind, input, .. } => {
                 let flat = get(*input)?.contiguous()?.flatten_all()?;
                 let out = match kind.as_str() {
                     "sum" => flat.sum(0)?,
@@ -2078,7 +2146,7 @@ fn run_graph(
             Node::BroadcastTo { input, shape } => {
                 get(*input)?.broadcast_as(shape.clone())?.contiguous()?
             }
-            Node::Permute { order, input } => get(*input)?.permute(order.clone())?,
+            Node::Permute { order, input, .. } => get(*input)?.permute(order.clone())?,
             Node::View { input, shape } => {
                 get(*input)?.contiguous()?.reshape(shape.clone())?
             }
@@ -2087,14 +2155,15 @@ fn run_graph(
                 start,
                 length,
                 input,
+                ..
             } => get(*input)?.narrow(*dim, *start, *length)?.contiguous()?,
-            Node::Cat { a, b, dim } => {
+            Node::Cat { a, b, dim, .. } => {
                 let a = get(*a)?.contiguous()?;
                 let b = get(*b)?.contiguous()?;
                 Tensor::cat(&[&a, &b], *dim)?
             }
-            Node::OneHot { classes, input } => eval_one_hot(*classes, get(*input)?)?,
-            Node::IndexSelect { dim, input, index } => {
+            Node::OneHot { classes, input, .. } => eval_one_hot(*classes, get(*input)?)?,
+            Node::IndexSelect { dim, input, index, .. } => {
                 let keys = cached_index(&mut indices, *index, get(*index)?)?;
                 get(*input)?.contiguous()?.index_select(&keys, *dim)?
             }
@@ -2103,6 +2172,7 @@ fn run_graph(
                 length,
                 input,
                 index,
+                ..
             } => {
                 let keys = cached_index(&mut indices, *index, get(*index)?)?;
                 let src = get(*input)?.contiguous()?;

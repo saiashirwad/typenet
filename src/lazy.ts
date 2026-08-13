@@ -91,19 +91,19 @@ const OP_DESC: Record<LazyNode["op"], OpDesc> = {
   },
   unary: {
     tensors: ["input"],
-    json: ["kind", "parameter", "input"],
+    json: ["kind", "parameter", "input", "shape"],
     printName: "kind",
     printAttrs: [{ key: "parameter", skipIf: 0 }],
   },
   matmul: {
     tensors: ["a", "b"],
-    json: ["a", "b"],
+    json: ["a", "b", "shape"],
     printName: "op",
     printAttrs: [],
   },
   reduce: {
     tensors: ["input"],
-    json: ["kind", "dim", "keepdim", "input"],
+    json: ["kind", "dim", "keepdim", "input", "shape"],
     printName: "dotted",
     printAttrs: [
       { key: "dim" },
@@ -112,7 +112,7 @@ const OP_DESC: Record<LazyNode["op"], OpDesc> = {
   },
   reduceAll: {
     tensors: ["input"],
-    json: ["kind", "input"],
+    json: ["kind", "input", "shape"],
     printName: "dotted",
     printAttrs: [],
   },
@@ -124,7 +124,7 @@ const OP_DESC: Record<LazyNode["op"], OpDesc> = {
   },
   permute: {
     tensors: ["input"],
-    json: ["order", "input"],
+    json: ["order", "input", "shape"],
     printName: "op",
     printAttrs: [{ key: "order", format: "list" }],
   },
@@ -136,7 +136,7 @@ const OP_DESC: Record<LazyNode["op"], OpDesc> = {
   },
   narrow: {
     tensors: ["input"],
-    json: ["dim", "start", "length", "input"],
+    json: ["dim", "start", "length", "input", "shape"],
     printName: "op",
     printAttrs: [
       { key: "dim" },
@@ -146,25 +146,25 @@ const OP_DESC: Record<LazyNode["op"], OpDesc> = {
   },
   cat: {
     tensors: ["a", "b"],
-    json: ["a", "b", "dim"],
+    json: ["a", "b", "dim", "shape"],
     printName: "op",
     printAttrs: [{ key: "dim" }],
   },
   oneHot: {
     tensors: ["input"],
-    json: ["classes", "input"],
+    json: ["classes", "input", "shape"],
     printName: "op",
     printAttrs: [{ key: "classes" }],
   },
   indexSelect: {
     tensors: ["input", "index"],
-    json: ["dim", "input", "index"],
+    json: ["dim", "input", "index", "shape"],
     printName: "op",
     printAttrs: [{ key: "dim" }],
   },
   scatterAdd: {
     tensors: ["input", "index"],
-    json: ["dim", "length", "input", "index"],
+    json: ["dim", "length", "input", "index", "shape"],
     printName: "op",
     printAttrs: [{ key: "dim" }, { key: "length" }],
   },
@@ -446,7 +446,13 @@ function serializeLazyGraph(roots: AnyTensor[]): {
         t._storage.kind !== "cpu"
         || t.dtype !== "float32"
       ) {
-        return null
+        // Native is f32-on-CPU-leaves only. This used to fall back to
+        // the JS interpreter silently; with native enabled that is a
+        // performance surprise, so it is now an error.
+        throw new Error(
+          `native backend requires float32 CPU leaves; got a ${t.dtype} ${t._storage.kind} leaf. `
+            + "Keep the graph in float32 or call disableNative().",
+        )
       }
       const data = t._storage.data as Float32Array
       nodes.push({

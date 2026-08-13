@@ -1,4 +1,5 @@
 import type { Call, Numbers } from "hotscript"
+import { prod, showShape } from "./storage.ts"
 
 export const zeroWidthSpace = "​"
 type ZeroWidthSpace = typeof zeroWidthSpace
@@ -513,3 +514,145 @@ export type NestedArray<S extends Shape> =
   : S extends [] ? number
   : S extends [any, ...infer Rest extends number[]] ? NestedArray<Rest>[]
   : never
+
+// ---------------------------------------------------------------------------
+// Runtime shape math. One value function per type above, throwing the
+// same error strings the types put in ErrorMessage — the shared case
+// table in test/shape-cases.ts runs both and keeps them from drifting.
+// ---------------------------------------------------------------------------
+
+/** Value twin of {@link Broadcast} / {@link CanBroadcast}. */
+export function broadcastShapes(
+  a: readonly number[],
+  b: readonly number[],
+): number[] {
+  const rank = Math.max(a.length, b.length)
+  const out = new Array<number>(rank)
+  for (let i = 0; i < rank; i++) {
+    const da = a[a.length - 1 - i] ?? 1
+    const db = b[b.length - 1 - i] ?? 1
+    if (da !== db && da !== 1 && db !== 1) {
+      throw new Error(
+        `Cannot broadcast ${showShape(a)} with ${showShape(b)}`,
+      )
+    }
+    out[rank - 1 - i] = Math.max(da, db)
+  }
+  return out
+}
+
+/** Value twin of {@link ResolveView} / {@link ViewCheck}. */
+export function resolveView(
+  shape: readonly number[],
+  view: readonly number[],
+): number[] {
+  const negOnes = view.filter(v => v === -1).length
+  if (negOnes > 1) {
+    throw new Error("Only one -1 dim is allowed in view()")
+  }
+  const total = prod(shape)
+  if (negOnes === 1) {
+    const rest = prod(view.filter(v => v !== -1))
+    if (rest === 0 || total % rest !== 0) {
+      throw new Error(
+        `Cannot view tensor of shape ${showShape(shape)} as ${showShape(view)}`,
+      )
+    }
+    return view.map(v => (v === -1 ? total / rest : v))
+  }
+  if (prod(view) !== total) {
+    throw new Error(
+      `Cannot view tensor of shape ${showShape(shape)} as ${showShape(view)} (${total} vs ${prod(view)} elements)`,
+    )
+  }
+  return [...view]
+}
+
+/** Value twin of {@link MatMul} / {@link MatMulCheck} for rank >= 2 operands. */
+export function matmulShape(
+  a: readonly number[],
+  b: readonly number[],
+): number[] {
+  const k = a[a.length - 1]!
+  const k2 = b[b.length - 2]!
+  if (k !== k2) {
+    throw new Error(
+      `matmul: inner dimensions do not match (${showShape(a)} @ ${showShape(b)})`,
+    )
+  }
+  return [
+    ...broadcastShapes(a.slice(0, -2), b.slice(0, -2)),
+    a[a.length - 2]!,
+    b[b.length - 1]!,
+  ]
+}
+
+/** Value twin of {@link ReduceDim}. `dim` must already be normalized. */
+export function reduceShape(
+  shape: readonly number[],
+  dim: number,
+  keepdim: boolean,
+): number[] {
+  return keepdim
+    ? shape.map((s, i) => (i === dim ? 1 : s))
+    : shape.filter((_, i) => i !== dim)
+}
+
+/** Value twin of {@link Cat} / {@link CatCheck}. `dim` must already be normalized. */
+export function catShape(
+  a: readonly number[],
+  b: readonly number[],
+  dim: number,
+): number[] {
+  if (a.length !== b.length) {
+    throw new Error(
+      `cat: tensors must have the same rank (${showShape(a)} vs ${showShape(b)})`,
+    )
+  }
+  for (let i = 0; i < a.length; i++) {
+    if (i !== dim && a[i] !== b[i]) {
+      throw new Error(
+        `cat: shapes ${showShape(a)} and ${showShape(b)} differ outside dim ${dim}`,
+      )
+    }
+  }
+  return a.map((s, i) => (i === dim ? s + b[i]! : s))
+}
+
+/** Value twin of {@link ResizeDim}. `dim` must already be normalized. */
+export function resizeDim(
+  shape: readonly number[],
+  dim: number,
+  length: number,
+): number[] {
+  return shape.map((s, i) => (i === dim ? length : s))
+}
+
+/** Value twin of {@link Permute}. `order` must already be normalized. */
+export function permuteShape(
+  shape: readonly number[],
+  order: readonly number[],
+): number[] {
+  return order.map(i => shape[i]!)
+}
+
+/**
+ * Expand-only broadcast: `to` must be exactly what broadcasting `from`
+ * against it yields, so `[2, 3] -> [3]` is rejected even though the two
+ * shapes are mutually broadcastable.
+ */
+export function broadcastToShape(
+  from: readonly number[],
+  to: readonly number[],
+): number[] {
+  const out = broadcastShapes(from, to)
+  if (
+    out.length !== to.length
+    || out.some((s, i) => s !== to[i])
+  ) {
+    throw new Error(
+      `broadcastTo target ${showShape(to)} is not a broadcast of ${showShape(from)}`,
+    )
+  }
+  return [...to]
+}
