@@ -129,7 +129,10 @@ type IsExact<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y
  * reduces to `C` even while `C` is an unresolved generic — the case that
  * keeps `Tensor<[N, C]>.mul(column)` typed as `Tensor<[N, C]>` once
  * instantiated. The price: `BroadcastDim<N, N>` defers behind the first
- * guard, but every branch of that deferred chain yields `N`.
+ * guard, but every branch of that deferred chain yields `N`, so
+ * assignability still goes through. The same-shape suffix rule on
+ * `Broadcast` catches the common `[E, C] + [C]` case before it ever
+ * reaches this per-dim walk.
  */
 type BroadcastDim<X extends number, Y extends number> =
     IsExact<Y, 1> extends true ? X
@@ -161,10 +164,32 @@ type BroadcastRev<A extends Shape, B extends Shape, Acc extends Shape = []> =
   : B extends [infer Y extends number, ...infer Ys extends number[]] ? BroadcastRev<[], Ys, [...Acc, Y]>
   : Reverse<Acc>
 
+/**
+ * The suffix rules make `Broadcast<[E, C], [C]>` *syntactically*
+ * `[E, C]` while `C` is an unresolved generic. Tuple-arity matching is
+ * decidable whatever the elements instantiate to, and a strictly-longer
+ * prefix (the nonempty `[number, ...number[]]` bound) keeps the rule
+ * from even being attempted on same-rank pairs like `[N, C] × [N, 1]`,
+ * whose element-level comparison would defer and poison the chain. This
+ * is what lets a generic layer broadcast its bias without re-anchoring
+ * the shape by hand.
+ *
+ * No structural rule for the generic outer product lives here, and that
+ * is load-bearing: `[N, 1] × [1, N]` cannot be separated from
+ * `[N, C] × [N, 1]` by any conditional — deciding "is this axis the
+ * literal 1 or a generic that might be 1" defers, and the deferred
+ * residual's branches differ, which poisons whichever case falls
+ * through. The outer product is instead handled by the `this`-typed
+ * overloads on `add`/`sub`/`mul`/`div` (and the operators): overload
+ * resolution picks the first *applicable* signature with no branch
+ * merging, which is exactly the routing a conditional type cannot do.
+ */
 export type Broadcast<A extends Shape, B extends Shape> =
     IsExact<A, B> extends true ? A
   : IsDynamic<A> extends true ? number[]
   : IsDynamic<B> extends true ? number[]
+  : A extends [...infer _ extends [number, ...number[]], ...B] ? A
+  : B extends [...infer _ extends [number, ...number[]], ...A] ? B
   : BroadcastRev<Reverse<A>, Reverse<B>>
 
 export type CanBroadcast<A extends Shape, B extends Shape> =

@@ -122,14 +122,7 @@ export class GraphNCA<
     const endpoints = x.matmul(
       cat(weight.narrow(0, 0, c), weight.narrow(0, c, c), 1),
     )
-    // The only shape written down in this method, and it is a check
-    // rather than a cast: broadcasting the bias over the edge tensor leaves
-    // TypeScript holding `Broadcast<..., BroadcastDim<C, C>>`, which is
-    // equal to [E, C] and assignable to it, but is not *syntactically* it —
-    // so it no longer unifies with a generic parameter downstream. Naming
-    // the shape here re-anchors it. Everything else in this method is
-    // inferred.
-    const gate: Tensor<[E, C]> = endpoints
+    const gate = endpoints
       .narrow(1, 0, c)
       .indexSelect(src)
       .add(endpoints.narrow(1, c, c).indexSelect(dst))

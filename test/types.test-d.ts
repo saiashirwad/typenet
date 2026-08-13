@@ -264,6 +264,24 @@ function _genericDims<
   return two
 }
 
+// The Broadcast suffix rule: broadcasting a same-generic-dim suffix
+// (the bias of a generic layer) is *syntactically* the identity, so the
+// result keeps unifying with generic parameters downstream with no
+// re-anchoring annotation. This is what lets GraphNCA.forward infer its
+// gate tensor.
+function _genericBias<
+  E extends number,
+  C extends number,
+>(edges: Tensor<[E, C]>, bias: Tensor<[C]>) {
+  const out = edges.add(bias)
+  type _1 = Expect<Equal<typeof out.shape, [E, C]>>
+  const chained = out.sigmoid().mul(edges)
+  type _2 = Expect<Equal<typeof chained.shape, [E, C]>>
+  const scalar = edges.add(Tensor.scalar(1))
+  type _3 = Expect<Equal<typeof scalar.shape, [E, C]>>
+  return chained
+}
+
 function _genericOuter<
   N extends number,
   P extends TensorParams,
