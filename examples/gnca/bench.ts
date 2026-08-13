@@ -2,7 +2,6 @@
 
 import {
   Adam,
-  clipGradNorm,
   compile,
   configure,
   disableNative,
@@ -12,16 +11,14 @@ import {
   Tensor,
   useNative,
 } from "../../index.ts"
+import type { AnyTensor } from "../../src/tensor.ts"
+import { timeAvg } from "../util.ts"
 import { batchEdges, randomGeometricGraph } from "./graphs.ts"
-import { aliveMask, GraphNCA, graphTensors, seedState } from "./model.ts"
-
-type AnyTensor = Tensor<any>
+import { GraphNCA, graphTensors, seedState } from "./model.ts"
+import { compiledTrainStep, rollout } from "./train-util.ts"
 
 function time(label: string, runs: number, fn: () => void) {
-  fn()
-  const start = performance.now()
-  for (let i = 0; i < runs; i++) fn()
-  const ms = (performance.now() - start) / runs
+  const ms = timeAvg(fn, { iters: runs })
   console.log(`  ${label.padEnd(38)} ${ms.toFixed(1)} ms`)
   return ms
 }
@@ -56,34 +53,24 @@ function bench(
     `\n${nodes} nodes x ${batch} = ${batch * nodes}, `
       + `${edges.count * batch} edges`,
   )
-  const rollout = (x: AnyTensor, steps: number) => {
-    for (let i = 0; i < steps; i++) {
-      x = model.forward(x, graph).mul(aliveMask(x, graph))
-    }
-    return x
-  }
   for (const steps of horizons) {
     const forward = compile(
       (input: AnyTensor) =>
-        rollout(input, steps)
+        rollout(model, input, graph, steps)
           .narrow(1, 0, 4)
           .sub(target)
           .pow(2)
           .mean(),
       [x0],
     )
-    const full = compile((input: AnyTensor) => {
-      const loss = rollout(input, steps)
-        .narrow(1, 0, 4)
-        .sub(target)
-        .pow(2)
-        .mean()
-      optimizer.zeroGrad()
-      loss.backward()
-      clipGradNorm(params, 1)
-      optimizer.step()
-      return loss
-    }, [x0])
+    const full = compiledTrainStep(
+      model,
+      optimizer,
+      graph,
+      target,
+      x0,
+      steps,
+    )
     const f = time(`forward only, ${steps} steps`, 3, () => forward(x0).item())
     const t = time(
       `forward + backward + Adam, ${steps} steps`,

@@ -249,6 +249,45 @@ fn leaf_bytes<'a>(
     })
 }
 
+/// A scalar type read back out of a leaf byte buffer.
+trait LeafScalar: Copy {
+    /// Decode one value from a `size_of::<Self>()`-byte little-endian chunk.
+    fn from_le_bytes(bytes: &[u8]) -> Self;
+}
+
+impl LeafScalar for f32 {
+    #[inline]
+    fn from_le_bytes(bytes: &[u8]) -> Self {
+        f32::from_ne_bytes(bytes.try_into().expect("f32 is 4 bytes"))
+    }
+}
+
+impl LeafScalar for i32 {
+    #[inline]
+    fn from_le_bytes(bytes: &[u8]) -> Self {
+        i32::from_ne_bytes(bytes.try_into().expect("i32 is 4 bytes"))
+    }
+}
+
+impl LeafScalar for i64 {
+    #[inline]
+    fn from_le_bytes(bytes: &[u8]) -> Self {
+        i64::from_ne_bytes(bytes.try_into().expect("i64 is 8 bytes"))
+    }
+}
+
+/// Decode the first `n` values of `T` from a byte slice. `from_ne_bytes`
+/// is native-endian, which is little-endian on every platform typenet runs
+/// on, so this matches the JS side's little-endian packing. Bounds and
+/// overflow checking live in `leaf_bytes`, which the callers use first.
+fn decode_le<T: LeafScalar>(bytes: &[u8], n: usize) -> Vec<T> {
+    bytes
+        .chunks_exact(std::mem::size_of::<T>())
+        .take(n)
+        .map(T::from_le_bytes)
+        .collect()
+}
+
 /// Read a leaf as f32. Integer leaves are converted exactly — the loop
 /// evaluator only runs graphs below the element cap, so their row
 /// indices are far below f32's 16.7M exact-integer limit.
@@ -260,26 +299,17 @@ fn read_leaf_f32(
     ty: LeafTy,
 ) -> candle_core::Result<Vec<f32>> {
     let bytes = leaf_bytes(leaves, leaf, offset, n, ty.size())?;
-    let mut out = Vec::with_capacity(n);
-    match ty {
-        LeafTy::F32 => {
-            for c in bytes.chunks_exact(4) {
-                out.push(f32::from_ne_bytes([c[0], c[1], c[2], c[3]]));
-            }
-        }
-        LeafTy::I32 => {
-            for c in bytes.chunks_exact(4) {
-                out.push(i32::from_ne_bytes([c[0], c[1], c[2], c[3]]) as f32);
-            }
-        }
-        LeafTy::I64 => {
-            for c in bytes.chunks_exact(8) {
-                let b: [u8; 8] = c.try_into().unwrap();
-                out.push(i64::from_ne_bytes(b) as f32);
-            }
-        }
-    }
-    Ok(out)
+    Ok(match ty {
+        LeafTy::F32 => decode_le::<f32>(bytes, n),
+        LeafTy::I32 => decode_le::<i32>(bytes, n)
+            .into_iter()
+            .map(|v| v as f32)
+            .collect(),
+        LeafTy::I64 => decode_le::<i64>(bytes, n)
+            .into_iter()
+            .map(|v| v as f32)
+            .collect(),
+    })
 }
 
 fn read_leaf_i32(
@@ -289,10 +319,7 @@ fn read_leaf_i32(
     n: usize,
 ) -> candle_core::Result<Vec<i32>> {
     let bytes = leaf_bytes(leaves, leaf, offset, n, 4)?;
-    Ok(bytes
-        .chunks_exact(4)
-        .map(|c| i32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    Ok(decode_le::<i32>(bytes, n))
 }
 
 fn read_leaf_i64(
@@ -302,13 +329,7 @@ fn read_leaf_i64(
     n: usize,
 ) -> candle_core::Result<Vec<i64>> {
     let bytes = leaf_bytes(leaves, leaf, offset, n, 8)?;
-    Ok(bytes
-        .chunks_exact(8)
-        .map(|c| {
-            let b: [u8; 8] = c.try_into().unwrap();
-            i64::from_ne_bytes(b)
-        })
-        .collect())
+    Ok(decode_le::<i64>(bytes, n))
 }
 
 /// Indices of the nodes a node directly reads.
@@ -349,8 +370,6 @@ fn broadcast_dim_vecs(a: &[usize], b: &[usize]) -> candle_core::Result<Vec<usize
     Ok(out)
 }
 
-/// Output shape of every node, derived from the same shape math the JS
-/// side used — no data touched.
 /// The shape the JS side serialized for a node, when it sent one.
 fn sent_shape(node: &Node) -> Option<&Vec<usize>> {
     match node {
@@ -640,56 +659,111 @@ enum Un {
     ScalePowGrad,
 }
 
-impl Bin {
-    fn parse(kind: &str) -> candle_core::Result<Self> {
-        Ok(match kind {
-            "add" => Bin::Add,
-            "sub" => Bin::Sub,
-            "mul" => Bin::Mul,
-            "div" => Bin::Div,
-            "maximum" => Bin::Maximum,
-            "minimum" => Bin::Minimum,
-            "gt" => Bin::Gt,
-            "ge" => Bin::Ge,
-            "lt" => Bin::Lt,
-            "le" => Bin::Le,
-            "eq" => Bin::Eq,
-            "negDiv" => Bin::NegDiv,
-            "halfDiv" => Bin::HalfDiv,
-            "mulSign" => Bin::MulSign,
-            "reluGrad" => Bin::ReluGrad,
-            "leakyReluGrad" => Bin::LeakyReluGrad,
-            "sigmoidGrad" => Bin::SigmoidGrad,
-            "tanhGrad" => Bin::TanhGrad,
-            other => {
-                return Err(candle_core::Error::Msg(format!(
-                    "unknown binary op: {other}"
-                )))
+/// Single source of truth for the binary elementwise ops. Each entry lists
+/// the JSON name, the `Bin` variant, and the scalar f32 application, and
+/// expands to the name→variant `parse` arms and the variant→scalar `apply`
+/// arms, so a new op cannot be added to one list and missed in another.
+/// Keep the entries spelled `"name" => Bin::Variant`: the JS parity test
+/// (`test/ops.test.ts`) parses those arms straight out of the `Bin` type.
+macro_rules! binary_ops {
+    ($($name:literal => $variant:path => $apply:expr),* $(,)?) => {
+        fn parse(kind: &str) -> candle_core::Result<Self> {
+            Ok(match kind {
+                $($name => $variant,)*
+                other => {
+                    return Err(candle_core::Error::Msg(format!(
+                        "unknown binary op: {other}"
+                    )))
+                }
+            })
+        }
+
+        /// Scalar application, one f32 per operand — mirrors `eval_binary`.
+        #[inline(always)]
+        fn apply(kind: Self, p: f32, a: f32, b: f32) -> f32 {
+            match kind {
+                $($variant => ($apply)(a, b, p),)*
             }
-        })
+        }
+
+        /// Every binary op name, in listing order; the parity test walks it.
+        #[cfg(test)]
+        fn all() -> &'static [&'static str] {
+            &[$($name,)*]
+        }
+    };
+}
+
+impl Bin {
+    binary_ops! {
+        "add" => Bin::Add => |a: f32, b: f32, _p: f32| a + b,
+        "sub" => Bin::Sub => |a: f32, b: f32, _p: f32| a - b,
+        "mul" => Bin::Mul => |a: f32, b: f32, _p: f32| a * b,
+        "div" => Bin::Div => |a: f32, b: f32, _p: f32| a / b,
+        // f32::max/min return the non-NaN operand; candle and JS both
+        // propagate NaN, so compare explicitly.
+        "maximum" => Bin::Maximum => |a: f32, b: f32, _p: f32| { if a >= b { a } else { b } },
+        "minimum" => Bin::Minimum => |a: f32, b: f32, _p: f32| { if a <= b { a } else { b } },
+        "gt" => Bin::Gt => |a: f32, b: f32, _p: f32| (a > b) as u8 as f32,
+        "ge" => Bin::Ge => |a: f32, b: f32, _p: f32| (a >= b) as u8 as f32,
+        "lt" => Bin::Lt => |a: f32, b: f32, _p: f32| (a < b) as u8 as f32,
+        "le" => Bin::Le => |a: f32, b: f32, _p: f32| (a <= b) as u8 as f32,
+        "eq" => Bin::Eq => |a: f32, b: f32, _p: f32| (a == b) as u8 as f32,
+        "negDiv" => Bin::NegDiv => |a: f32, b: f32, _p: f32| -a / b,
+        "halfDiv" => Bin::HalfDiv => |a: f32, b: f32, _p: f32| 0.5 * a / b,
+        "mulSign" => Bin::MulSign => |a: f32, b: f32, _p: f32| a * ((b > 0.0) as u8 as f32 - (b < 0.0) as u8 as f32),
+        "reluGrad" => Bin::ReluGrad => |a: f32, b: f32, _p: f32| { if b > 0.0 { a } else { 0.0 } },
+        "leakyReluGrad" => Bin::LeakyReluGrad => |a: f32, b: f32, p: f32| a * if b > 0.0 { 1.0 } else { p },
+        "sigmoidGrad" => Bin::SigmoidGrad => |a: f32, b: f32, _p: f32| a * b * (1.0 - b),
+        "tanhGrad" => Bin::TanhGrad => |a: f32, b: f32, _p: f32| a * (1.0 - b * b),
     }
 }
 
-impl Un {
-    fn parse(kind: &str) -> candle_core::Result<Self> {
-        Ok(match kind {
-            "pow" => Un::Pow,
-            "neg" => Un::Neg,
-            "exp" => Un::Exp,
-            "log" => Un::Log,
-            "sqrt" => Un::Sqrt,
-            "abs" => Un::Abs,
-            "relu" => Un::Relu,
-            "leakyRelu" => Un::LeakyRelu,
-            "sigmoid" => Un::Sigmoid,
-            "tanh" => Un::Tanh,
-            "scalePowGrad" => Un::ScalePowGrad,
-            other => {
-                return Err(candle_core::Error::Msg(format!(
-                    "unknown unary op: {other}"
-                )))
+/// Single source of truth for the unary elementwise ops — same shape as
+/// `binary_ops!`: name, `Un` variant, scalar application.
+macro_rules! unary_ops {
+    ($($name:literal => $variant:path => $apply:expr),* $(,)?) => {
+        fn parse(kind: &str) -> candle_core::Result<Self> {
+            Ok(match kind {
+                $($name => $variant,)*
+                other => {
+                    return Err(candle_core::Error::Msg(format!(
+                        "unknown unary op: {other}"
+                    )))
+                }
+            })
+        }
+
+        #[inline(always)]
+        fn apply(kind: Self, p: f32, x: f32) -> f32 {
+            match kind {
+                $($variant => ($apply)(x, p),)*
             }
-        })
+        }
+
+        #[cfg(test)]
+        fn all() -> &'static [&'static str] {
+            &[$($name,)*]
+        }
+    };
+}
+
+impl Un {
+    unary_ops! {
+        "pow" => Un::Pow => |x: f32, p: f32| x.powf(p),
+        "neg" => Un::Neg => |x: f32, _p: f32| -x,
+        "exp" => Un::Exp => |x: f32, _p: f32| x.exp(),
+        "log" => Un::Log => |x: f32, _p: f32| x.ln(),
+        "sqrt" => Un::Sqrt => |x: f32, _p: f32| x.sqrt(),
+        "abs" => Un::Abs => |x: f32, _p: f32| x.abs(),
+        "relu" => Un::Relu => |x: f32, _p: f32| x.max(0.0),
+        "leakyRelu" => Un::LeakyRelu => |x: f32, p: f32| { if x > 0.0 { x } else { p * x } },
+        // sigmoid(x) = (tanh(x/2) + 1)/2. Three kernels against the five
+        // that 1/(1 + exp(-x)) needs here, and it does not overflow for
+        // large negative x either.
+        "sigmoid" => Un::Sigmoid => |x: f32, _p: f32| 1.0 / (1.0 + (-x).exp()),
+        "tanh" => Un::Tanh => |x: f32, _p: f32| x.tanh(),
+        "scalePowGrad" => Un::ScalePowGrad => |x: f32, p: f32| p * x.powf(p - 1.0),
     }
 }
 
@@ -719,69 +793,12 @@ impl Op {
 
 #[inline(always)]
 fn apply_bin(kind: Bin, p: f32, a: f32, b: f32) -> f32 {
-    match kind {
-        Bin::Add => a + b,
-        Bin::Sub => a - b,
-        Bin::Mul => a * b,
-        Bin::Div => a / b,
-        // f32::max/min return the non-NaN operand; candle and JS both
-        // propagate NaN, so compare explicitly.
-        Bin::Maximum => {
-            if a >= b {
-                a
-            } else {
-                b
-            }
-        }
-        Bin::Minimum => {
-            if a <= b {
-                a
-            } else {
-                b
-            }
-        }
-        Bin::Gt => (a > b) as u8 as f32,
-        Bin::Ge => (a >= b) as u8 as f32,
-        Bin::Lt => (a < b) as u8 as f32,
-        Bin::Le => (a <= b) as u8 as f32,
-        Bin::Eq => (a == b) as u8 as f32,
-        Bin::NegDiv => -a / b,
-        Bin::HalfDiv => 0.5 * a / b,
-        Bin::MulSign => a * ((b > 0.0) as u8 as f32 - (b < 0.0) as u8 as f32),
-        Bin::ReluGrad => {
-            if b > 0.0 {
-                a
-            } else {
-                0.0
-            }
-        }
-        Bin::LeakyReluGrad => a * if b > 0.0 { 1.0 } else { p },
-        Bin::SigmoidGrad => a * b * (1.0 - b),
-        Bin::TanhGrad => a * (1.0 - b * b),
-    }
+    Bin::apply(kind, p, a, b)
 }
 
 #[inline(always)]
 fn apply_un(kind: Un, p: f32, x: f32) -> f32 {
-    match kind {
-        Un::Pow => x.powf(p),
-        Un::Neg => -x,
-        Un::Exp => x.exp(),
-        Un::Log => x.ln(),
-        Un::Sqrt => x.sqrt(),
-        Un::Abs => x.abs(),
-        Un::Relu => x.max(0.0),
-        Un::LeakyRelu => {
-            if x > 0.0 {
-                x
-            } else {
-                p * x
-            }
-        }
-        Un::Sigmoid => 1.0 / (1.0 + (-x).exp()),
-        Un::Tanh => x.tanh(),
-        Un::ScalePowGrad => p * x.powf(p - 1.0),
-    }
+    Un::apply(kind, p, x)
 }
 
 // ---------------------------------------------------------------------------
@@ -1611,6 +1628,23 @@ fn exec_group(plan: &GroupPlan, inputs_slices: &[&[f32]]) -> Vec<f32> {
     out
 }
 
+/// Shared consumer-countdown used by both evaluators: decrement
+/// `remaining[input]`, and once it hits zero and the node is not a root,
+/// run `drop_buf(input)` so the evaluator frees the buffer (and any cached
+/// index tensor) that nothing else will read again.
+#[inline]
+fn release_input(
+    remaining: &mut [usize],
+    is_root: &[bool],
+    input: usize,
+    mut drop_buf: impl FnMut(usize),
+) {
+    remaining[input] -= 1;
+    if remaining[input] == 0 && !is_root[input] {
+        drop_buf(input);
+    }
+}
+
 /// Whole-graph execution from a prepared plan: leaf copies + raw loops,
 /// no parsing or planning. Returns all roots concatenated.
 fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Result<Vec<f32>> {
@@ -1620,7 +1654,7 @@ fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Resul
     // The same consumer countdown run_graph does: drop a buffer once
     // nothing else will read it, so a long rollout does not hold every
     // activation it ever produced. Views share the Arc, so storage is
-    // freed when the last view dies.
+    // freed when the last view dies. `release_input` is the shared helper.
     let mut remaining = prep.consumers.clone();
     let mut members_of: Vec<Vec<usize>> = vec![Vec::new(); prep.groups.len()];
     for i in 0..n {
@@ -1628,15 +1662,6 @@ fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Resul
             members_of[g].push(i);
         }
     }
-    let release = |remaining: &mut Vec<usize>,
-                   buffers: &mut Vec<Option<Buf>>,
-                   is_root: &[bool],
-                   input: usize| {
-        remaining[input] -= 1;
-        if remaining[input] == 0 && !is_root[input] {
-            buffers[input] = None;
-        }
-    };
     for (idx, node) in graph.nodes.iter().enumerate() {
         if !prep.live[idx] {
             continue;
@@ -1655,7 +1680,9 @@ fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Resul
                 buffers[idx] = Some(Buf::owned(out, prep.shapes[idx].clone()));
                 for &m in &members_of[g] {
                     for input in node_inputs(&graph.nodes[m]) {
-                        release(&mut remaining, &mut buffers, &prep.is_root, input);
+                        release_input(&mut remaining, &prep.is_root, input, |i| {
+                            buffers[i] = None;
+                        });
                     }
                 }
             }
@@ -1835,7 +1862,9 @@ fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Resul
         }
         buffers[idx] = Some(out);
         for input in node_inputs(node) {
-            release(&mut remaining, &mut buffers, &prep.is_root, input);
+            release_input(&mut remaining, &prep.is_root, input, |i| {
+                buffers[i] = None;
+            });
         }
     }
     let mut out = Vec::new();
@@ -2602,11 +2631,10 @@ fn run_graph(
         // per graph node and holding only what the backward pass still
         // needs, which is also what PyTorch holds.
         for input in node_inputs(node) {
-            remaining[input] -= 1;
-            if remaining[input] == 0 && !prep.is_root[input] {
-                outputs[input] = None;
-                indices[input] = None;
-            }
+            release_input(&mut remaining, &prep.is_root, input, |i| {
+                outputs[i] = None;
+                indices[i] = None;
+            });
         }
     }
     prep.roots
@@ -2818,4 +2846,80 @@ fn evaluate(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> Result<Readback> 
     .to_vec1::<f32>()
     .map_err(to_napi_err)?;
     Ok(vec_readback(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Device, Tensor};
+
+    /// Run the tensor path for one binary op on two scalar inputs and read
+    /// back the single f32 result.
+    fn eval_binary_scalar(name: &str, parameter: f64, x: f32, y: f32) -> f32 {
+        let a = Tensor::new(x, &Device::Cpu).unwrap();
+        let b = Tensor::new(y, &Device::Cpu).unwrap();
+        eval_binary(name, parameter, &a, &b)
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap()
+    }
+
+    fn eval_unary_scalar(name: &str, parameter: f64, x: f32) -> f32 {
+        let a = Tensor::new(x, &Device::Cpu).unwrap();
+        eval_unary(name, parameter, &a)
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap()
+    }
+
+    /// The loop evaluator's scalar application and candle's tensor kernel
+    /// agree but not bit-for-bit: candle's CPU backend dispatches to
+    /// Accelerate's vectorized kernels, and `sigmoid` uses a tanh-based
+    /// form, so transcendental ops legitimately differ by a few ulps. This
+    /// guards against *formula* drift — a wrong scalar or tensor formula is
+    /// off by far more than the tolerance below.
+    fn assert_parity(scalar: f32, tensor: f32, what: &str) {
+        let tol = 1e-5f32 * (1.0 + scalar.abs().max(tensor.abs()));
+        let diff = (scalar - tensor).abs();
+        assert!(
+            diff <= tol,
+            "{what}: scalar {scalar} vs tensor {tensor} (diff {diff})"
+        );
+    }
+
+    #[test]
+    fn binary_apply_matches_eval() {
+        let cases = [
+            (0.75f32, -1.25f32, 0.5f64),
+            (2.0f32, 3.5f32, 2.0f64),
+            (-0.5f32, 0.25f32, 0.5f64),
+        ];
+        for &name in Bin::all() {
+            let op = Bin::parse(name).unwrap();
+            for &(x, y, parameter) in &cases {
+                let scalar = apply_bin(op, parameter as f32, x, y);
+                let tensor = eval_binary_scalar(name, parameter, x, y);
+                assert_parity(scalar, tensor, &format!("binary {name}({x}, {y}, {parameter})"));
+            }
+        }
+    }
+
+    #[test]
+    fn unary_apply_matches_eval() {
+        let default: &[(f32, f64)] = &[(0.75, 0.5), (-1.25, 2.0), (1.5, 2.0)];
+        // `log`/`sqrt` are only defined on the positive reals.
+        let positive: &[(f32, f64)] = &[(0.75, 0.5), (1.5, 2.0)];
+        for &name in Un::all() {
+            let op = Un::parse(name).unwrap();
+            let cases = match name {
+                "log" | "sqrt" => positive,
+                _ => default,
+            };
+            for &(x, parameter) in cases {
+                let scalar = apply_un(op, parameter as f32, x);
+                let tensor = eval_unary_scalar(name, parameter, x);
+                assert_parity(scalar, tensor, &format!("unary {name}({x}, {parameter})"));
+            }
+        }
+    }
 }

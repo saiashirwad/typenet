@@ -1,27 +1,7 @@
 "use tsover"
 
-import { Linear, Module, SGD, type Tensor, tensor } from "../index.ts"
-
-class XorNet extends Module {
-  hidden = new Linear(2, 8)
-  out = new Linear(8, 1)
-
-  forward<B extends number>(
-    x: Tensor<[B, 2]>,
-  ) {
-    const h = this.hidden.forward(x).tanh()
-    return this.out.forward(h).sigmoid()
-  }
-}
-
-const X = tensor([
-  [0, 0],
-  [0, 1],
-  [1, 0],
-  [1, 1],
-])
-
-const Y = tensor([[0], [1], [1], [0]])
+import { SGD } from "../index.ts"
+import { XorNet, XOR_X, XOR_Y } from "./xor-net.ts"
 
 const net = new XorNet()
 const optim = new SGD(net.parameters(), {
@@ -30,8 +10,8 @@ const optim = new SGD(net.parameters(), {
 })
 
 for (let epoch = 1; epoch <= 1500; epoch++) {
-  const pred = net.forward(X)
-  const loss = ((pred - Y) ** 2).mean()
+  const pred = net.forward(XOR_X)
+  const loss = ((pred - XOR_Y) ** 2).mean()
 
   optim.zeroGrad()
   loss.backward()
@@ -45,11 +25,11 @@ for (let epoch = 1; epoch <= 1500; epoch++) {
 }
 
 console.log("\npredictions:")
-const final = net.forward(X)
+const final = net.forward(XOR_X)
 for (let i = 0; i < 4; i++) {
-  const a = X.get(i, 0)
-  const b = X.get(i, 1)
+  const a = XOR_X.get(i, 0)
+  const b = XOR_X.get(i, 1)
   console.log(
-    `  ${a} xor ${b} -> ${final.get(i, 0).toFixed(4)} (target ${Y.get(i, 0)})`,
+    `  ${a} xor ${b} -> ${final.get(i, 0).toFixed(4)} (target ${XOR_Y.get(i, 0)})`,
   )
 }

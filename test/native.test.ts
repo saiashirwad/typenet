@@ -5,32 +5,12 @@ import { configure } from "../src/lazy.ts"
 import { crossEntropy } from "../src/nn.ts"
 import { SGD } from "../src/optim.ts"
 import { Tensor } from "../src/tensor.ts"
+import { bothWays, expectClose } from "./helpers.ts"
+import { makeXorNet } from "./xor-net.ts"
 
 type AnyTensor = Tensor<any>
 
 const available = isNativeAvailable()
-
-function bothWays<T>(fn: () => T): { eager: T; native: T } {
-  configure({ lazy: false })
-  const eager = fn()
-  configure({ lazy: true })
-  const native = fn()
-  configure({ lazy: false })
-  return { eager, native }
-}
-
-function expectClose(
-  eager: AnyTensor,
-  native: AnyTensor,
-): void {
-  expect(native.shape).toEqual(eager.shape)
-  const a = eager.data
-  const b = native.data
-  expect(b.length).toBe(a.length)
-  for (let i = 0; i < a.length; i++) {
-    expect(Math.abs(a[i]! - b[i]!)).toBeLessThan(1e-4)
-  }
-}
 
 afterEach(() => {
   configure({ lazy: false })
@@ -40,7 +20,7 @@ afterEach(() => {
 describe.skipIf(!available)("native backend", () => {
   it("matches eager for binary broadcast", () => {
     useNative()
-    const { eager, native } = bothWays(() => {
+    const { eager, lazy: native } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
         [4, 5, 6],
@@ -56,7 +36,7 @@ describe.skipIf(!available)("native backend", () => {
 
   it("matches eager for matmul (plain and batched)", () => {
     useNative()
-    const { eager, native } = bothWays(() => {
+    const { eager, lazy: native } = bothWays(() => {
       const plain = tensor([
         [1, 2],
         [3, 4],
@@ -90,7 +70,7 @@ describe.skipIf(!available)("native backend", () => {
 
   it("matches eager for reduces", () => {
     useNative()
-    const { eager, native } = bothWays(() => {
+    const { eager, lazy: native } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
         [4, 5, 6],
@@ -116,7 +96,7 @@ describe.skipIf(!available)("native backend", () => {
 
   it("matches eager for a unary chain", () => {
     useNative()
-    const { eager, native } = bothWays(() =>
+    const { eager, lazy: native } = bothWays(() =>
       tensor([-1, 0.5, 2])
         .tanh()
         .exp()
@@ -131,9 +111,9 @@ describe.skipIf(!available)("native backend", () => {
     expectClose(eager, native)
   })
 
-  it("matches eager for view / permute / narrow / broadcastTo", () => {
+  it("matches eager for view / permute / transpose+view", () => {
     useNative()
-    const { eager, native } = bothWays(() => {
+    const { eager, lazy: native } = bothWays(() => {
       const a = tensor([
         [1, 2, 3],
         [4, 5, 6],
@@ -152,7 +132,7 @@ describe.skipIf(!available)("native backend", () => {
 
   it("matches eager for cat", () => {
     useNative()
-    const { eager, native } = bothWays(() =>
+    const { eager, lazy: native } = bothWays(() =>
       Tensor.cat(
         tensor([
           [1, 2],
@@ -167,48 +147,22 @@ describe.skipIf(!available)("native backend", () => {
 
   it("matches eager for oneHot", () => {
     useNative()
-    const { eager, native } = bothWays(() => tensor([0, 2, 1]).oneHot(3))
+    const { eager, lazy: native } = bothWays(() => tensor([0, 2, 1]).oneHot(3))
     expectClose(eager, native)
   })
 
   it("matches eager for an XOR training step", () => {
     useNative()
     const step = () => {
-      const x = tensor([
-        [0, 0],
-        [0, 1],
-        [1, 0],
-        [1, 1],
-      ])
-      const y = tensor([[0], [1], [1], [0]])
-      const w1 = tensor([
-        [0.5, -0.5, 0.25, -0.25],
-        [0.1, 0.2, -0.3, 0.4],
-      ]).requiresGrad()
-      const b1 = tensor([
-        0.1,
-        -0.1,
-        0.05,
-        -0.05,
-      ]).requiresGrad()
-      const w2 = tensor([
-        [0.6],
-        [-0.6],
-        [0.3],
-        [-0.3],
-      ]).requiresGrad()
-      const b2 = tensor([0.2]).requiresGrad()
-      const params = [w1, b1, w2, b2] as AnyTensor[]
+      const { params, loss } = makeXorNet()
       const opt = new SGD(params, { lr: 0.5 })
-      const h = x.matmul(w1).add(b1).tanh()
-      const out = h.matmul(w2).add(b2).sigmoid()
-      const loss = out.sub(y).pow(2).mean()
+      const l = loss()
       opt.zeroGrad()
-      loss.backward()
+      l.backward()
       opt.step()
-      return { loss, params }
+      return { loss: l, params }
     }
-    const { eager, native } = bothWays(step)
+    const { eager, lazy: native } = bothWays(step)
     expect(native.loss.item()).toBeCloseTo(
       eager.loss.item(),
       4,
@@ -248,7 +202,7 @@ describe.skipIf(!available)("native backend", () => {
       loss.backward()
       return [a, b, c] as AnyTensor[]
     }
-    const { eager, native } = bothWays(run)
+    const { eager, lazy: native } = bothWays(run)
     eager.forEach((p, i) => expectClose(p.grad!, native[i]!.grad!))
   })
 
@@ -268,43 +222,18 @@ describe.skipIf(!available)("native backend", () => {
       loss.backward()
       return [logits] as AnyTensor[]
     }
-    const { eager, native } = bothWays(run)
+    const { eager, lazy: native } = bothWays(run)
     expectClose(eager[0]!.grad!, native[0]!.grad!)
   })
 
   it("matches eager gradients for an XOR training step", () => {
     useNative()
     const run = () => {
-      const x = tensor([
-        [0, 0],
-        [0, 1],
-        [1, 0],
-        [1, 1],
-      ])
-      const y = tensor([[0], [1], [1], [0]])
-      const w1 = tensor([
-        [0.5, -0.5, 0.25, -0.25],
-        [0.1, 0.2, -0.3, 0.4],
-      ]).requiresGrad()
-      const b1 = tensor([
-        0.1,
-        -0.1,
-        0.05,
-        -0.05,
-      ]).requiresGrad()
-      const w2 = tensor([
-        [0.6],
-        [-0.6],
-        [0.3],
-        [-0.3],
-      ]).requiresGrad()
-      const b2 = tensor([0.2]).requiresGrad()
-      const h = x.matmul(w1).add(b1).tanh()
-      const out = h.matmul(w2).add(b2).sigmoid()
-      out.sub(y).pow(2).mean().backward()
-      return [w1, b1, w2, b2] as AnyTensor[]
+      const { params, loss } = makeXorNet()
+      loss().backward()
+      return params
     }
-    const { eager, native } = bothWays(run)
+    const { eager, lazy: native } = bothWays(run)
     eager.forEach((p, i) => expectClose(p.grad!, native[i]!.grad!))
   })
 

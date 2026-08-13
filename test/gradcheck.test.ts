@@ -35,6 +35,13 @@ interface Case {
   readonly tol?: number
 }
 
+interface CheckOpts {
+  /** dtype to run the case in; float64 checks gradient precision. */
+  readonly dtype?: "float32" | "float64"
+  readonly eps?: number
+  readonly tol?: number
+}
+
 const defaultSample = (rand: () => number): number => (rand() * 2 - 1) * 1.5 + 0.6
 const awayFromZero = (rand: () => number): number => (rand() > 0.5 ? 1 : -1) * (0.5 + rand())
 const positive = (rand: () => number): number => 0.5 + rand() * 2
@@ -48,18 +55,30 @@ const awayFromUnit = (rand: () => number): number =>
 // built inside `build` rather than coming from `shapes`.
 const index = (values: number[]): AnyTensor => Tensor.of(values) as AnyTensor
 
-function checkCase(c: Case, seed: number): void {
+function checkCase(c: Case, seed: number, opts: CheckOpts = {}): void {
+  const dtype = opts.dtype ?? "float32"
+  const eps = opts.eps ?? EPS
+  const tol = opts.tol ?? TOL
+
+  const makeValues = (
+    next: () => number,
+    n: number,
+  ): Float32Array | Float64Array =>
+    dtype === "float64"
+      ? Float64Array.from({ length: n }, () => next())
+      : Float32Array.from({ length: n }, () => next())
+
   const values = c.shapes.map((shape, i) => {
     const rand = mulberry32(seed + i)
     const sample = c.sample ?? defaultSample
     const n = shape.reduce((a, b) => a * b, 1)
-    return Float32Array.from({ length: n }, () => sample(rand))
+    return makeValues(() => sample(rand), n)
   })
 
   const make = (grad: boolean): AnyTensor[] =>
     c.shapes.map((shape, i) => {
-      const t = Tensor.zeros(shape as number[]) as AnyTensor
-      ;(t.data as Float32Array).set(values[i]!)
+      const t = Tensor.zeros(shape as number[]).to(dtype) as AnyTensor
+      ;(t.data as Float32Array | Float64Array).set(values[i]!)
       return grad ? (t.requiresGrad() as AnyTensor) : t
     })
 
@@ -76,18 +95,18 @@ function checkCase(c: Case, seed: number): void {
       x.grad,
       `${c.name}: grad for input ${i}`,
     ).not.toBeNull()
-    const analytic = x.grad!.data as Float32Array
+    const analytic = x.grad!.data as Float32Array | Float64Array
     const base = values[i]!
     for (let j = 0; j < base.length; j++) {
       const original = base[j]!
 
-      base[j] = original + EPS
+      base[j] = original + eps
       const up = noGrad(() => c.build(make(false)).item())
-      base[j] = original - EPS
+      base[j] = original - eps
       const down = noGrad(() => c.build(make(false)).item())
       base[j] = original
 
-      const numeric = (up - down) / (2 * EPS)
+      const numeric = (up - down) / (2 * eps)
       const diff = Math.abs(numeric - analytic[j]!)
       const scale = Math.max(
         1,
@@ -97,7 +116,7 @@ function checkCase(c: Case, seed: number): void {
       expect(
         diff / scale,
         `${c.name}: input ${i} elem ${j}: numeric ${numeric} vs autograd ${analytic[j]}`,
-      ).toBeLessThan(c.tol ?? TOL)
+      ).toBeLessThan(c.tol ?? tol)
     }
   })
 }
@@ -314,6 +333,14 @@ const CASES: Case[] = [
     ],
     build: ([a, b]) => Tensor.cat(a!, b!, 1).mul(2).sum(),
   },
+  {
+    name: "stack(dim 1)",
+    shapes: [
+      [2],
+      [2],
+    ],
+    build: ([a, b]) => Tensor.stack([a!, b!] as any, 1 as any).pow(3).sum(),
+  },
 
   {
     name: "mse-style ((a-b)^2).mean()",
@@ -487,4 +514,32 @@ describe.each([
       checkCase(c, 1234)
     },
   )
+})
+
+// f32 finite differences cap out around 1e-3 relative error; a float64
+// pass at a 10x tighter tolerance guards against precision regressions
+// that f32 noise would hide. Runs eager-only: lazy graphs reject f64
+// leaves (native compute is f32-only).
+describe("gradcheck (float64 precision)", () => {
+  afterEach(() => {
+    configure({ lazy: false })
+  })
+
+  it("matches finite differences at float64 precision", () => {
+    configure({ lazy: false })
+    checkCase(
+      {
+        name: "mlp (float64): tanh(x@W).sigmoid().sum()",
+        shapes: [
+          [4, 2],
+          [2, 8],
+          [8, 1],
+        ],
+        build: ([x, w1, w2]) =>
+          x!.matmul(w1!).tanh().matmul(w2!).sigmoid().sum(),
+      },
+      5678,
+      { dtype: "float64", eps: 1e-4, tol: 1e-4 },
+    )
+  })
 })

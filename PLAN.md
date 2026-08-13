@@ -109,9 +109,8 @@ Gate: compiled ≤ eager ~3.5ms/200 steps — passed with margin: compiled
 
 ## Suggested commit cadence
 
-One commit per numbered task, messages in the repo's lowercase style. Your
-scratch files (`examples/basic.ts`, `examples/_gatdsl.ts`,
-`examples/_yieldshape.ts`) stay uncommitted, they're yours.
+One commit per numbered task, messages in the repo's lowercase style. Any
+scratch files you keep stay uncommitted — they're yours.
 
 ## Phase E — graph neural nets, and training one at speed
 

@@ -298,7 +298,6 @@ function _sequential() {
   // @ts-expect-error 16 -> 17 mismatch between layers
   sequential(new Linear(2, 16), new Linear(17, 3))
 
-  // prettier-ignore
   // @ts-expect-error activation cannot bridge a 16 -> 17 mismatch
   sequential(new Linear(2, 16), new ReLU(), new Linear(17, 3))
 

@@ -6,12 +6,12 @@ import { force, forceMany, serializeLazyGraph } from "./lazy.ts"
 import { prod, shapesEqual, showShape } from "./storage.ts"
 import { _internal, type AnyTensor, makeRaw, Tensor } from "./tensor.ts"
 
-type GraphUpdate = {
+export type GraphUpdate = {
   target: AnyTensor
   expr: AnyTensor
 }
 
-type UpdateTrace = {
+export type UpdateTrace = {
   updates: GraphUpdate[]
   materialize: AnyTensor[]
 }

@@ -6,20 +6,10 @@ import { crossEntropy } from "../src/nn.ts"
 import { SGD } from "../src/optim.ts"
 import { Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
+import { bothWays, expectClose } from "./helpers.ts"
+import { makeXorNet } from "./xor-net.ts"
 
 type AnyTensor = Tensor<any>
-
-function bothWays<T>(fn: () => T): {
-  eager: T
-  lazy: T
-} {
-  configure({ lazy: false })
-  const eager = fn()
-  configure({ lazy: true })
-  const lazy = fn()
-  configure({ lazy: false })
-  return { eager, lazy }
-}
 
 function expectSame(
   eager: AnyTensor,
@@ -27,20 +17,6 @@ function expectSame(
 ): void {
   expect(lazy.shape).toEqual(eager.shape)
   expect(lazy.toArray()).toEqual(eager.toArray())
-}
-
-function expectClose(
-  eager: AnyTensor,
-  lazy: AnyTensor,
-  tolerance = 1e-6,
-): void {
-  expect(lazy.shape).toEqual(eager.shape)
-  const a = eager.data
-  const b = lazy.data
-  expect(b.length).toBe(a.length)
-  for (let i = 0; i < a.length; i++) {
-    expect(Math.abs(a[i]! - b[i]!)).toBeLessThan(tolerance)
-  }
 }
 
 function expectGradsClose(
@@ -208,39 +184,13 @@ describe("lazy mode", () => {
 
   it("matches eager for an XOR training step", () => {
     const step = () => {
-      const x = tensor([
-        [0, 0],
-        [0, 1],
-        [1, 0],
-        [1, 1],
-      ])
-      const y = tensor([[0], [1], [1], [0]])
-      const w1 = tensor([
-        [0.5, -0.5, 0.25, -0.25],
-        [0.1, 0.2, -0.3, 0.4],
-      ]).requiresGrad()
-      const b1 = tensor([
-        0.1,
-        -0.1,
-        0.05,
-        -0.05,
-      ]).requiresGrad()
-      const w2 = tensor([
-        [0.6],
-        [-0.6],
-        [0.3],
-        [-0.3],
-      ]).requiresGrad()
-      const b2 = tensor([0.2]).requiresGrad()
-      const params = [w1, b1, w2, b2] as AnyTensor[]
+      const { params, loss } = makeXorNet()
       const opt = new SGD(params, { lr: 0.5 })
-      const h = x.matmul(w1).add(b1).tanh()
-      const out = h.matmul(w2).add(b2).sigmoid()
-      const loss = out.sub(y).pow(2).mean()
+      const l = loss()
       opt.zeroGrad()
-      loss.backward()
+      l.backward()
       opt.step()
-      return { loss, params }
+      return { loss: l, params }
     }
     const { eager, lazy } = bothWays(step)
     expect(lazy.loss.item()).toBeCloseTo(
@@ -310,34 +260,9 @@ describe("lazy mode", () => {
 
   it("matches eager gradients for an XOR training step", () => {
     const run = () => {
-      const x = tensor([
-        [0, 0],
-        [0, 1],
-        [1, 0],
-        [1, 1],
-      ])
-      const y = tensor([[0], [1], [1], [0]])
-      const w1 = tensor([
-        [0.5, -0.5, 0.25, -0.25],
-        [0.1, 0.2, -0.3, 0.4],
-      ]).requiresGrad()
-      const b1 = tensor([
-        0.1,
-        -0.1,
-        0.05,
-        -0.05,
-      ]).requiresGrad()
-      const w2 = tensor([
-        [0.6],
-        [-0.6],
-        [0.3],
-        [-0.3],
-      ]).requiresGrad()
-      const b2 = tensor([0.2]).requiresGrad()
-      const h = x.matmul(w1).add(b1).tanh()
-      const out = h.matmul(w2).add(b2).sigmoid()
-      out.sub(y).pow(2).mean().backward()
-      return [w1, b1, w2, b2] as AnyTensor[]
+      const { params, loss } = makeXorNet()
+      loss().backward()
+      return params
     }
     const { eager, lazy } = bothWays(run)
     expectGradsClose(eager, lazy)

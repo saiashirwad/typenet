@@ -1,7 +1,5 @@
 import type { DimCheck, DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts"
-import { fromFlat, Tensor } from "./tensor.ts"
-
-type AnyTensor = Tensor<any>
+import { fromFlat, Tensor, type AnyTensor } from "./tensor.ts"
 
 export abstract class Module {
   parameters(): AnyTensor[] {
@@ -70,7 +68,7 @@ class Activation extends Module {
   forward<S extends Shape>(
     x: Tensor<S>,
   ): Tensor<S> {
-    return this.apply(x) as any
+    return this.apply(x) as Tensor<S>
   }
 }
 
@@ -110,7 +108,7 @@ export class Softmax<const D extends number = -1> extends Module {
   forward<S extends Shape>(
     x: Tensor<S> & DimCheck<S, D>,
   ): Tensor<S> {
-    return (x as AnyTensor).softmax(this.dim) as any
+    return (x as AnyTensor).softmax(this.dim) as Tensor<S>
   }
 }
 
@@ -158,7 +156,7 @@ export class Sequential<
       h = (layer as { forward(t: AnyTensor): AnyTensor })
         .forward(h)
     }
-    return h as any
+    return h as Tensor<ChainShape<L, S>>
   }
 }
 

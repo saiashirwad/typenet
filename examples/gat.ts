@@ -1,6 +1,7 @@
 "use tsover"
 
 import { Adam, crossEntropy, eye, Module, rand, randn, Tensor } from "../index.ts"
+import { accuracy } from "./util.ts"
 
 class GATHead<FIn extends number, FOut extends number> extends Module {
   readonly W: Tensor<[FIn, FOut]>
@@ -91,12 +92,9 @@ for (let epoch = 1; epoch <= 300; epoch++) {
   optim.step()
 
   if (epoch % 60 === 0) {
-    const preds = net.forward(X, adj).argmax(1)
-    let correct = 0
-    for (let i = 0; i < N; i++) if (preds.data[i] === labels[i]) correct++
-    const accuracy = ((100 * correct) / N).toFixed(1)
+    const acc = accuracy(net.forward(X, adj), labels)
     console.log(
-      `epoch ${String(epoch).padStart(3)}  loss ${loss.item().toFixed(4)}  accuracy ${accuracy}%`,
+      `epoch ${String(epoch).padStart(3)}  loss ${loss.item().toFixed(4)}  accuracy ${acc}%`,
     )
   }
 }

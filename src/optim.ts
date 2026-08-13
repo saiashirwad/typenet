@@ -1,13 +1,8 @@
 import { noGrad } from "./autograd.ts"
-import { _activeUpdateTrace } from "./compile.ts"
+import { _activeUpdateTrace, type GraphUpdate } from "./compile.ts"
 import { rawBinary, rawUnary } from "./ir.ts"
 import { forceMany, isLazy } from "./lazy.ts"
-import { Tensor } from "./tensor.ts"
-import type { Tensor as TensorType } from "./tensor.ts"
-
-type AnyTensor = TensorType<any>
-
-type GraphUpdate = { target: AnyTensor; expr: AnyTensor }
+import { Tensor, type AnyTensor } from "./tensor.ts"
 
 function finishGraphUpdates(
   updates: GraphUpdate[],
@@ -46,10 +41,10 @@ type Algebra<T> = {
 
 const nums: Algebra<number> = {
   of: n => n,
-  add: (a, b) => a + (b as number),
+  add: (a, b) => a + b,
   sub: (a, b) => a - b,
-  mul: (a, b) => a * (b as number),
-  div: (a, b) => a / (b as number),
+  mul: (a, b) => a * b,
+  div: (a, b) => a / b,
   sqrt: Math.sqrt,
   min1: a => Math.min(a, 1),
 }

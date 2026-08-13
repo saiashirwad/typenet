@@ -1,55 +1,12 @@
 import { describe, expect, it } from "vitest"
 import { noGrad } from "../src/autograd.ts"
 import { tensor } from "../src/factories.ts"
-import { Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
 
-type AnyTensor = Tensor<any>
-
-function gradCheck(
-  f: (...inputs: AnyTensor[]) => AnyTensor,
-  values: number[][],
-  shapes: number[][],
-  eps = 1e-4,
-  tol = 1e-2,
-): void {
-  const make = () =>
-    values.map((v, i) => {
-      const t = Tensor.zeros(shapes[i]! as [number]).to(
-        "float64",
-      ) as AnyTensor
-      ;(t.data as Float64Array).set(v)
-      return t.requiresGrad()
-    })
-
-  const inputs = make()
-  const out = f(...inputs).sum()
-  out.backward()
-
-  values.forEach((v, i) => {
-    for (let j = 0; j < v.length; j++) {
-      const plus = make()
-      const minus = make()
-      ;(plus[i]!.data as Float64Array)[j]! += eps
-      ;(minus[i]!.data as Float64Array)[j]! -= eps
-      const [up, down] = noGrad(() => [
-        f(...plus)
-          .sum()
-          .item(),
-        f(...minus)
-          .sum()
-          .item(),
-      ])
-      const numeric = (up! - down!) / (2 * eps)
-      const analytic = inputs[i]!.grad!.data[j]!
-      expect(
-        Math.abs(numeric - analytic),
-        `input ${i} elem ${j}: numeric ${numeric} vs autograd ${analytic}`,
-      ).toBeLessThan(tol)
-    }
-  })
-}
-
+// Closed-form (analytic) gradient values only. Finite-difference
+// gradient checking lives in gradcheck.test.ts, which runs every op
+// kind in both eager and lazy mode at float32 precision plus a
+// float64-precision case.
 describe("autograd", () => {
   it("simple chain: ((x*y)+x)^2", () => {
     const x = tensor([1, 2]).requiresGrad()
@@ -97,111 +54,5 @@ describe("autograd", () => {
   it("backward on non-scalar requires explicit gradient", () => {
     const x = tensor([1, 2]).requiresGrad()
     expect(() => x.mul(2).backward()).toThrow(/scalar/)
-  })
-
-  it("matmul gradients (numerical)", () => {
-    gradCheck(
-      (a, b) => a.matmul(b),
-      [
-        [1, 2, 3, 4, 5, 6],
-        [0.5, -1, 2, 1.5, 0, 1],
-      ],
-      [
-        [2, 3],
-        [3, 2],
-      ],
-    )
-  })
-
-  it("batched matmul gradients (numerical)", () => {
-    gradCheck(
-      (a, b) => a.matmul(b),
-      [
-        Array.from({ length: 12 }, (_, i) => i * 0.3 - 2),
-        [0.5, -1, 2, 1.5],
-      ],
-      [
-        [3, 2, 2],
-        [2, 2],
-      ],
-    )
-  })
-
-  it("div / exp / log / sqrt gradients (numerical)", () => {
-    gradCheck(
-      (a, b) => a.div(b).exp().add(a.log()).add(a.sqrt()),
-      [
-        [1, 2, 3],
-        [4, 5, 6],
-      ],
-      [[3], [3]],
-    )
-  })
-
-  it("activations gradients (numerical)", () => {
-    gradCheck(
-      a =>
-        a
-          .relu()
-          .add(a.sigmoid())
-          .add(a.tanh())
-          .add(a.leakyRelu(0.2)),
-      [[-2, -0.5, 0.5, 2]],
-      [[4]],
-    )
-  })
-
-  it("softmax / logSoftmax gradients (numerical)", () => {
-    gradCheck(
-      a => a.view([2, 2]).softmax(1).pow(2),
-      [[1, 2, 3, 4]],
-      [[4]],
-    )
-    gradCheck(
-      a => a.view([2, 2]).logSoftmax(1).mul(0.5),
-      [[1, 2, 3, 4]],
-      [[4]],
-    )
-  })
-
-  it("reshape / transpose / cat / stack gradients (numerical)", () => {
-    gradCheck(
-      a =>
-        a
-          .view([2, 3])
-          .transpose(0, 1)
-          .mul(tensor([[1], [2], [3]]) as any),
-      [[1, 2, 3, 4, 5, 6]],
-      [[6]],
-    )
-    gradCheck(
-      (a, b) =>
-        Tensor.cat(
-          a.view([1, 2]) as any,
-          b.view([1, 2]) as any,
-          0,
-        ).pow(2),
-      [
-        [1, 2],
-        [3, 4],
-      ],
-      [[2], [2]],
-    )
-    gradCheck(
-      (a, b) => Tensor.stack([a, b] as any, 1 as any).pow(3),
-      [
-        [1, 2],
-        [3, 4],
-      ],
-      [[2], [2]],
-    )
-  })
-
-  it("mean over dim gradients (numerical)", () => {
-    gradCheck(
-      a => a.view([2, 3]).mean(1).pow(2),
-      [[1, 2, 3, 4, 5, 6]],
-      [[6]],
-    )
   })
 })

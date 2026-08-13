@@ -16,7 +16,7 @@ import {
 import { nextStream } from "./kernels.ts"
 import type { BinaryOp, ReduceOp, UnaryOp } from "./ops.ts"
 import { broadcastShapes, broadcastToShape, catShape, matmulShape, permuteShape, reduceShape, resizeDim, type Shape } from "./shape.ts"
-import { type DType, type LazyNode, type LazyNodeBody, normalizeDim, prod, type RandomKind, shapesEqual, showShape } from "./storage.ts"
+import { type DType, type LazyNode, type LazyNodeBody, normalizeDim, prod, promoteBinaryDtype, type RandomKind, shapesEqual, showShape } from "./storage.ts"
 import { _internal, type AnyTensor, makeStorage, type Tensor } from "./tensor.ts"
 
 // ---------------------------------------------------------------------------
@@ -301,9 +301,7 @@ export function rawBinary(
 ): AnyTensor {
   if (lazyMode) {
     const outShape = broadcastShapes(a.shape, b.shape)
-    const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
-      ? "float64"
-      : "float32"
+    const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
     return makeNode(
       { op: "binary", kind: op, parameter, a, b },
       outShape,
@@ -399,9 +397,7 @@ export function rawPermute(
 
 export function rawMatmul(a: AnyTensor, b: AnyTensor): AnyTensor {
   if (lazyMode) {
-    const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
-      ? "float64"
-      : "float32"
+    const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
     return makeNode(
       { op: "matmul", a, b },
       matmulShape(a.shape, b.shape),
@@ -434,9 +430,7 @@ export function rawCat(
   dim: number,
 ): AnyTensor {
   if (lazyMode) {
-    const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
-      ? "float64"
-      : "float32"
+    const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
     return makeNode(
       { op: "cat", a, b, dim },
       catShape(a.shape, b.shape, dim),

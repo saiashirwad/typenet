@@ -1,9 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
-import type { Tensor } from "../../index.ts"
+import type { AnyTensor } from "../../src/tensor.ts"
 import type { Edges, Points } from "./graphs.ts"
-
-type AnyTensor = Tensor<any>
 
 export interface Checkpoint {
   step: number

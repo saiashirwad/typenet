@@ -1,6 +1,7 @@
 "use tsover"
 
 import { Adam, crossEntropy, Linear, ReLU, sequential, zeros } from "../index.ts"
+import { accuracy } from "./util.ts"
 
 const CLASSES = 3
 const N = 180
@@ -40,13 +41,9 @@ for (let epoch = 1; epoch <= 400; epoch++) {
   optim.step()
 
   if (epoch % 80 === 0) {
-    const preds = net.forward(X).argmax(1)
-    let correct = 0
-    for (let i = 0; i < N; i++) {
-      if (preds.data[i] === targets[i]) correct++
-    }
+    const acc = accuracy(net.forward(X), targets)
     console.log(
-      `epoch ${String(epoch).padStart(3)}  loss ${loss.item().toFixed(4)}  accuracy ${((100 * correct) / N).toFixed(1)}%`,
+      `epoch ${String(epoch).padStart(3)}  loss ${loss.item().toFixed(4)}  accuracy ${acc}%`,
     )
   }
 }

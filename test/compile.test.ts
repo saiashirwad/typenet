@@ -5,20 +5,11 @@ import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { Linear, mseLoss, sequential, Tanh } from "../src/nn.ts"
 import { Tensor } from "../src/tensor.ts"
+import { expectClose } from "./helpers.ts"
 
 type AnyTensor = Tensor<any>
 
 const available = isNativeAvailable()
-
-function expectClose(a: AnyTensor, b: AnyTensor): void {
-  expect(b.shape).toEqual(a.shape)
-  const ad = a.data
-  const bd = b.data
-  expect(bd.length).toBe(ad.length)
-  for (let i = 0; i < ad.length; i++) {
-    expect(Math.abs(ad[i]! - bd[i]!)).toBeLessThan(1e-4)
-  }
-}
 
 function forwardEager(
   x: AnyTensor,

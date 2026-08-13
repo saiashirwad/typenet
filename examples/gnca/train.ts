@@ -13,19 +13,18 @@ import {
   nativeDevice,
   nativeDeviceMode,
   normal,
-  Tensor,
   useNative,
 } from "../../index.ts"
+import type { AnyTensor } from "../../src/tensor.ts"
 import { loadRule, readCheckpoint, saveCheckpoint } from "./checkpoint.ts"
 import * as damage from "./damage.ts"
 import { batchEdges, type Edges, knnGraph, nearestNode, type Points, randomGeometricGraph, wattsStrogatzGraph } from "./graphs.ts"
-import { aliveMask, GraphNCA, type GraphTensors, graphTensors, seedState } from "./model.ts"
+import { aliveMask, GraphNCA, graphTensors, seedState } from "./model.ts"
 import { loadCloud, POINTCLOUDS } from "./pointclouds.ts"
 import { renderSvg, visible } from "./render.ts"
 import { rng } from "./rng.ts"
 import { type Target, TARGETS } from "./targets.ts"
-
-type AnyTensor = Tensor<any>
+import { rollout } from "./train-util.ts"
 
 const flags = parseFlags(process.argv.slice(2))
 const options = {
@@ -210,24 +209,6 @@ const model = new GraphNCA(C, options.hidden)
 const params = model.parameters()
 const optimizer = new Adam(params, { lr: options.lr })
 
-function rollout(
-  x0: AnyTensor,
-  steps: number,
-  // Dims come from command-line flags, so they are `number` — a wildcard
-  // the shape algebra accepts anywhere. A model written with literal
-  // channel counts gets them checked; a CLI cannot.
-  graph: GraphTensors<number>,
-): AnyTensor {
-  let x = x0
-  for (let i = 0; i < steps; i++) {
-    const alive = aliveMask(x, graph)
-    x = model
-      .forward(x, graph, options.updateRate)
-      .mul(alive)
-  }
-  return x
-}
-
 function visibleLoss(
   x: AnyTensor,
   against: AnyTensor,
@@ -265,7 +246,7 @@ function trainStep(
           ).mul(options.noise),
         )
         : input
-      const x = rollout(noised, steps, batched)
+      const x = rollout(model, noised, batched, steps, options.updateRate)
       const mse = visibleLoss(x, targetTiled)
       const loss = options.overflow > 0
         ? mse.add(

@@ -5,6 +5,8 @@ import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { Adam, clipGradNorm, SGD } from "../src/optim.ts"
 import { Tensor } from "../src/tensor.ts"
+import { expectClose } from "./helpers.ts"
+import { makeXorNet } from "./xor-net.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -14,54 +16,6 @@ afterEach(() => {
   configure({ lazy: false })
   disableNative()
 })
-
-function expectClose(
-  a: AnyTensor,
-  b: AnyTensor,
-  tol = 1e-4,
-): void {
-  expect(b.shape).toEqual(a.shape)
-  const ad = a.data
-  const bd = b.data
-  expect(bd.length).toBe(ad.length)
-  for (let i = 0; i < ad.length; i++) {
-    expect(Math.abs(ad[i]! - bd[i]!)).toBeLessThan(tol)
-  }
-}
-
-function makeNet() {
-  const x = tensor([
-    [0, 0],
-    [0, 1],
-    [1, 0],
-    [1, 1],
-  ])
-  const y = tensor([[0], [1], [1], [0]])
-  const w1 = tensor([
-    [0.5, -0.5, 0.25, -0.25],
-    [0.1, 0.2, -0.3, 0.4],
-  ]).requiresGrad()
-  const b1 = tensor([
-    0.1,
-    -0.1,
-    0.05,
-    -0.05,
-  ]).requiresGrad()
-  const w2 = tensor([
-    [0.6],
-    [-0.6],
-    [0.3],
-    [-0.3],
-  ]).requiresGrad()
-  const b2 = tensor([0.2]).requiresGrad()
-  const params = [w1, b1, w2, b2] as AnyTensor[]
-  const forward = () => {
-    const h = x.matmul(w1).add(b1).tanh()
-    return h.matmul(w2).add(b2).sigmoid()
-  }
-  const loss = () => forward().sub(y).pow(2).mean()
-  return { x, y, params, forward, loss }
-}
 
 describe("optimizer dtype validation", () => {
   it("rejects integer parameters", () => {
@@ -94,8 +48,8 @@ describe("optimizer dispose and reuse", () => {
 
 describe("optimizer in the lazy graph", () => {
   it("lazy SGD (momentum + weight decay) tracks eager across steps", () => {
-    const eager = makeNet()
-    const lazy = makeNet()
+    const eager = makeXorNet()
+    const lazy = makeXorNet()
     const eagerOpt = new SGD(eager.params, {
       lr: 0.5,
       momentum: 0.9,
@@ -130,8 +84,8 @@ describe("optimizer in the lazy graph", () => {
   })
 
   it("lazy Adam tracks eager across steps", () => {
-    const eager = makeNet()
-    const lazy = makeNet()
+    const eager = makeXorNet()
+    const lazy = makeXorNet()
     const eagerOpt = new Adam(eager.params, { lr: 0.05 })
     const lazyOpt = new Adam(lazy.params, { lr: 0.05 })
     for (let step = 0; step < 30; step++) {
@@ -155,7 +109,7 @@ describe("optimizer in the lazy graph", () => {
   })
 
   it("keeps eager-mode step numerics unchanged when lazy is off", () => {
-    const net = makeNet()
+    const net = makeXorNet()
     const opt = new SGD(net.params, {
       lr: 0.5,
       momentum: 0.9,
@@ -175,8 +129,8 @@ describe("optimizer in the lazy graph", () => {
 
 describe("compiled training step (forward + backward + optimizer)", () => {
   const compiledRun = (steps: number) => {
-    const reference = makeNet()
-    const compiled = makeNet()
+    const reference = makeXorNet()
+    const compiled = makeXorNet()
     const refOpt = new SGD(reference.params, {
       lr: 0.5,
       momentum: 0.9,
@@ -239,8 +193,8 @@ describe("compiled training step (forward + backward + optimizer)", () => {
   // eager one — including over the first few steps, where the
   // corrections are furthest from 1.
   it("tracks eager Adam step by step when compiled", () => {
-    const reference = makeNet()
-    const compiled = makeNet()
+    const reference = makeXorNet()
+    const compiled = makeXorNet()
     const refOpt = new Adam(reference.params, { lr: 0.05 })
     const opt = new Adam(compiled.params, { lr: 0.05 })
     const step = compile((x: AnyTensor, y: AnyTensor) => {
@@ -283,8 +237,8 @@ describe("compiled training step (forward + backward + optimizer)", () => {
     // A loss scaled up hard produces gradients far above the clip, so
     // every step is clipped and the parameter moves by exactly
     // lr * maxNorm / ||g|| along the gradient — matching eager.
-    const reference = makeNet()
-    const compiled = makeNet()
+    const reference = makeXorNet()
+    const compiled = makeXorNet()
     const refOpt = new SGD(reference.params, { lr: 0.1 })
     const opt = new SGD(compiled.params, { lr: 0.1 })
     const step = compile((x: AnyTensor, y: AnyTensor) => {
@@ -386,8 +340,8 @@ describe.skipIf(!available)(
   () => {
     it("matches eager through the native path", () => {
       useNative()
-      const reference = makeNet()
-      const compiled = makeNet()
+      const reference = makeXorNet()
+      const compiled = makeXorNet()
       const refOpt = new SGD(reference.params, {
         lr: 0.5,
         momentum: 0.9,
@@ -435,8 +389,8 @@ describe.skipIf(!available)(
     })
 
     it("matches eager for compiled Adam with clipping", () => {
-      const reference = makeNet()
-      const compiled = makeNet()
+      const reference = makeXorNet()
+      const compiled = makeXorNet()
       const refOpt = new Adam(reference.params, {
         lr: 0.05,
       })

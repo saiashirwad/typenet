@@ -6,11 +6,11 @@
 // come from; `TYPENET_EVALUATOR=loops|cpu|gpu` forces an evaluator and
 // `TYPENET_PROFILE=1` prints the per-op table afterwards.
 
-import { Adam, clipGradNorm, compile, configure, isNativeAvailable, nativeDevice, nativeDeviceMode, Tensor, useNative } from "../../index.ts"
+import { Adam, configure, isNativeAvailable, nativeDevice, nativeDeviceMode, Tensor, useNative } from "../../index.ts"
+import type { AnyTensor } from "../../src/tensor.ts"
 import { batchEdges, randomGeometricGraph } from "./graphs.ts"
-import { aliveMask, GraphNCA, graphTensors, seedState } from "./model.ts"
-
-type AnyTensor = Tensor<any>
+import { GraphNCA, graphTensors, seedState } from "./model.ts"
+import { compiledTrainStep } from "./train-util.ts"
 
 const nodes = 1024
 const batch = 8
@@ -44,25 +44,14 @@ console.log(
     + `${edges.count * batch} edges, C=${C}, H=128, ${steps} rollout steps`,
 )
 
-const rollout = (x: AnyTensor, n: number) => {
-  for (let i = 0; i < n; i++) {
-    x = model.forward(x, graph).mul(aliveMask(x, graph))
-  }
-  return x
-}
-
-const full = compile((input: AnyTensor) => {
-  const loss = rollout(input, steps)
-    .narrow(1, 0, 4)
-    .sub(target)
-    .pow(2)
-    .mean()
-  optimizer.zeroGrad()
-  loss.backward()
-  clipGradNorm(params, 1)
-  optimizer.step()
-  return loss
-}, [x0])
+const full = compiledTrainStep(
+  model,
+  optimizer,
+  graph,
+  target,
+  x0,
+  steps,
+)
 
 full(x0).item() // warmup (prepare + pin)
 

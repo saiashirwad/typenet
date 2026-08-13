@@ -2,7 +2,7 @@ import { isNativeEnabled, sgemmNative } from "./backends/native.ts"
 import { applyBinary, applyUnary, getActiveSeed, randomData } from "./kernels.ts"
 import type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
 import { broadcastShapes, catShape, matmulShape, reduceShape, resizeDim } from "./shape.ts"
-import { arrayCtor, broadcastStrides, contiguousStrides, type DType, prod, shapesEqual, type TypedArray } from "./storage.ts"
+import { arrayCtor, broadcastStrides, contiguousStrides, type DType, prod, promoteBinaryDtype, shapesEqual, type TypedArray } from "./storage.ts"
 import { type AnyTensor, makeRaw } from "./tensor.ts"
 
 // ---------------------------------------------------------------------------
@@ -44,9 +44,7 @@ export function evalBinaryEager(
   parameter: number,
 ): AnyTensor {
   const outShape = broadcastShapes(a.shape, b.shape)
-  const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
-    ? "float64"
-    : "float32"
+  const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
   const n = prod(outShape)
   const out = new (arrayCtor(dtype))(n)
   const ad = a.data
@@ -193,9 +191,7 @@ export function evalMatmulEager(
   const batchA = a.shape.slice(0, -2)
   const batchB = b.shape.slice(0, -2)
   const batch = outShape.slice(0, -2)
-  const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
-    ? "float64"
-    : "float32"
+  const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
   const batchCount = prod(batch)
   // A large packed f32 GEMM goes to Accelerate when the native addon is
   // enabled — eager + useNative() is no longer "ignore native". Only
@@ -306,9 +302,7 @@ export function evalCatEager(
   dim: number,
 ): AnyTensor {
   const outShape = catShape(a.shape, b.shape, dim)
-  const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
-    ? "float64"
-    : "float32"
+  const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
   const strides = contiguousStrides(outShape)
   const outer = prod(outShape.slice(0, dim))
   const inner = strides[dim]!

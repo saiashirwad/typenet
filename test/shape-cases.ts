@@ -1,7 +1,10 @@
 /**
- * One table of shape cases, run twice: `types.test-d.ts` asserts them
- * through the type algebra, `shape.test.ts` through the runtime value
- * functions in `src/shape.ts`. A case added here is checked in both
+ * One table of shape cases. Most tables are run twice: `types.test-d.ts`
+ * asserts the eight positive tables through the type algebra, while
+ * `shape.test.ts` runs every table through the runtime value functions
+ * in `src/shape.ts`. The negative `*_FAIL_CASES` and the
+ * `BROADCAST_TO_*` tables have no type-level twin and are only exercised
+ * by `shape.test.ts`. A positive case added here is checked in both
  * worlds, which is what keeps them from drifting.
  *
  * The `as [2, 3]` casts matter: they make each entry a *mutable* literal

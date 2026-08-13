@@ -22,9 +22,10 @@ import { _internal, type AnyTensor } from "./tensor.ts"
 export function configure(options: {
   lazy?: boolean
   /**
-   * Reseeds `uniform()` / `normal()`. A run replays identically given
-   * the same seed and the same sequence of operations. Does not affect
-   * `Tensor.rand` / `Tensor.randn`, which use `Math.random`.
+   * Reseeds `uniform()` / `normal()`, and also `Tensor.rand` /
+   * `Tensor.randn` — both draw through the seeded generator; there is
+   * no `Math.random` in the RNG path. A run replays identically given
+   * the same seed and the same sequence of operations.
    */
   seed?: number
 }): void {

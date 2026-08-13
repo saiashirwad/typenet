@@ -939,9 +939,10 @@ export class Tensor<S extends Shape> {
   }
 
   /**
-   * `index` is a rank-1 tensor of integral values (typenet
-   * has no integer dtype); its length becomes the size of `dim`.
-   * Gradients flow to the gathered tensor, never to the index.
+   * `index` is a rank-1 tensor of integral values (int32/int64,
+   * or a float32 index for compatibility); its length becomes the
+   * size of `dim`. Gradients flow to the gathered tensor, never to
+   * the index.
    */
   indexSelect<E extends number>(
     index: Tensor<[E]>,
