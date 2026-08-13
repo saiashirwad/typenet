@@ -8,7 +8,7 @@ export abstract class Module {
     const out: AnyTensor[] = []
     const visit = (value: unknown) => {
       if (value instanceof Tensor) {
-        if (value.requiresGrad) out.push(value)
+        if (value.needsGrad) out.push(value)
       } else if (value instanceof Module) {
         out.push(...value.parameters())
       } else if (Array.isArray(value)) {
@@ -46,10 +46,10 @@ export class Linear<
       .mul(2 * k)
       .sub(k)
       .detach()
-      .requires_grad()
+      .requiresGrad()
     this.bias = options.bias === false
       ? null
-      : Tensor.zeros([outFeatures]).requires_grad()
+      : Tensor.zeros([outFeatures]).requiresGrad()
   }
 
   forward<S extends Shape>(

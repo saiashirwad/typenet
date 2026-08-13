@@ -58,7 +58,7 @@ function checkCase(c: Case, seed: number): void {
     c.shapes.map((shape, i) => {
       const t = Tensor.zeros(shape as number[]) as AnyTensor
       ;(t.data as Float32Array).set(values[i]!)
-      return grad ? (t.requires_grad() as AnyTensor) : t
+      return grad ? (t.requiresGrad() as AnyTensor) : t
     })
 
   const inputs = make(true)

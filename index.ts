@@ -7,7 +7,6 @@ export {
   eye,
   fromFlat,
   full,
-  isLazy,
   noGrad,
   normal,
   ones,

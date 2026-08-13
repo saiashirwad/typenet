@@ -89,7 +89,7 @@ describe("compile (interpreter)", () => {
   })
 
   it("sees in-place updates to captured parameters", () => {
-    const w = tensor(wData).requires_grad()
+    const w = tensor(wData).requiresGrad()
     const compiled = compile((x: AnyTensor) => x.matmul(w).sum())
     const x = tensor(xData)
     const before = compiled(x).item()

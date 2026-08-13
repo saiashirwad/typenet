@@ -98,7 +98,7 @@ describe("tsover operators", () => {
   })
 
   it("compound expressions build autograd graphs", () => {
-    const x = tensor([1, 2, 3]).requires_grad()
+    const x = tensor([1, 2, 3]).requiresGrad()
     const target = tensor([2, 2, 2])
     const loss = ((x - target) ** 2).mean()
     expect(loss.item()).toBeCloseTo(2 / 3)

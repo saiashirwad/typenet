@@ -16,7 +16,7 @@ function gradCheck(
         "float64",
       ) as AnyTensor
       ;(t.data as Float64Array).set(v)
-      return t.requires_grad()
+      return t.requiresGrad()
     })
 
   const inputs = make()
@@ -49,15 +49,15 @@ function gradCheck(
 
 describe("autograd", () => {
   it("simple chain: ((x*y)+x)^2", () => {
-    const x = tensor([1, 2]).requires_grad()
-    const y = tensor([3, 4]).requires_grad()
+    const x = tensor([1, 2]).requiresGrad()
+    const y = tensor([3, 4]).requiresGrad()
     x.mul(y).add(x).pow(2).sum().backward()
     expect(x.grad!.toArray()).toEqual([32, 100])
     expect(y.grad!.toArray()).toEqual([8, 40])
   })
 
   it("gradients accumulate until zeroGrad", () => {
-    const x = tensor([1, 1]).requires_grad()
+    const x = tensor([1, 1]).requiresGrad()
     x.mul(2).sum().backward()
     x.mul(2).sum().backward()
     expect(x.grad!.toArray()).toEqual([4, 4])
@@ -69,8 +69,8 @@ describe("autograd", () => {
     const p = tensor([
       [1, 2],
       [3, 4],
-    ]).requires_grad()
-    const q = tensor([10, 20]).requires_grad()
+    ]).requiresGrad()
+    const q = tensor([10, 20]).requiresGrad()
     p.mul(q).sum().backward()
     expect(p.grad!.toArray()).toEqual([
       [10, 20],
@@ -80,19 +80,19 @@ describe("autograd", () => {
   })
 
   it("noGrad suppresses graph building", () => {
-    const x = tensor([1, 2]).requires_grad()
+    const x = tensor([1, 2]).requiresGrad()
     const y = noGrad(() => x.mul(3))
     expect(y.gradNode).toBeNull()
   })
 
   it("detach cuts the graph", () => {
-    const x = tensor([2]).requires_grad()
+    const x = tensor([2]).requiresGrad()
     const y = x.mul(3).detach().mul(2)
     expect(() => y.sum().backward()).toThrow()
   })
 
   it("backward on non-scalar requires explicit gradient", () => {
-    const x = tensor([1, 2]).requires_grad()
+    const x = tensor([1, 2]).requiresGrad()
     expect(() => x.mul(2).backward()).toThrow(/scalar/)
   })
 

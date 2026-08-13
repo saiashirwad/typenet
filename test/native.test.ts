@@ -182,20 +182,20 @@ describe.skipIf(!available)("native backend", () => {
       const w1 = tensor([
         [0.5, -0.5, 0.25, -0.25],
         [0.1, 0.2, -0.3, 0.4],
-      ]).requires_grad()
+      ]).requiresGrad()
       const b1 = tensor([
         0.1,
         -0.1,
         0.05,
         -0.05,
-      ]).requires_grad()
+      ]).requiresGrad()
       const w2 = tensor([
         [0.6],
         [-0.6],
         [0.3],
         [-0.3],
-      ]).requires_grad()
-      const b2 = tensor([0.2]).requires_grad()
+      ]).requiresGrad()
+      const b2 = tensor([0.2]).requiresGrad()
       const params = [w1, b1, w2, b2] as AnyTensor[]
       const opt = new SGD(params, { lr: 0.5 })
       const h = x.matmul(w1).add(b1).tanh()
@@ -227,13 +227,13 @@ describe.skipIf(!available)("native backend", () => {
       const a = tensor([
         [0.5, -1, 2],
         [1.5, 0.25, -0.75],
-      ]).requires_grad()
+      ]).requiresGrad()
       const b = tensor([
         [1, -2],
         [0.5, 0.5],
         [-1, 3],
-      ]).requires_grad()
-      const c = tensor([2, -1]).requires_grad()
+      ]).requiresGrad()
+      const c = tensor([2, -1]).requiresGrad()
       const loss = (a as AnyTensor)
         .matmul(b)
         .tanh()
@@ -258,7 +258,7 @@ describe.skipIf(!available)("native backend", () => {
         [0.5, 1.5, -1],
         [-0.3, 0.8, 1.2],
         [1, -1, 0],
-      ]).requires_grad()
+      ]).requiresGrad()
       const loss = crossEntropy(
         logits as any,
         tensor([0, 1, 2, 0]) as any,
@@ -283,20 +283,20 @@ describe.skipIf(!available)("native backend", () => {
       const w1 = tensor([
         [0.5, -0.5, 0.25, -0.25],
         [0.1, 0.2, -0.3, 0.4],
-      ]).requires_grad()
+      ]).requiresGrad()
       const b1 = tensor([
         0.1,
         -0.1,
         0.05,
         -0.05,
-      ]).requires_grad()
+      ]).requiresGrad()
       const w2 = tensor([
         [0.6],
         [-0.6],
         [0.3],
         [-0.3],
-      ]).requires_grad()
-      const b2 = tensor([0.2]).requires_grad()
+      ]).requiresGrad()
+      const b2 = tensor([0.2]).requiresGrad()
       const h = x.matmul(w1).add(b1).tanh()
       const out = h.matmul(w2).add(b2).sigmoid()
       out.sub(y).pow(2).mean().backward()
@@ -309,7 +309,7 @@ describe.skipIf(!available)("native backend", () => {
   it("evaluates shared subexpressions once across multiple roots", () => {
     useNative()
     configure({ lazy: true })
-    const x = tensor([1, 2, 3]).requires_grad()
+    const x = tensor([1, 2, 3]).requiresGrad()
     const z = (x as AnyTensor).mul(x)
     const y = z.add(z)
     const w = z.sum()

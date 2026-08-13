@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest"
+import { isLazy } from "../src/lazy.ts"
 import { crossEntropy } from "../src/nn.ts"
 import { SGD } from "../src/optim.ts"
-import { configure, isLazy, Tensor, tensor } from "../src/tensor.ts"
+import { configure, Tensor, tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -214,20 +215,20 @@ describe("lazy mode", () => {
       const w1 = tensor([
         [0.5, -0.5, 0.25, -0.25],
         [0.1, 0.2, -0.3, 0.4],
-      ]).requires_grad()
+      ]).requiresGrad()
       const b1 = tensor([
         0.1,
         -0.1,
         0.05,
         -0.05,
-      ]).requires_grad()
+      ]).requiresGrad()
       const w2 = tensor([
         [0.6],
         [-0.6],
         [0.3],
         [-0.3],
-      ]).requires_grad()
-      const b2 = tensor([0.2]).requires_grad()
+      ]).requiresGrad()
+      const b2 = tensor([0.2]).requiresGrad()
       const params = [w1, b1, w2, b2] as AnyTensor[]
       const opt = new SGD(params, { lr: 0.5 })
       const h = x.matmul(w1).add(b1).tanh()
@@ -251,13 +252,13 @@ describe("lazy mode", () => {
       const a = tensor([
         [0.5, -1, 2],
         [1.5, 0.25, -0.75],
-      ]).requires_grad()
+      ]).requiresGrad()
       const b = tensor([
         [1, -2],
         [0.5, 0.5],
         [-1, 3],
-      ]).requires_grad()
-      const c = tensor([2, -1]).requires_grad()
+      ]).requiresGrad()
+      const c = tensor([2, -1]).requiresGrad()
       const loss = (a as AnyTensor)
         .matmul(b)
         .tanh()
@@ -281,7 +282,7 @@ describe("lazy mode", () => {
         [0.5, 1.5, -1],
         [-0.3, 0.8, 1.2],
         [1, -1, 0],
-      ]).requires_grad()
+      ]).requiresGrad()
       const loss = crossEntropy(
         logits as any,
         tensor([0, 1, 2, 0]) as any,
@@ -296,7 +297,7 @@ describe("lazy mode", () => {
       const logits = tensor([
         [2, 1, 0.1],
         [0.5, 1.5, -1],
-      ]).requires_grad()
+      ]).requiresGrad()
       crossEntropy(logits as any, [0, 2]).backward()
       return [logits] as AnyTensor[]
     }
@@ -316,20 +317,20 @@ describe("lazy mode", () => {
       const w1 = tensor([
         [0.5, -0.5, 0.25, -0.25],
         [0.1, 0.2, -0.3, 0.4],
-      ]).requires_grad()
+      ]).requiresGrad()
       const b1 = tensor([
         0.1,
         -0.1,
         0.05,
         -0.05,
-      ]).requires_grad()
+      ]).requiresGrad()
       const w2 = tensor([
         [0.6],
         [-0.6],
         [0.3],
         [-0.3],
-      ]).requires_grad()
-      const b2 = tensor([0.2]).requires_grad()
+      ]).requiresGrad()
+      const b2 = tensor([0.2]).requiresGrad()
       const h = x.matmul(w1).add(b1).tanh()
       const out = h.matmul(w2).add(b2).sigmoid()
       out.sub(y).pow(2).mean().backward()
@@ -341,7 +342,7 @@ describe("lazy mode", () => {
 
   it("accumulates grads across repeated backward() calls", () => {
     const run = () => {
-      const w = tensor([1, -2, 3]).requires_grad()
+      const w = tensor([1, -2, 3]).requiresGrad()
       const x = tensor([2, 2, 2])
       const loss1 = (w as AnyTensor).mul(x).sum()
       loss1.backward()
@@ -356,7 +357,7 @@ describe("lazy mode", () => {
 
   it("evaluates shared subexpressions once and materializes aliases", () => {
     configure({ lazy: true })
-    const x = tensor([1, 2, 3]).requires_grad()
+    const x = tensor([1, 2, 3]).requiresGrad()
     const z = (x as AnyTensor).mul(x)
     const y = z.add(z)
     const w = z.sum()

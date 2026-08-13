@@ -83,8 +83,8 @@ describe("losses", () => {
 
 describe("training", () => {
   it("SGD fits y = 2x + 1", () => {
-    const w = Tensor.scalar(0).requires_grad()
-    const b = Tensor.scalar(0).requires_grad()
+    const w = Tensor.scalar(0).requiresGrad()
+    const b = Tensor.scalar(0).requiresGrad()
     const x = tensor([0, 1, 2, 3])
     const y = tensor([1, 3, 5, 7])
     const opt = new SGD([w, b], { lr: 0.05 })

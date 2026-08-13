@@ -135,20 +135,21 @@ function adamUpdate<T>(
  * lazy/compiled mode the rewrite is a graph expression, so a compiled
  * training step clips with the rest of the step in one pass.
  *
- * Returns the pre-clipping norm in eager mode, where it is known
- * without forcing anything, and `null` otherwise.
+ * Returns the pre-clipping norm as a scalar tensor: a forced value in
+ * eager mode, a graph node on the lazy/compile path — so a compiled
+ * step clips in-graph and never forces a JS number. `.item()` reads it.
  */
 export function clipGradNorm(
   params: AnyTensor[],
   maxNorm: number,
-): number | null {
+): Tensor<[]> {
   if (!(maxNorm > 0)) {
     throw new Error(
       `clipGradNorm: maxNorm must be positive, got ${maxNorm}`,
     )
   }
   const withGrads = params.filter(p => p.grad)
-  if (withGrads.length === 0) return null
+  if (withGrads.length === 0) return Tensor.scalar(0)
   if (withGrads.every(useGraphStep)) {
     return noGrad(() => {
       let total = withGrads[0]!.grad!.pow(2).sum()
@@ -159,7 +160,7 @@ export function clipGradNorm(
       for (const p of withGrads) {
         p.grad = tensors.mul(p.grad!, scale) as typeof p.grad
       }
-      return null
+      return total.sqrt() as Tensor<[]>
     })
   }
   let total = 0
@@ -175,15 +176,15 @@ export function clipGradNorm(
       }
     }
   }
-  return Math.sqrt(total)
+  return Tensor.scalar(Math.sqrt(total))
 }
 
 export abstract class Optimizer {
   constructor(protected params: AnyTensor[]) {
     for (const p of params) {
-      if (!p.requiresGrad) {
+      if (!p.needsGrad) {
         throw new Error(
-          "Optimizer received a tensor without requires_grad",
+          "Optimizer received a tensor without requiresGrad",
         )
       }
     }

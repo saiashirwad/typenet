@@ -238,7 +238,7 @@ describe("comparisons", () => {
   })
 
   it("stop gradients", () => {
-    const x = tensor([-1, 1]).requires_grad()
+    const x = tensor([-1, 1]).requiresGrad()
     const mask = (x as AnyTensor).gt(0)
     expect(mask.gradNode).toBeNull()
     expect(mask.needsGrad).toBe(false)

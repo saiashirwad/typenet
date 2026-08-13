@@ -37,20 +37,20 @@ function makeNet() {
   const w1 = tensor([
     [0.5, -0.5, 0.25, -0.25],
     [0.1, 0.2, -0.3, 0.4],
-  ]).requires_grad()
+  ]).requiresGrad()
   const b1 = tensor([
     0.1,
     -0.1,
     0.05,
     -0.05,
-  ]).requires_grad()
+  ]).requiresGrad()
   const w2 = tensor([
     [0.6],
     [-0.6],
     [0.3],
     [-0.3],
-  ]).requires_grad()
-  const b2 = tensor([0.2]).requires_grad()
+  ]).requiresGrad()
+  const b2 = tensor([0.2]).requiresGrad()
   const params = [w1, b1, w2, b2] as AnyTensor[]
   const forward = () => {
     const h = x.matmul(w1).add(b1).tanh()
@@ -64,7 +64,7 @@ function cloneParams(params: AnyTensor[]): AnyTensor[] {
   return params.map(p => {
     const q = Tensor.zeros(p.shape) as AnyTensor
     q.data.set(p.data)
-    return q.requires_grad()
+    return q.requiresGrad()
   })
 }
 
@@ -285,7 +285,7 @@ describe("compiled training step (forward + backward + optimizer)", () => {
       refOpt.zeroGrad()
       refLoss.backward()
       const norm = clipGradNorm(reference.params, 1)
-      expect(norm).toBeGreaterThan(1)
+      expect(norm.item()).toBeGreaterThan(1)
       refOpt.step()
       expect(
         step(compiled.x, compiled.y).item(),
@@ -298,17 +298,17 @@ describe("compiled training step (forward + backward + optimizer)", () => {
 
 describe("clipGradNorm", () => {
   it("scales to exactly maxNorm when over", () => {
-    const a = Tensor.of([3, 4]).requires_grad() as AnyTensor
+    const a = Tensor.of([3, 4]).requiresGrad() as AnyTensor
     a.mul(1).sum().backward()
     ;(a.grad!.data as Float32Array).set([3, 4])
     const norm = clipGradNorm([a], 1)
-    expect(norm).toBeCloseTo(5, 5)
+    expect(norm.item()).toBeCloseTo(5, 5)
     expect(a.grad!.get(0)).toBeCloseTo(3 / 5, 5)
     expect(a.grad!.get(1)).toBeCloseTo(4 / 5, 5)
   })
 
   it("leaves gradients alone when under", () => {
-    const a = Tensor.of([1, 1]).requires_grad() as AnyTensor
+    const a = Tensor.of([1, 1]).requiresGrad() as AnyTensor
     a.mul(1).sum().backward()
     ;(a.grad!.data as Float32Array).set([0.3, 0.4])
     clipGradNorm([a], 10)
@@ -317,13 +317,13 @@ describe("clipGradNorm", () => {
   })
 
   it("takes the norm across all parameters jointly", () => {
-    const a = Tensor.of([0]).requires_grad() as AnyTensor
-    const b = Tensor.of([0]).requires_grad() as AnyTensor
+    const a = Tensor.of([0]).requiresGrad() as AnyTensor
+    const b = Tensor.of([0]).requiresGrad() as AnyTensor
     a.mul(1).sum().backward()
     b.mul(1).sum().backward()
     ;(a.grad!.data as Float32Array).set([3])
     ;(b.grad!.data as Float32Array).set([4])
-    expect(clipGradNorm([a, b], 5)).toBeCloseTo(5, 5)
+    expect(clipGradNorm([a, b], 5).item()).toBeCloseTo(5, 5)
     // already at the limit, so unchanged bar the 1e-6 epsilon
     expect(a.grad!.get(0)).toBeCloseTo(3, 4)
     expect(b.grad!.get(0)).toBeCloseTo(4, 4)
@@ -335,7 +335,7 @@ describe("clipGradNorm", () => {
         1,
         2,
         3,
-      ]).requires_grad() as AnyTensor
+      ]).requiresGrad() as AnyTensor
       a.pow(3).sum().mul(10).backward()
       clipGradNorm([a], 2)
       return a
@@ -349,7 +349,7 @@ describe("clipGradNorm", () => {
   })
 
   it("rejects a non-positive maxNorm", () => {
-    const a = Tensor.of([1]).requires_grad() as AnyTensor
+    const a = Tensor.of([1]).requiresGrad() as AnyTensor
     a.mul(1).sum().backward()
     expect(() => clipGradNorm([a], 0)).toThrow(
       /maxNorm must be positive/,

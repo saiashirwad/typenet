@@ -140,7 +140,8 @@ export class Tensor<S extends Shape> {
 
   grad: Tensor<S> | null = null
 
-  requiresGrad = false
+  /** Internal grad-leaf flag; read {@link needsGrad}, set via {@link requiresGrad}. */
+  _requiresGrad = false
 
   gradNode: GradNode | null = null
 
@@ -176,7 +177,7 @@ export class Tensor<S extends Shape> {
   }
 
   get needsGrad(): boolean {
-    return this.requiresGrad || this.gradNode !== null
+    return this._requiresGrad || this.gradNode !== null
   }
 
   get rank(): S["length"] {
@@ -270,16 +271,19 @@ export class Tensor<S extends Shape> {
     ) as any
   }
 
-  requires_grad(): Tensor<
-    S
-  > {
-    this.requiresGrad = true
-    return this as any
-  }
-
-  no_grad(): Tensor<S> {
-    this.requiresGrad = false
-    return this as any
+  /**
+   * A new leaf over this tensor's storage with gradients enabled — the
+   * tape starts here. Like {@link detach}, the receiver is untouched:
+   * rebind the result, do not rely on mutation.
+   */
+  requiresGrad(): Tensor<S> {
+    const leaf = makeStorage(
+      this._storage,
+      this.shape,
+      this.dtype,
+    ) as Tensor<S>
+    leaf._requiresGrad = true
+    return leaf
   }
 
   to<const D extends DType>(
@@ -413,7 +417,7 @@ export class Tensor<S extends Shape> {
                   : ig,
               )
             })
-          } else if (t.requiresGrad) {
+          } else if (t._requiresGrad) {
             t.grad = t.grad
               ? (rawBinary(t.grad, g, "add") as any)
               : (g as any)
@@ -436,7 +440,7 @@ export class Tensor<S extends Shape> {
         forceMany([
           ...topo,
           ...topo
-            .filter(t => t.requiresGrad && t.grad)
+            .filter(t => t._requiresGrad && t.grad)
             .map(t => t.grad as AnyTensor),
         ])
       }
@@ -971,28 +975,34 @@ export class Tensor<S extends Shape> {
     return this.view(shape as any) as any
   }
 
-  squeeze(): Tensor<Squeeze<S>> {
-    const target = this.shape.filter(s => s !== 1)
+  squeeze(): Tensor<Squeeze<S>>
+  squeeze<D extends number>(
+    dim: D & SqueezeDimCheck<S, D>,
+  ): Tensor<SqueezeDim<S, D>>
+  squeeze(dim?: number): AnyTensor {
+    let target: number[]
+    if (dim === undefined) {
+      target = this.shape.filter(s => s !== 1)
+    } else {
+      const d = normalizeDim(dim, this.shape.length)
+      if (this.shape[d] !== 1) {
+        throw new Error(
+          `Cannot squeeze dim ${dim} of ${showShape(this.shape)}: size is not 1`,
+        )
+      }
+      target = this.shape.filter((_, i) => i !== d)
+    }
     const out = reshapeRaw(this, target)
     return withGrad(out, "squeeze", [this], g => [
       reshapeRaw(g, [...this.shape]),
-    ]) as any
+    ])
   }
 
+  /** @deprecated use `squeeze(dim)` */
   squeezeDim<D extends number>(
     dim: D & SqueezeDimCheck<S, D>,
   ): Tensor<SqueezeDim<S, D>> {
-    const d = normalizeDim(dim as number, this.shape.length)
-    if (this.shape[d] !== 1) {
-      throw new Error(
-        `Cannot squeeze dim ${dim} of ${showShape(this.shape)}: size is not 1`,
-      )
-    }
-    const target = this.shape.filter((_, i) => i !== d)
-    const out = reshapeRaw(this, target)
-    return withGrad(out, "squeeze", [this], g => [
-      reshapeRaw(g, [...this.shape]),
-    ]) as any
+    return this.squeeze(dim as any) as any
   }
 
   unsqueeze<D extends number>(

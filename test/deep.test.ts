@@ -28,7 +28,7 @@ describe("deep graphs", () => {
 
   it("differentiates a deep chain", () => {
     configure({ lazy: true })
-    const x = tensor([1, 2]).requires_grad()
+    const x = tensor([1, 2]).requiresGrad()
     chain(x as AnyTensor, DEPTH)
       .sum()
       .backward()
@@ -37,7 +37,7 @@ describe("deep graphs", () => {
   })
 
   it("differentiates a deep chain eagerly too", () => {
-    const x = tensor([1, 2]).requires_grad()
+    const x = tensor([1, 2]).requiresGrad()
     chain(x as AnyTensor, DEPTH)
       .sum()
       .backward()

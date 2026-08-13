@@ -174,7 +174,7 @@ describe("graph cellular automaton, against PyTorch", () => {
       const x0 = tensorFrom(reference.x0, [
         B * N,
         C,
-      ]).requires_grad() as AnyTensor
+      ]).requiresGrad() as AnyTensor
       if (native) useNative()
       configure({ lazy })
       const { state, loss, mse } = rollout(model, x0, graph)
@@ -230,7 +230,7 @@ describe("graph cellular automaton, against PyTorch", () => {
     const step = compile((input: AnyTensor) => {
       const { loss } = rollout(
         model,
-        input.requires_grad() as AnyTensor,
+        input.requiresGrad() as AnyTensor,
         graph,
       )
       loss.backward()

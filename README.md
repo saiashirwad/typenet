@@ -75,12 +75,12 @@ pnpm example:gat      # graph attention network
 
 ## What the type system tracks
 
-| Property        | Mechanism                                                         |
-| --------------- | ----------------------------------------------------------------- |
-| shape           | tuple of literals: `Tensor<[32, 784]>`                            |
-| dynamic dims    | `number` is a wildcard: `Tensor<[number, 784]>` takes any batch   |
-| dtype           | `"float32"` (default) or `"float64"`, via `.to("float64")`        |
-| `requires_grad` | `.requires_grad()` flips the type-level flag and enables autograd |
+| Property     | Mechanism                                                        |
+| ------------ | ---------------------------------------------------------------- |
+| shape        | tuple of literals: `Tensor<[32, 784]>`                           |
+| dynamic dims | `number` is a wildcard: `Tensor<[number, 784]>` takes any batch  |
+| dtype        | `"float32"` (default) or `"float64"`, via `.to("float64")`       |
+| gradients    | `.requiresGrad()` returns a new taped leaf over the same storage |
 
 The shape algebra lives in `src/shape.ts` (types only): `Broadcast`, `MatMul` (dot, mat-vec, vec-mat, batched), `ResolveView` (reshape with `-1`), `Transpose`/`Permute`/`Squeeze`/`Unsqueeze`, `ReduceDim`, `Stack`, `Cat`. Errors say what went wrong: `Cannot view tensor of shape [2, 3] as [7, 2] (6 vs 14 elements)`.
 
@@ -99,8 +99,8 @@ For editor support, point your editor at the workspace TypeScript — in VS Code
 Reverse-mode, tape-based:
 
 ```ts
-const x = tensor([1, 2]).requires_grad()
-const y = tensor([3, 4]).requires_grad()
+const x = tensor([1, 2]).requiresGrad()
+const y = tensor([3, 4]).requiresGrad()
 x.mul(y).add(x).pow(2).sum().backward()
 x.grad // Tensor<[2]>
 ```

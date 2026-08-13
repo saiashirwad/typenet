@@ -133,7 +133,7 @@ function _tensors() {
   const mt = a.T
   type _15 = Expect<Equal<typeof mt.shape, [3, 2]>>
 
-  const rg = a.requires_grad()
+  const rg = a.requiresGrad()
   type _16 = Expect<
     Equal<
       typeof rg,

@@ -81,8 +81,7 @@ describe("named + printGraph", () => {
 
   it("prints lazy backward results (grads are materialized leaves)", () => {
     configure({ lazy: true })
-    const x = Tensor.rand([2, 2]).named("x")
-    x.requires_grad()
+    const x = Tensor.rand([2, 2]).requiresGrad().named("x")
     const loss = x.mul(x).sum().named("loss")
     const fwd = printGraph(loss)
     expect(fwd).toContain("x    = leaf [2, 2] float32")

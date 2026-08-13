@@ -10,9 +10,9 @@ class GATHead<FIn extends number, FOut extends number> extends Module {
   constructor(fin: FIn, fout: FOut) {
     super()
     const k = 1 / Math.sqrt(fin)
-    this.W = (rand([fin, fout]) * (2 * k) - k).requires_grad()
-    this.attSrc = (randn([fout, 1]) * 0.1).requires_grad()
-    this.attDst = (randn([fout, 1]) * 0.1).requires_grad()
+    this.W = (rand([fin, fout]) * (2 * k) - k).requiresGrad()
+    this.attSrc = (randn([fout, 1]) * 0.1).requiresGrad()
+    this.attDst = (randn([fout, 1]) * 0.1).requiresGrad()
   }
 
   forward<N extends number>(
