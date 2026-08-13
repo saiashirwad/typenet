@@ -184,13 +184,33 @@ type BroadcastRev<A extends Shape, B extends Shape, Acc extends Shape = []> =
  * resolution picks the first *applicable* signature with no branch
  * merging, which is exactly the routing a conditional type cannot do.
  */
-export type Broadcast<A extends Shape, B extends Shape> =
-    IsExact<A, B> extends true ? A
-  : IsDynamic<A> extends true ? number[]
-  : IsDynamic<B> extends true ? number[]
+/**
+ * Rank-2 against a column: the answer is the left shape. No row-dim
+ * comparison — `NoInfer<N>` vs `N` would defer it — because rejecting a
+ * genuine row mismatch is `BroadcastCheck`'s job, not this type's.
+ */
+type ColumnBroadcast<A extends Shape, B extends Shape> =
+    [A, B] extends [
+      [infer _X extends number, infer _Y extends number],
+      [infer _R extends number, infer C1 extends number],
+    ] ?
+      [C1] extends [1] ? A
+    : never
+  : never
+
+export type Broadcast<A extends Shape, B extends Shape> = IsExact<A, B> extends true ? A
+  : IsDynamic<A> extends true ? number[] : IsDynamic<B> extends true ? number[]
   : A extends [...infer _ extends [number, ...number[]], ...B] ? A
   : B extends [...infer _ extends [number, ...number[]], ...A] ? B
-  : BroadcastRev<Reverse<A>, Reverse<B>>
+  // Rank-2 column broadcast, `[X, Y] × [X, 1]`: the literal 1 and the
+  // identical first dim are both decidable, so multiplying by a
+  // per-row column (an inverse-degree, a stochastic mask) keeps the
+  // matrix's exact shape instead of a `BroadcastDim<X, X>` residual.
+  // Only the column-on-the-right orientation is special-cased: the
+  // mirrored rule would have to test "is A's second dim the literal
+  // 1", which defers on a generic and poisons this very case.
+  : [ColumnBroadcast<A, B>] extends [never] ? BroadcastRev<Reverse<A>, Reverse<B>>
+  : ColumnBroadcast<A, B>
 
 export type CanBroadcast<A extends Shape, B extends Shape> =
     IsExact<A, B> extends true ? true
@@ -383,6 +403,19 @@ export type ReduceDim<S extends Shape, D extends number, Keep extends boolean = 
     : Keep extends true ? ReplaceAt<S, I, 1>
     : RemoveAt<S, I>
   : never
+
+/** The size of dim `D` of `S`, with negative dims normalized. */
+export type DimAt<S extends Shape, D extends number> = S[NormalizeDim<S, D> & keyof S] & number
+
+/**
+ * Rank-1 check on `this`, fail-open like every other check here: the
+ * arity of a tuple is known even when its elements are generic, so
+ * `[B]` passes decidably while a written `number[]` stays a wildcard.
+ */
+export type Rank1Check<S extends Shape> =
+    IsDynamic<S> extends true ? unknown
+  : S["length"] extends 1 ? unknown
+  : ErrorMessage<"oneHot() requires a rank-1 tensor">
 
 export type ResizeDim<S extends Shape, D extends number, L extends number> =
     IsDynamic<S> extends true ? number[]

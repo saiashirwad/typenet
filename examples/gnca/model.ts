@@ -99,7 +99,7 @@ export class GraphNCA<
 
     const aggregate = (
       messages: Tensor<[E, C]>,
-    ): Tensor<[N, C]> => messages.scatterAdd(dst, nodes).mul(invDegree)
+    ) => messages.scatterAdd(dst, nodes).mul(invDegree)
 
     const weight = this.gate.weight
     const endpoints = x.matmul(
@@ -118,8 +118,6 @@ export class GraphNCA<
       .sigmoid()
       .mul(2)
 
-    // log1p(degree) goes LAST, so warm-starting from a checkpoint whose
-    // perception lacked it is a plain zero-column pad of the first layer.
     const perception = cat(
       cat(
         cat(x, aggregate(fromNode), 1),
@@ -129,6 +127,7 @@ export class GraphNCA<
       graph.logDegree,
       1,
     )
+
     const increment = this.outer.forward(
       this.inner.forward(perception).relu(),
     )

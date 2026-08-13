@@ -24,14 +24,17 @@ import type {
   BroadcastCheck,
   Cat,
   CatCheck,
+  DimAt,
   DimCheck,
   ErrorMessage,
   InferShape,
+  IsDynamic,
   MatMul,
   MatMulCheck,
   NestedArray,
   Permute,
   PermuteCheck,
+  Rank1Check,
   ReduceDim,
   ResizeDim,
   ResolveView,
@@ -294,7 +297,7 @@ export class Tensor<S extends Shape> {
     return this.data[0]!
   }
 
-  get(...indices: number[]): number {
+  get(...indices: { [K in keyof S]: number }): number {
     if (indices.length !== this.shape.length) {
       throw new Error(
         `get() expects ${this.shape.length} indices, got ${indices.length}`,
@@ -824,7 +827,11 @@ export class Tensor<S extends Shape> {
     return rawReduce(this, d, false, "argmax") as any
   }
 
-  oneHot(classes: number): Tensor<[number, number]> {
+  oneHot<const C extends number>(
+    this: Tensor<S> & Rank1Check<S>,
+    classes: C,
+  ): S extends [infer N extends number] ? Tensor<[N, C]> : IsDynamic<S> extends true ? Tensor<[number, C]> : never
+  oneHot(this: AnyTensor, classes: number): AnyTensor {
     if (this.rank !== 1) {
       throw new Error("oneHot() requires a rank-1 tensor")
     }
@@ -912,7 +919,7 @@ export class Tensor<S extends Shape> {
     length: L,
   ): Tensor<ResizeDim<S, 0, L>>
   scatterAdd<L extends number, D extends number>(
-    index: Tensor<[number]>,
+    index: Tensor<[DimAt<S, D>]>,
     length: L,
     dim: D & DimCheck<S, D>,
   ): Tensor<ResizeDim<S, D, L>>

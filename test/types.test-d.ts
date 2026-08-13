@@ -383,7 +383,28 @@ function _gatherScatter<
   // @ts-expect-error one index per source row: 4096 rows, not 8
   gathered.scatterAdd(zeros([8]), 1024)
 
+  // @ts-expect-error dim overload: same length rule, now on the dim form
+  gathered.scatterAdd(zeros([8]), 1024, 0)
+
+  const alongDim = channels.scatterAdd(zeros([3]), 7, 1)
+  type _5 = Expect<Equal<typeof alongDim.shape, [1024, 7]>>
+
   return { gathered, aggregated }
+}
+
+function _getOneHot(labels: Tensor<[6]>, grid: Tensor<[2, 3]>) {
+  const hot = labels.oneHot(10)
+  type _1 = Expect<Equal<typeof hot.shape, [6, 10]>>
+
+  const v: number = grid.get(0, 1)
+
+  // @ts-expect-error get() takes one index per dim: rank 2 needs two
+  grid.get(0)
+
+  // @ts-expect-error oneHot() requires a rank-1 tensor
+  grid.oneHot(10)
+
+  return { hot, v }
 }
 
 function _compare(a: Tensor<[2, 3]>, b: Tensor<[3]>) {
