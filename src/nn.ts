@@ -1,4 +1,4 @@
-import type { DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts"
+import type { DimCheck, DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts"
 import { fromFlat, Tensor } from "./tensor.ts"
 
 type AnyTensor = Tensor<any>
@@ -110,28 +110,66 @@ export class Sigmoid extends Activation {
   }
 }
 
-export class Softmax extends Activation {
-  constructor() {
-    super(x => x.softmax(-1 as any) as any)
-  }
-}
-
-export class Sequential<
-  In extends number,
-  Out extends number,
-> extends Module implements Layer<In, Out> {
-  declare readonly inFeatures?: In
-  declare readonly outFeatures?: Out
-
-  constructor(readonly layers: Layer<any, any>[]) {
+/**
+ * Generic in the dim so `DimCheck` sees a literal at the call, not the
+ * wide `number` (`IsValidDim<S, number>` is always true).
+ */
+export class Softmax<const D extends number = -1> extends Module {
+  constructor(readonly dim: D = -1 as D) {
     super()
   }
 
-  forward<B extends number>(
-    x: Tensor<[B, In]>,
-  ): Tensor<[B, Out]> {
-    let h: AnyTensor = x
-    for (const layer of this.layers) h = layer.forward(h)
+  forward<S extends Shape>(
+    x: Tensor<S> & DimCheck<S, D>,
+  ): Tensor<S> {
+    return (x as AnyTensor).softmax(this.dim) as any
+  }
+}
+
+/**
+ * What one layer does to a shape, at the type level. `Linear` is
+ * special-cased so a chain of Linears stays rank-generic: the last axis
+ * is rewritten, any batch prefix rides along. Other layers are read off
+ * their `forward` signature.
+ */
+type ApplyLayer<L, S extends Shape> =
+    number[] extends S ? number[]
+  : L extends Linear<infer In, infer Out> ?
+      S extends [...infer Prefix extends number[], In] ? [...Prefix, Out]
+    : never
+  : L extends { forward(x: Tensor<S>): Tensor<infer R extends Shape> } ? R
+  : S
+
+type ChainShape<L extends readonly unknown[], S extends Shape> =
+    L extends readonly [infer H, ...infer R] ?
+      ApplyLayer<H, S> extends infer S2 extends Shape ? ChainShape<R, S2>
+    : never
+  : S
+
+type ChainShapeCheck<L extends readonly unknown[], S extends Shape> = [ChainShape<L, S>] extends [never]
+  ? ErrorMessage<`sequential: input shape does not fit the layer chain`>
+  : unknown
+
+/**
+ * Constructed through {@link sequential} only. Typed as the tuple of its
+ * layers, so `forward` composes their shapes: a `Sequential` of Linears
+ * maps `Tensor<[B, T, 2]>` to `Tensor<[B, T, 3]>`.
+ */
+export class Sequential<
+  const L extends readonly unknown[],
+> extends Module {
+  constructor(readonly layers: L) {
+    super()
+  }
+
+  forward<S extends Shape>(
+    x: Tensor<S> & ChainShapeCheck<L, S>,
+  ): Tensor<ChainShape<L, S>> {
+    let h: AnyTensor = x as AnyTensor
+    for (const layer of this.layers) {
+      h = (layer as { forward(t: AnyTensor): AnyTensor })
+        .forward(h)
+    }
     return h as any
   }
 }
@@ -165,29 +203,17 @@ type ChainCheck<
     : never
   : unknown
 
-type ChainIn<L extends readonly unknown[]> =
-    L extends readonly [infer H, ...infer R] ?
-      LayerIn<H> extends number ? LayerIn<H>
-    : ChainIn<R>
-  : number
-
-type ChainOut<
-  L extends readonly unknown[],
-  Acc extends number = number,
-> = L extends readonly [infer H, ...infer R] ? ChainOut<
-    R,
-    LayerOut<H> extends number ? LayerOut<H> : Acc
-  >
-  : Acc
-
+// L is deliberately NOT bounded by `Layer<number, number>`: Tensor is
+// invariant in S, so `Linear<2, 16>` would not be assignable to it and
+// every real call would be rejected. ChainCheck does the real work.
 export function sequential<
-  const L extends readonly Layer<any, any>[],
+  const L extends readonly unknown[],
 >(
   ...layers: L & ChainCheck<L>
-): Sequential<ChainIn<L>, ChainOut<L>>
+): Sequential<L>
 export function sequential(
   ...layers: Layer<any, any>[]
-): Sequential<any, any> {
+): Sequential<readonly unknown[]> {
   let prevOut: number | undefined
   layers.forEach((l, i) => {
     if (

@@ -119,12 +119,12 @@ export class GraphNCA<
       .mul(2)
 
     const perception = cat(
-      cat(
-        cat(x, aggregate(fromNode), 1),
+      [
+        x,
+        aggregate(fromNode),
         aggregate(gate.mul(difference)),
-        1,
-      ),
-      graph.logDegree,
+        graph.logDegree,
+      ],
       1,
     )
 

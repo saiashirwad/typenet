@@ -169,7 +169,7 @@ function _nn() {
   layer.forward(randn([32, 100]))
 }
 
-import { ReLU, Sequential, sequential } from "../src/nn.ts"
+import { ReLU, Sequential, sequential, Softmax } from "../src/nn.ts"
 
 function _sequential() {
   const net = sequential(
@@ -179,10 +179,27 @@ function _sequential() {
     new ReLU(),
     new Linear(16, 3),
   )
-  type _1 = Expect<Equal<typeof net, Sequential<2, 3>>>
+  type _1 = Expect<
+    Equal<
+      typeof net,
+      Sequential<
+        readonly [
+          Linear<2, 16>,
+          ReLU,
+          Linear<16, 16>,
+          ReLU,
+          Linear<16, 3>,
+        ]
+      >
+    >
+  >
 
   const out = net.forward(randn([32, 2]))
   type _2 = Expect<Equal<typeof out.shape, [32, 3]>>
+
+  // rank-generic: a chain of Linears rewrites the last axis only
+  const deep = net.forward(randn([4, 32, 2]))
+  type _3 = Expect<Equal<typeof deep.shape, [4, 32, 3]>>
 
   // @ts-expect-error 16 -> 17 mismatch between layers
   sequential(new Linear(2, 16), new Linear(17, 3))
@@ -193,6 +210,25 @@ function _sequential() {
 
   // @ts-expect-error wrong input width
   net.forward(randn([32, 5]))
+}
+
+function _catN(a: Tensor<[2, 3]>, b: Tensor<[2, 5]>) {
+  const wide = Tensor.cat([a, b, a], 1)
+  type _1 = Expect<Equal<typeof wide.shape, [2, 11]>>
+
+  const pair = Tensor.cat(a, a)
+  type _2 = Expect<Equal<typeof pair.shape, [4, 3]>>
+
+  // @ts-expect-error shapes differ outside dim 0
+  Tensor.cat([a, b], 0)
+
+  const out = new Softmax(1).forward(a)
+  type _3 = Expect<Equal<typeof out.shape, [2, 3]>>
+
+  // @ts-expect-error dim 5 out of range for rank-2 input
+  new Softmax(5).forward(a)
+
+  return { wide, pair, out }
 }
 
 function _negative() {

@@ -473,6 +473,35 @@ export type CatCheck<A extends Shape, B extends Shape, D extends number> =
     : never
   : ErrorMessage<`cat: tensors must have the same rank (${ShowShape<A>} vs ${ShowShape<B>})`>
 
+/** Shapes of a tuple of tensors, read structurally to avoid a cycle with tensor.ts. */
+export type ShapesOf<T extends readonly unknown[]> = {
+  [K in keyof T]: T[K] extends { readonly shape: infer S extends Shape } ? S : never
+}
+
+type CatNShapes<Ss extends readonly Shape[], D extends number> =
+    Ss extends readonly [infer A extends Shape] ? A
+  : Ss extends readonly [
+    infer A extends Shape,
+    infer B extends Shape,
+    ...infer Rest extends Shape[],
+  ] ? CatNShapes<[Cat<A, B, D>, ...Rest], D>
+  : never
+
+/** The shape of concatenating a tuple of tensors along `D`, as a fold of pairwise `Cat`. */
+export type CatN<T extends readonly unknown[], D extends number> = CatNShapes<ShapesOf<T>, D>
+
+type CatNCheckShapes<Ss extends readonly Shape[], D extends number> =
+    Ss extends readonly [
+      infer A extends Shape,
+      infer B extends Shape,
+      ...infer Rest extends Shape[],
+    ] ?
+      CatCheck<A, B, D> extends ErrorMessage<string> ? CatCheck<A, B, D>
+    : CatNCheckShapes<[Cat<A, B, D>, ...Rest], D>
+  : unknown
+
+export type CatNCheck<T extends readonly unknown[], D extends number> = CatNCheckShapes<ShapesOf<T>, D>
+
 export type InferShape<T, Depth extends 1[] = []> =
     Depth["length"] extends 12 ? number[]
   : T extends number ? []

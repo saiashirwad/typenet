@@ -24,6 +24,8 @@ import type {
   BroadcastCheck,
   Cat,
   CatCheck,
+  CatN,
+  CatNCheck,
   DimAt,
   DimCheck,
   ErrorMessage,
@@ -1093,29 +1095,30 @@ export class Tensor<S extends Shape> {
     a: Tensor<A>,
     b: Tensor<B> & CatCheck<A, B, D>,
     dim?: D,
-  ): Tensor<Cat<A, B, D>> {
-    const ta = a as AnyTensor
-    const tb = b as AnyTensor
-    const d = normalizeDim(dim ?? 0, ta.shape.length)
-    if (ta.shape.length !== tb.shape.length) {
-      throw new Error(
-        `cat: tensors must have the same rank (${showShape(ta.shape)} vs ${showShape(tb.shape)})`,
-      )
-    }
-    for (let i = 0; i < ta.shape.length; i++) {
-      if (i !== d && ta.shape[i] !== tb.shape[i]) {
-        throw new Error(
-          `cat: shapes ${showShape(ta.shape)} and ${showShape(tb.shape)} differ outside dim ${d}`,
-        )
+  ): Tensor<Cat<A, B, D>>
+  static cat<
+    const T extends readonly [AnyTensor, ...AnyTensor[]],
+    const D extends number = 0,
+  >(
+    tensors: T & CatNCheck<T, D>,
+    dim?: D,
+  ): Tensor<CatN<T, D>>
+  static cat(
+    a: any,
+    b?: any,
+    dim?: number,
+  ): any {
+    // The n-ary form is pairwise sugar: a fold over the same binary cat
+    // nodes, so the IR, autograd rule and native lowering are untouched.
+    if (Array.isArray(a)) {
+      const d = (b as number | undefined) ?? 0
+      let acc = a[0]! as AnyTensor
+      for (let i = 1; i < a.length; i++) {
+        acc = cat2(acc, a[i]! as AnyTensor, d)
       }
+      return acc
     }
-    const lenA = ta.shape[d]!
-    const lenB = tb.shape[d]!
-    const result = rawCat(ta, tb, d)
-    return withGrad(result, "cat", [ta, tb], g => [
-      rawNarrow(g, d, 0, lenA),
-      rawNarrow(g, d, lenA, lenB),
-    ]) as any
+    return cat2(a as AnyTensor, b as AnyTensor, dim ?? 0)
   }
 
   [Operator.plus](
@@ -1321,4 +1324,31 @@ export const eye = Tensor.eye
 export const arange = Tensor.arange
 export const scalar = Tensor.scalar
 export const stack = Tensor.stack
+function cat2(
+  ta: AnyTensor,
+  tb: AnyTensor,
+  dim: number,
+): AnyTensor {
+  const d = normalizeDim(dim, ta.shape.length)
+  if (ta.shape.length !== tb.shape.length) {
+    throw new Error(
+      `cat: tensors must have the same rank (${showShape(ta.shape)} vs ${showShape(tb.shape)})`,
+    )
+  }
+  for (let i = 0; i < ta.shape.length; i++) {
+    if (i !== d && ta.shape[i] !== tb.shape[i]) {
+      throw new Error(
+        `cat: shapes ${showShape(ta.shape)} and ${showShape(tb.shape)} differ outside dim ${d}`,
+      )
+    }
+  }
+  const lenA = ta.shape[d]!
+  const lenB = tb.shape[d]!
+  const result = rawCat(ta, tb, d)
+  return withGrad(result, "cat", [ta, tb], g => [
+    rawNarrow(g, d, 0, lenA),
+    rawNarrow(g, d, lenA, lenB),
+  ])
+}
+
 export const cat = Tensor.cat
