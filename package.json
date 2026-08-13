@@ -12,7 +12,8 @@
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
     "example:gat": "vite-node examples/gat.ts",
-    "gnca": "vite-node examples/gnca/train.ts --"
+    "gnca": "vite-node examples/gnca/train.ts --",
+    "gnca:bench": "vite-node examples/gnca/bench_gate.ts && { test -x \"$HOME/code/graph-cellular-automata/.venv/bin/python\" && \"$HOME/code/graph-cellular-automata/.venv/bin/python\" examples/gnca/bench_torch.py || echo 'torch venv not found; skipped bench_torch.py'; }"
   },
   "dependencies": {
     "hotscript": "^1.0.13",

@@ -187,11 +187,13 @@ sent there with `device: "loops"`; everything larger goes to candle.
 An optimization pass over the compiled rolled-out training step
 (multi-root eval, in-graph Adam, buffer release during eval on the
 candle path) took it from 141 ms to ~16 ms per rolled-out time step at
-the reference settings (8192 nodes, 76592 edges). Published race as of
-2026-08: 0.7 training steps/s (typenet, candle CPU) vs 2.7 (PyTorch
-MPS) on the README GNCA training recipe. Nothing in-repo times
-`torch.mps` yet; treat those numbers as current until a checked bench
-lands.
+the reference settings (8192 nodes, 76592 edges). The checked race
+(2026-08, `examples/gnca/bench_gate.ts` vs `examples/gnca/bench_torch.py`,
+published [48, 80] recipe, three-run median): typenet candle CPU 1.50
+training steps/s, typenet loop evaluator 0.56, torch.mps 3.13. The
+prepare-once/pinned-leaf work closed the old ~4x gap to 2.1x; the rest
+is gather/scatter plus sequential elementwise, and the pull-ahead plan
+is a fused Metal GNCA step.
 
 ### Native dtype/device support (current behavior)
 

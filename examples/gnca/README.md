@@ -156,11 +156,22 @@ from-scratch 8000-step run finishes at grown 0.046 / healed 0.018.
 
 ## Speed
 
-At those settings (8192 nodes, 76592 edges, forward + backward + Adam):
-about **16 ms per rolled-out time step**, or **0.7 training steps/s**
-against PyTorch on MPS at **2.7**, so ~4x slower.
+Measured 2026-08 on the published recipe (1024 nodes x 8, 76k edges,
+one compiled [48, 80] bucket, forward + backward + clip + Adam,
+three-run median — `bench_gate.ts` and `bench_torch.py` are the two
+columns, `pnpm gnca:bench` runs both):
 
-The leading suspect is that candle's CPU elementwise kernels are
-single-threaded, so the process sits at 100% of one core out of ten.
-`TYPENET_PROFILE=1` shows it. The "History: measured numbers" section of
-`../../PLAN.md` has the numbers and what closing it would take.
+| backend                       | median full step | training steps/s |
+| ----------------------------- | ---------------- | ---------------- |
+| typenet, candle CPU (default) | 665 ms           | **1.50**         |
+| typenet, fused loop evaluator | 1790 ms          | 0.56             |
+| PyTorch on MPS                | 320 ms           | **3.13**         |
+
+That is ~10 ms per rolled-out time step and a 2.1x gap to torch.mps
+(down from the ~4x of the first published race). The remaining loss is
+gather/scatter and sequential elementwise on the candle CPU path —
+`TYPENET_PROFILE=1` prints the split — and the loop evaluator loses to
+candle by ~2.7x on this mix even after strided views and buffer drop,
+so the catch-up plan is a fused Metal step for the GNCA subgraph, not
+more interpreter work. The "History: measured numbers" section of
+`../../PLAN.md` keeps the longer story.
