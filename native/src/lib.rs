@@ -2673,6 +2673,33 @@ fn forced_target() -> Option<Target> {
     })
 }
 
+/// Row-major C = A·B for one packed f32 pair — the eager fast path's
+/// escape hatch into Accelerate. Same `gemm` the loop evaluator uses.
+#[napi(js_name = "sgemm")]
+pub fn sgemm_entry(
+    a: Float32Array,
+    b: Float32Array,
+    m: u32,
+    k: u32,
+    n: u32,
+) -> Result<Readback> {
+    let (m, k, n) = (m as usize, k as usize, n as usize);
+    if a.len() != m * k || b.len() != k * n {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!(
+                "sgemm: got {}x{} and {}x{} buffers of {} and {}",
+                m, k, k, n,
+                a.len(),
+                b.len()
+            ),
+        ));
+    }
+    let mut c = vec![0f32; m * n];
+    gemm(&a, &b, &mut c, m, k, n);
+    Ok(vec_readback(c))
+}
+
 /// Run a prepared graph on the evaluator it was planned for.
 fn evaluate(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> Result<Readback> {
     let target = forced_target().unwrap_or(prep.target);

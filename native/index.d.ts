@@ -27,5 +27,11 @@ export declare function prepareGraph(graphJson: string): number
 /** Drop a plan created by `prepareGraph`. */
 export declare function releaseGraph(handle: number): void
 
+/**
+ * Row-major C = A·B for one packed f32 pair — the eager fast path's
+ * escape hatch into Accelerate. Same `gemm` the loop evaluator uses.
+ */
+export declare function sgemm(a: Float32Array, b: Float32Array, m: number, k: number, n: number): Readback
+
 /** Op-kind timings gathered since the last call, as a text table. */
 export declare function takeProfile(): string

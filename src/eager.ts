@@ -1,7 +1,8 @@
+import { isNativeEnabled, sgemmNative } from "./backends/native.ts"
 import { applyBinary, applyUnary, getActiveSeed, randomData } from "./kernels.ts"
 import type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
 import { broadcastShapes, catShape, matmulShape, reduceShape, resizeDim } from "./shape.ts"
-import { arrayCtor, broadcastStrides, contiguousStrides, type DType, prod } from "./storage.ts"
+import { arrayCtor, broadcastStrides, contiguousStrides, type DType, prod, shapesEqual } from "./storage.ts"
 import { type AnyTensor, makeRaw } from "./tensor.ts"
 
 // ---------------------------------------------------------------------------
@@ -46,12 +47,34 @@ export function evalBinaryEager(
   const dtype: DType = a.dtype === "float64" || b.dtype === "float64"
     ? "float64"
     : "float32"
-  const sa = broadcastStrides(a.shape, outShape)
-  const sb = broadcastStrides(b.shape, outShape)
   const n = prod(outShape)
   const out = new (arrayCtor(dtype))(n)
   const ad = a.data
   const bd = b.data
+  // Every path applies the same scalar kernel, so the fast paths are
+  // bit-identical to the strided walk — they only skip the odometer.
+  if (shapesEqual(a.shape, b.shape)) {
+    for (let i = 0; i < n; i++) {
+      out[i] = applyBinary(op, ad[i]!, bd[i]!, parameter)
+    }
+    return makeRaw(out, outShape, dtype)
+  }
+  if (b.numel === 1) {
+    const s = bd[0]!
+    for (let i = 0; i < n; i++) {
+      out[i] = applyBinary(op, ad[i]!, s, parameter)
+    }
+    return makeRaw(out, outShape, dtype)
+  }
+  if (a.numel === 1) {
+    const s = ad[0]!
+    for (let i = 0; i < n; i++) {
+      out[i] = applyBinary(op, s, bd[i]!, parameter)
+    }
+    return makeRaw(out, outShape, dtype)
+  }
+  const sa = broadcastStrides(a.shape, outShape)
+  const sb = broadcastStrides(b.shape, outShape)
   forEachStrided(outShape, [sa, sb], (i, offs) => {
     out[i] = applyBinary(
       op,
@@ -174,6 +197,25 @@ export function evalMatmulEager(
     ? "float64"
     : "float32"
   const batchCount = prod(batch)
+  // A large packed f32 GEMM goes to Accelerate when the native addon is
+  // enabled — eager + useNative() is no longer "ignore native". Only
+  // + and * are involved, in the same association BLAS uses row-major,
+  // so tests that require bit-stability opt out with disableNative().
+  if (
+    dtype === "float32"
+    && batchCount === 1
+    && m * k * n > 65536
+    && isNativeEnabled()
+  ) {
+    const data = sgemmNative(
+      a.data as Float32Array,
+      b.data as Float32Array,
+      m,
+      k,
+      n,
+    )
+    if (data) return makeRaw(data, outShape, dtype)
+  }
   const saBatch = broadcastStrides(batchA, batch)
   const sbBatch = broadcastStrides(batchB, batch)
   const out = new (arrayCtor(dtype))(batchCount * m * n)

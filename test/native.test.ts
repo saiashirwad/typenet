@@ -346,6 +346,24 @@ describe.skipIf(!available)("native f32 requirement", () => {
   })
 })
 
+describe.skipIf(!available)("eager native GEMM assist", () => {
+  it("matches the JS matmul within f32 reassociation noise", () => {
+    configure({ lazy: false })
+    const a = Tensor.rand([80, 60]) as AnyTensor
+    const b = Tensor.rand([60, 90]) as AnyTensor
+    disableNative()
+    const js = a.matmul(b)
+    useNative()
+    const accelerated = a.matmul(b)
+    disableNative()
+    const jd = js.data
+    const ad = accelerated.data
+    for (let i = 0; i < jd.length; i++) {
+      expect(Math.abs(jd[i]! - ad[i]!)).toBeLessThan(1e-4)
+    }
+  })
+})
+
 describe("native backend availability", () => {
   it("reports availability without affecting lazy mode", () => {
     expect(isNativeAvailable()).toBe(available)

@@ -280,6 +280,13 @@ arithmetic (≤ 65536 elements) skip candle altogether and run on a fused
 loop evaluator: chains of elementwise ops collapse into single passes, so
 their intermediate values never reach memory.
 
+With `useNative()` active, eager mode is no longer "ignore native": a
+large packed float32 matmul (> 65536 multiply-accumulates, unbatched)
+goes to Accelerate's `sgemm` instead of the JS triple loop. BLAS
+reassociates the accumulation, so results match JS to f32 rounding
+rather than bit-for-bit; call `disableNative()` for exact replay.
+Elementwise ops stay in JS and stay bit-identical.
+
 `TYPENET_EVALUATOR=loops|cpu|gpu` overrides the choice and
 `TYPENET_PROFILE=1` reports wall time and throughput per op kind, for
 measuring one against another.

@@ -18,6 +18,13 @@ export type NativeModule = {
     dirtyIndex: Uint32Array,
     seed: number,
   ): ArrayBuffer
+  sgemm(
+    a: Float32Array,
+    b: Float32Array,
+    m: number,
+    k: number,
+    n: number,
+  ): ArrayBuffer
   releaseGraph(handle: number): void
   preparedGraphCount(): number
   deviceName(): string
@@ -154,6 +161,20 @@ export function evalPreparedNative(
   seed: number,
 ): Float32Array {
   return withNative(mod => new Float32Array(mod.evalPrepared(handle, dirty, dirtyIndex, seed >>> 0)))
+}
+
+/** Null when the addon is not loaded (caller falls back to JS). */
+export function sgemmNative(
+  a: Float32Array,
+  b: Float32Array,
+  m: number,
+  k: number,
+  n: number,
+): Float32Array | null {
+  return withNative(
+    mod => new Float32Array(mod.sgemm(a, b, m, k, n)),
+    () => null,
+  )
 }
 
 /** No-op when the addon is not loaded. */
