@@ -1049,22 +1049,83 @@ fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
 // again — for a rolled-out automaton that string is hundreds of
 // kilobytes. prepareGraph() parses and plans once, returns a handle, and
 // evalPrepared() takes the handle instead.
-static PLAN_HANDLES: OnceLock<Mutex<HashMap<u32, Arc<PreparedGraph>>>> = OnceLock::new();
+/// A prepared plan plus its pinned leaf buffer. Pins are copies owned by
+/// the handle (copy-on-pin: a borrowed JS buffer could be collected or
+/// detached while rayon reads it), made once at pin time — per eval only
+/// the *dirty* leaves are copied again, which is what removes the
+/// pack-every-leaf cost from a compiled step whose big captures (edge
+/// lists, targets) never change.
+struct HandleState {
+    prep: Arc<PreparedGraph>,
+    leaves: Vec<f32>,
+    /// (offset, numel) per JSON `leaf` index.
+    offsets: Vec<(usize, usize)>,
+}
+
+static PLAN_HANDLES: OnceLock<Mutex<HashMap<u32, HandleState>>> = OnceLock::new();
 static NEXT_HANDLE: Mutex<u32> = Mutex::new(1);
 
-fn handles() -> &'static Mutex<HashMap<u32, Arc<PreparedGraph>>> {
+fn handles() -> &'static Mutex<HashMap<u32, HandleState>> {
     PLAN_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn leaf_offsets(prep: &PreparedGraph) -> (Vec<(usize, usize)>, usize) {
+    let mut offsets: Vec<(usize, usize)> = Vec::new();
+    let mut total = 0usize;
+    for node in &prep.graph.nodes {
+        if let Node::Leaf { leaf, offset, shape } = node {
+            let numel = prod(shape);
+            if offsets.len() <= *leaf {
+                offsets.resize(*leaf + 1, (0, 0));
+            }
+            offsets[*leaf] = (*offset, numel);
+            total = total.max(*offset + numel);
+        }
+    }
+    (offsets, total)
 }
 
 /// Parse and plan a graph once, returning a handle for `evalPrepared`.
 #[napi(js_name = "prepareGraph")]
 pub fn prepare_graph(graph_json: String) -> Result<u32> {
     let prep = prepared(&graph_json)?;
+    let (offsets, total) = leaf_offsets(&prep);
     let mut next = NEXT_HANDLE.lock().unwrap();
     let handle = *next;
     *next += 1;
-    handles().lock().unwrap().insert(handle, prep);
+    handles().lock().unwrap().insert(
+        handle,
+        HandleState {
+            prep,
+            leaves: vec![0.0; total],
+            offsets,
+        },
+    );
     Ok(handle)
+}
+
+/// Copy a leaf's current values into the handle's pinned buffer.
+#[napi(js_name = "pinLeaf")]
+pub fn pin_leaf(handle: u32, leaf: u32, data: Float32Array) -> Result<()> {
+    let mut map = handles().lock().unwrap();
+    let state = map.get_mut(&handle).ok_or_else(|| {
+        Error::new(
+            Status::InvalidArg,
+            format!("unknown prepared graph {handle}"),
+        )
+    })?;
+    let (offset, numel) = *state
+        .offsets
+        .get(leaf as usize)
+        .ok_or_else(|| Error::new(Status::InvalidArg, format!("unknown leaf {leaf}")))?;
+    if data.len() != numel {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!("leaf {leaf} expects {numel} values, got {}", data.len()),
+        ));
+    }
+    state.leaves[offset..offset + numel].copy_from_slice(&data);
+    Ok(())
 }
 
 /// Drop a plan created by `prepareGraph`.
@@ -1080,25 +1141,39 @@ pub fn prepared_graph_count() -> u32 {
     handles().lock().unwrap().len() as u32
 }
 
-/// Evaluate a plan created by `prepareGraph`.
+/// Evaluate a plan: overlay the dirty leaves (packed in increasing leaf
+/// index, listed by `dirty_index`) onto the pins, then run. JS callers
+/// are single-threaded, so holding the handle lock through the
+/// evaluation cannot deadlock; rayon workers never touch the handle map.
 #[napi(js_name = "evalPrepared")]
 pub fn eval_prepared(
     handle: u32,
-    leaves: Float32Array,
+    dirty: Float32Array,
+    dirty_index: Uint32Array,
     seed: u32,
 ) -> Result<Readback> {
-    let prep = handles()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .cloned()
-        .ok_or_else(|| {
+    let mut map = handles().lock().unwrap();
+    let state = map.get_mut(&handle).ok_or_else(|| {
+        Error::new(
+            Status::InvalidArg,
+            format!("unknown prepared graph {handle}"),
+        )
+    })?;
+    let mut cursor = 0usize;
+    for &leaf in dirty_index.iter() {
+        let (offset, numel) = *state.offsets.get(leaf as usize).ok_or_else(|| {
+            Error::new(Status::InvalidArg, format!("unknown dirty leaf {leaf}"))
+        })?;
+        let chunk = dirty.get(cursor..cursor + numel).ok_or_else(|| {
             Error::new(
                 Status::InvalidArg,
-                format!("unknown prepared graph {handle}"),
+                format!("dirty buffer too short for leaf {leaf}"),
             )
         })?;
-    evaluate(&prep, &leaves, seed)
+        state.leaves[offset..offset + numel].copy_from_slice(chunk);
+        cursor += numel;
+    }
+    evaluate(&state.prep, &state.leaves, seed)
 }
 
 #[inline]

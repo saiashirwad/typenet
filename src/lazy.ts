@@ -260,6 +260,30 @@ function serializeLazyGraph(roots: AnyTensor[]): {
   }
 }
 
+type ForcePlan = {
+  roots: AnyTensor[]
+  handle: number
+  leafTensors: AnyTensor[]
+  leafOffsets: number[]
+  leafBytes: number
+  rootShapes: number[][]
+}
+
+// Prepare-once for the uncompiled path, keyed by the FIRST root tensor
+// (a WeakMap cannot key on a fresh root array). A hit requires the same
+// root list by identity; anything else re-serializes and replaces the
+// plan. Every leaf on this path is an "input" — the tape has no
+// placeholder/captured distinction — so all leaves are re-sent per
+// eval; the win over evalGraph is skipping the JSON round-trip.
+const forcePlans = new WeakMap<AnyTensor, ForcePlan>()
+
+// When the first root is collected, the JS plan dies with it; without
+// this, the native handle would leak (PLAN_HANDLES is a different,
+// explicit-release map).
+const planRegistry = new FinalizationRegistry<number>(
+  handle => nativeBackend.releaseGraphNative(handle),
+)
+
 function evalNativeMany(roots: AnyTensor[]): boolean {
   if (!nativeBackend.isNativeEnabled()) return false
   for (const t of roots) {
@@ -270,15 +294,52 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
       return false
     }
   }
-  const serialized = serializeLazyGraph(roots)
-  if (!serialized) return false
-  const data = nativeBackend.evalGraphNative(
-    serialized.json,
-    serialized.leaves,
+  const first = roots[0]!
+  let plan = forcePlans.get(first)
+  const hit = plan !== undefined
+    && plan.roots.length === roots.length
+    && plan.roots.every((r, i) => r === roots[i])
+  if (!hit) {
+    const serialized = serializeLazyGraph(roots)
+    if (!serialized) return false
+    const handle = nativeBackend.prepareGraphNative(
+      serialized.json,
+    )
+    if (plan) {
+      // Replace-on-miss: free the old handle now, and unregister so
+      // collection of the old plan cannot double-free it.
+      planRegistry.unregister(plan)
+      nativeBackend.releaseGraphNative(plan.handle)
+    }
+    plan = {
+      roots: [...roots],
+      handle,
+      leafTensors: serialized.leafTensors,
+      leafOffsets: serialized.leafOffsets,
+      leafBytes: serialized.leafBytes,
+      rootShapes: serialized.rootShapes,
+    }
+    planRegistry.register(plan, handle, plan)
+    forcePlans.set(first, plan)
+  }
+  const dirty = new Float32Array(plan!.leafBytes)
+  plan!.leafTensors.forEach((t, i) => {
+    dirty.set(
+      _internal.cpuOf(t) as Float32Array,
+      plan!.leafOffsets[i]!,
+    )
+  })
+  const dirtyIndex = Uint32Array.from(
+    plan!.leafTensors.keys(),
+  )
+  const data = nativeBackend.evalPreparedNative(
+    plan!.handle,
+    dirty,
+    dirtyIndex,
     nextSeed(),
   )
   let offset = 0
-  serialized.rootShapes.forEach((shape, i) => {
+  plan!.rootShapes.forEach((shape, i) => {
     const n = prod(shape)
     _internal.setCpu(
       roots[i]!,
@@ -288,7 +349,7 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
   })
   if (offset !== data.length) {
     throw new Error(
-      `native backend returned ${data.length} values, expected ${offset} for roots [${serialized.rootShapes.map(showShape).join(", ")}]`,
+      `native backend returned ${data.length} values, expected ${offset} for roots [${plan!.rootShapes.map(showShape).join(", ")}]`,
     )
   }
   return true

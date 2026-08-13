@@ -121,6 +121,8 @@ export function compile<
       leafOffsets: number[]
       leafBytes: number
       rootShapes: number[][]
+      /** Leaf indices re-sent every eval: placeholders + update targets. */
+      dirty: number[] | null
     } | null
     lazy: AnyTensor[]
   }
@@ -209,6 +211,7 @@ export function compile<
           leafOffsets: serialized.leafOffsets,
           leafBytes: serialized.leafBytes,
           rootShapes: serialized.rootShapes,
+          dirty: null,
         }
         : null,
       lazy,
@@ -292,29 +295,59 @@ export function compile<
     ;(buffer as Float32Array).set(values)
   }
 
+  const pinnedBuffer = (leaf: AnyTensor): Float32Array => {
+    const buffer = _internal.cpuOf(leaf)
+    if (buffer === null) {
+      throw new Error(
+        "compiled function: a captured tensor is not CPU storage — compiled graphs require captured leaves (e.g. parameters) to stay put",
+      )
+    }
+    return buffer as Float32Array
+  }
+
   const runNative = (state: State): AnyTensor[] => {
     const native = state.native!
-    const leaves = new Float32Array(native.leafBytes)
-    native.leafTensors.forEach((leaf, i) => {
-      const buffer = _internal.cpuOf(leaf)
-      if (buffer === null) {
-        throw new Error(
-          "compiled function: a captured tensor is not CPU storage — compiled graphs require captured leaves (e.g. parameters) to stay put",
-        )
-      }
-      leaves.set(
-        buffer as Float32Array,
-        native.leafOffsets[i]!,
-      )
-    })
     if (native.handle === null) {
+      // Prepare once and pin every leaf. Static captures (edge lists,
+      // targets, degree tables) cross the FFI exactly once, here; only
+      // the dirty set below is re-sent per eval. Mutating a captured
+      // non-parameter leaf after compile() is therefore not seen — the
+      // same "captured leaves stay put" contract as the error above.
       native.handle = nativeBackend.prepareGraphNative(
         native.json,
       )
+      native.leafTensors.forEach((leaf, i) =>
+        nativeBackend.pinLeafNative(
+          native.handle!,
+          i,
+          pinnedBuffer(leaf),
+        )
+      )
+      const resent = new Set<AnyTensor>([
+        ...state.placeholders,
+        // Update targets are JS-authoritative (applyUpdate writes them,
+        // tests and checkpoints mutate them), so their current values
+        // are re-sent every eval.
+        ...state.updates.map(u => u.target),
+      ])
+      native.dirty = native.leafTensors.flatMap((t, i) => resent.has(t) ? [i] : [])
+    }
+    const dirtyIndex = Uint32Array.from(native.dirty!)
+    let dirtyLength = 0
+    for (const i of native.dirty!) {
+      dirtyLength += pinnedBuffer(native.leafTensors[i]!).length
+    }
+    const dirty = new Float32Array(dirtyLength)
+    let cursor = 0
+    for (const i of native.dirty!) {
+      const buffer = pinnedBuffer(native.leafTensors[i]!)
+      dirty.set(buffer, cursor)
+      cursor += buffer.length
     }
     const data = nativeBackend.evalPreparedNative(
       native.handle,
-      leaves,
+      dirty,
+      dirtyIndex,
       nextSeed(),
     )
     let offset = 0

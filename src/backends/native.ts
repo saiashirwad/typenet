@@ -7,9 +7,15 @@ export type NativeModule = {
     seed: number,
   ): ArrayBuffer
   prepareGraph(graphJson: string): number
+  pinLeaf(
+    handle: number,
+    leaf: number,
+    data: Float32Array,
+  ): void
   evalPrepared(
     handle: number,
-    leaves: Float32Array,
+    dirty: Float32Array,
+    dirtyIndex: Uint32Array,
     seed: number,
   ): ArrayBuffer
   releaseGraph(handle: number): void
@@ -133,12 +139,21 @@ export function prepareGraphNative(
   return withNative(mod => mod.prepareGraph(graphJson))
 }
 
+export function pinLeafNative(
+  handle: number,
+  leaf: number,
+  data: Float32Array,
+): void {
+  withNative(mod => mod.pinLeaf(handle, leaf, data))
+}
+
 export function evalPreparedNative(
   handle: number,
-  leaves: Float32Array,
+  dirty: Float32Array,
+  dirtyIndex: Uint32Array,
   seed: number,
 ): Float32Array {
-  return withNative(mod => new Float32Array(mod.evalPrepared(handle, leaves, seed >>> 0)))
+  return withNative(mod => new Float32Array(mod.evalPrepared(handle, dirty, dirtyIndex, seed >>> 0)))
 }
 
 /** No-op when the addon is not loaded. */
