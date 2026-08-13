@@ -846,6 +846,10 @@ struct MemberPlan {
 
 struct GroupPlan {
     leader: usize,
+    /// Global node indices this plan reads; ChildSource::Buffer holds an
+    /// index into this list (localized after prepare), so execution can
+    /// pack just these inputs instead of a whole-graph table.
+    buffer_inputs: Vec<usize>,
     out_shape: Vec<usize>,
     /// True when no member reads a broadcast input, so the pass can index
     /// buffers directly instead of decomposing a flat index into coords.
@@ -875,8 +879,9 @@ struct PreparedGraph {
     /// trigger execution.
     group_of: Vec<Option<usize>>,
     groups: Vec<GroupPlan>,
-    /// Per-node plans for standalone elementwise nodes.
-    ewise: Vec<Option<MemberPlan>>,
+    /// Per-node plans for standalone elementwise nodes, with the global
+    /// node indices their localized Buffer sources refer to.
+    ewise: Vec<Option<(MemberPlan, Vec<usize>)>>,
     /// Which evaluator this graph runs on, chosen by the JS side.
     target: Target,
 }
@@ -980,6 +985,7 @@ impl PreparedGraph {
                 .all(|m| m.inputs.iter().all(|c| c.same_shape));
             groups.push(GroupPlan {
                 leader,
+                buffer_inputs: Vec::new(),
                 out_shape,
                 all_same,
                 small_members,
@@ -987,7 +993,7 @@ impl PreparedGraph {
             });
         }
 
-        let mut ewise: Vec<Option<MemberPlan>> = (0..n).map(|_| None).collect();
+        let mut ewise: Vec<Option<(MemberPlan, Vec<usize>)>> = (0..n).map(|_| None).collect();
         for (idx, node) in graph.nodes.iter().enumerate() {
             if !live[idx] || fusion.group_of[idx].is_some() || !is_elementwise(node) {
                 continue;
@@ -997,12 +1003,15 @@ impl PreparedGraph {
                 .iter()
                 .map(|&c| buffer_child(c, &target))
                 .collect();
-            ewise[idx] = Some(MemberPlan {
-                op: Op::of(node)?,
-                all_same: inputs.iter().all(|c| c.same_shape),
-                inputs,
-                out_shape: target,
-            });
+            ewise[idx] = Some((
+                MemberPlan {
+                    op: Op::of(node)?,
+                    all_same: inputs.iter().all(|c| c.same_shape),
+                    inputs,
+                    out_shape: target,
+                },
+                Vec::new(),
+            ));
         }
 
         let target = Target::parse(graph.device.as_deref());
@@ -1032,7 +1041,9 @@ fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
     }
     let graph: Graph = serde_json::from_str(graph_json)
         .map_err(|e| Error::new(Status::InvalidArg, format!("invalid graph JSON: {e}")))?;
-    let prep = Arc::new(PreparedGraph::prepare(graph).map_err(to_napi_err)?);
+    let mut plan = PreparedGraph::prepare(graph).map_err(to_napi_err)?;
+    localize(&mut plan);
+    let prep = Arc::new(plan);
     let mut map = cache.lock().unwrap();
     // Bounded: compiled functions cache one plan each; a pathological
     // caller building fresh graphs forever just falls back to re-planning.
@@ -1176,12 +1187,124 @@ pub fn eval_prepared(
     evaluate(&state.prep, &state.leaves, seed)
 }
 
+/// Rewrite every ChildSource::Buffer from a global node index to an
+/// index into the plan's own `buffer_inputs` list, so execution packs
+/// exactly the inputs a pass reads.
+fn localize_members(
+    members: &mut [MemberPlan],
+    locals: &mut Vec<usize>,
+) {
+    for m in members {
+        for cr in &mut m.inputs {
+            if let ChildSource::Buffer(global) = cr.source {
+                let local = locals
+                    .iter()
+                    .position(|&x| x == global)
+                    .unwrap_or_else(|| {
+                        locals.push(global);
+                        locals.len() - 1
+                    });
+                cr.source = ChildSource::Buffer(local);
+            }
+        }
+    }
+}
+
+fn localize(prep: &mut PreparedGraph) {
+    for g in &mut prep.groups {
+        let mut locals = Vec::new();
+        localize_members(&mut g.small_members, &mut locals);
+        localize_members(&mut g.main_members, &mut locals);
+        g.buffer_inputs = locals;
+    }
+    for entry in prep.ewise.iter_mut().flatten() {
+        let mut locals = Vec::new();
+        localize_members(std::slice::from_mut(&mut entry.0), &mut locals);
+        entry.1 = locals;
+    }
+}
+
+/// A loop-evaluator buffer: shared storage plus view metadata. The
+/// structural ops (view / permute / narrow / broadcastTo) only rewrite
+/// the metadata; a consumer that needs packed row-major data calls
+/// `packed()`, which borrows when the view is already contiguous.
+#[derive(Clone)]
+struct Buf {
+    data: Arc<Vec<f32>>,
+    offset: usize,
+    shape: Vec<usize>,
+    /// Element strides; 0 on broadcast dims.
+    strides: Vec<usize>,
+}
+
+impl Buf {
+    fn owned(data: Vec<f32>, shape: Vec<usize>) -> Buf {
+        let strides = row_major_strides(&shape);
+        Buf {
+            data: Arc::new(data),
+            offset: 0,
+            shape,
+            strides,
+        }
+    }
+
+    fn numel(&self) -> usize {
+        prod(&self.shape)
+    }
+
+    fn is_contiguous(&self) -> bool {
+        self.strides == row_major_strides(&self.shape)
+    }
+
+    fn packed(&self) -> std::borrow::Cow<'_, [f32]> {
+        let n = self.numel();
+        if self.is_contiguous() {
+            return std::borrow::Cow::Borrowed(&self.data[self.offset..self.offset + n]);
+        }
+        // Odometer walk: incremental index updates, and the innermost
+        // dim copied as a slice when it is unit-stride.
+        let rank = self.shape.len();
+        let mut out = vec![0f32; n];
+        if rank == 0 {
+            out[0] = self.data[self.offset];
+            return std::borrow::Cow::Owned(out);
+        }
+        let inner = self.shape[rank - 1];
+        let inner_stride = self.strides[rank - 1];
+        let outer = n / inner.max(1);
+        let mut coords = vec![0usize; rank.saturating_sub(1)];
+        let mut base = self.offset;
+        let mut o = 0usize;
+        for _ in 0..outer {
+            if inner_stride == 1 {
+                out[o..o + inner]
+                    .copy_from_slice(&self.data[base..base + inner]);
+            } else {
+                for k in 0..inner {
+                    out[o + k] = self.data[base + k * inner_stride];
+                }
+            }
+            o += inner;
+            for d in (0..rank - 1).rev() {
+                coords[d] += 1;
+                base += self.strides[d];
+                if coords[d] < self.shape[d] {
+                    break;
+                }
+                base -= self.strides[d] * self.shape[d];
+                coords[d] = 0;
+            }
+        }
+        std::borrow::Cow::Owned(out)
+    }
+}
+
 #[inline]
 fn read_ref(
     cr: &ChildRef,
     i: usize,
     coords: &[usize],
-    buffers: &[Option<Vec<f32>>],
+    inputs: &[&[f32]],
     temps: &[Vec<f32>],
     scratch: &[f32],
 ) -> f32 {
@@ -1189,7 +1312,7 @@ fn read_ref(
         ChildSource::Slot(slot) => scratch[slot],
         ChildSource::Temp(t) => read_bcast(&temps[t], &cr.strides, cr.same_shape, i, coords),
         ChildSource::Buffer(b) => read_bcast(
-            buffers[b].as_deref().unwrap_or(&[]),
+            inputs[b],
             &cr.strides,
             cr.same_shape,
             i,
@@ -1204,14 +1327,14 @@ fn read_ref(
 fn read_flat(
     cr: &ChildRef,
     i: usize,
-    buffers: &[Option<Vec<f32>>],
+    inputs: &[&[f32]],
     temps: &[Vec<f32>],
     scratch: &[f32],
 ) -> f32 {
     match cr.source {
         ChildSource::Slot(slot) => scratch[slot],
         ChildSource::Temp(t) => temps[t][i],
-        ChildSource::Buffer(b) => buffers[b].as_deref().unwrap_or(&[])[i],
+        ChildSource::Buffer(b) => inputs[b][i],
     }
 }
 
@@ -1239,7 +1362,7 @@ fn over_chunks(out: &mut [f32], body: impl Fn(usize, &mut [f32]) + Send + Sync) 
 /// One elementwise op over its own output shape, into a fresh buffer.
 fn exec_member(
     plan: &MemberPlan,
-    buffers: &[Option<Vec<f32>>],
+    inputs_slices: &[&[f32]],
     temps: &[Vec<f32>],
 ) -> Vec<f32> {
     let mut out = vec![0f32; prod(&plan.out_shape)];
@@ -1253,13 +1376,13 @@ fn exec_member(
                     Op::Bin(kind, p) => apply_bin(
                         kind,
                         p,
-                        read_flat(&inputs[0], i, buffers, temps, &[]),
-                        read_flat(&inputs[1], i, buffers, temps, &[]),
+                        read_flat(&inputs[0], i, inputs_slices, temps, &[]),
+                        read_flat(&inputs[1], i, inputs_slices, temps, &[]),
                     ),
                     Op::Un(kind, p) => apply_un(
                         kind,
                         p,
-                        read_flat(&inputs[0], i, buffers, temps, &[]),
+                        read_flat(&inputs[0], i, inputs_slices, temps, &[]),
                     ),
                 };
             }
@@ -1275,13 +1398,13 @@ fn exec_member(
                 Op::Bin(kind, p) => apply_bin(
                     kind,
                     p,
-                    read_ref(&inputs[0], i, &coords, buffers, temps, &[]),
-                    read_ref(&inputs[1], i, &coords, buffers, temps, &[]),
+                    read_ref(&inputs[0], i, &coords, inputs_slices, temps, &[]),
+                    read_ref(&inputs[1], i, &coords, inputs_slices, temps, &[]),
                 ),
                 Op::Un(kind, p) => apply_un(
                     kind,
                     p,
-                    read_ref(&inputs[0], i, &coords, buffers, temps, &[]),
+                    read_ref(&inputs[0], i, &coords, inputs_slices, temps, &[]),
                 ),
             };
         }
@@ -1293,12 +1416,12 @@ fn exec_member(
 /// evaluated per element into a scratch slot, so the intermediate values
 /// of a chain of elementwise ops never reach memory. Only the leader's
 /// value is written out.
-fn exec_group(plan: &GroupPlan, buffers: &[Option<Vec<f32>>]) -> Vec<f32> {
+fn exec_group(plan: &GroupPlan, inputs_slices: &[&[f32]]) -> Vec<f32> {
     // Members smaller than the output shape are evaluated first, into
     // temps: their inputs can only be external buffers or earlier temps.
     let mut temps: Vec<Vec<f32>> = Vec::with_capacity(plan.small_members.len());
     for sm in &plan.small_members {
-        temps.push(exec_member(sm, buffers, &temps));
+        temps.push(exec_member(sm, inputs_slices, &temps));
     }
     let members = &plan.main_members;
     let last = members.len() - 1;
@@ -1317,13 +1440,13 @@ fn exec_group(plan: &GroupPlan, buffers: &[Option<Vec<f32>>]) -> Vec<f32> {
                         Op::Bin(kind, p) => apply_bin(
                             kind,
                             p,
-                            read_flat(&mm.inputs[0], i, buffers, &temps, &scratch),
-                            read_flat(&mm.inputs[1], i, buffers, &temps, &scratch),
+                            read_flat(&mm.inputs[0], i, inputs_slices, &temps, &scratch),
+                            read_flat(&mm.inputs[1], i, inputs_slices, &temps, &scratch),
                         ),
                         Op::Un(kind, p) => apply_un(
                             kind,
                             p,
-                            read_flat(&mm.inputs[0], i, buffers, &temps, &scratch),
+                            read_flat(&mm.inputs[0], i, inputs_slices, &temps, &scratch),
                         ),
                     };
                 }
@@ -1343,13 +1466,13 @@ fn exec_group(plan: &GroupPlan, buffers: &[Option<Vec<f32>>]) -> Vec<f32> {
                     Op::Bin(kind, p) => apply_bin(
                         kind,
                         p,
-                        read_ref(&mm.inputs[0], i, &coords, buffers, &temps, &scratch),
-                        read_ref(&mm.inputs[1], i, &coords, buffers, &temps, &scratch),
+                        read_ref(&mm.inputs[0], i, &coords, inputs_slices, &temps, &scratch),
+                        read_ref(&mm.inputs[1], i, &coords, inputs_slices, &temps, &scratch),
                     ),
                     Op::Un(kind, p) => apply_un(
                         kind,
                         p,
-                        read_ref(&mm.inputs[0], i, &coords, buffers, &temps, &scratch),
+                        read_ref(&mm.inputs[0], i, &coords, inputs_slices, &temps, &scratch),
                     ),
                 };
             }
@@ -1364,14 +1487,48 @@ fn exec_group(plan: &GroupPlan, buffers: &[Option<Vec<f32>>]) -> Vec<f32> {
 fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Result<Vec<f32>> {
     let graph = &prep.graph;
     let n = graph.nodes.len();
-    let mut buffers: Vec<Option<Vec<f32>>> = (0..n).map(|_| None).collect();
+    let mut buffers: Vec<Option<Buf>> = (0..n).map(|_| None).collect();
+    // The same consumer countdown run_graph does: drop a buffer once
+    // nothing else will read it, so a long rollout does not hold every
+    // activation it ever produced. Views share the Arc, so storage is
+    // freed when the last view dies.
+    let mut remaining = prep.consumers.clone();
+    let mut members_of: Vec<Vec<usize>> = vec![Vec::new(); prep.groups.len()];
+    for i in 0..n {
+        if let Some(g) = prep.group_of[i] {
+            members_of[g].push(i);
+        }
+    }
+    let release = |remaining: &mut Vec<usize>,
+                   buffers: &mut Vec<Option<Buf>>,
+                   is_root: &[bool],
+                   input: usize| {
+        remaining[input] -= 1;
+        if remaining[input] == 0 && !is_root[input] {
+            buffers[input] = None;
+        }
+    };
     for (idx, node) in graph.nodes.iter().enumerate() {
         if !prep.live[idx] {
             continue;
         }
         if let Some(g) = prep.group_of[idx] {
             if prep.groups[g].leader == idx {
-                buffers[idx] = Some(exec_group(&prep.groups[g], &buffers));
+                let plan = &prep.groups[g];
+                let packed: Vec<std::borrow::Cow<[f32]>> = plan
+                    .buffer_inputs
+                    .iter()
+                    .map(|&gi| buffers[gi].as_ref().expect("group input computed").packed())
+                    .collect();
+                let slices: Vec<&[f32]> = packed.iter().map(|c| c.as_ref()).collect();
+                let out = exec_group(plan, &slices);
+                drop(packed);
+                buffers[idx] = Some(Buf::owned(out, prep.shapes[idx].clone()));
+                for &m in &members_of[g] {
+                    for input in node_inputs(&graph.nodes[m]) {
+                        release(&mut remaining, &mut buffers, &prep.is_root, input);
+                    }
+                }
             }
             continue;
         }
@@ -1380,85 +1537,171 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
         } else {
             None
         };
-        let get = |i: usize| -> candle_core::Result<&[f32]> {
-            buffers.get(i).and_then(|b| b.as_deref()).ok_or_else(|| {
+        let get = |i: usize| -> candle_core::Result<&Buf> {
+            buffers.get(i).and_then(|b| b.as_ref()).ok_or_else(|| {
                 candle_core::Error::Msg(format!("node references future index {i}"))
             })
         };
-        let out = match node {
+        let out: Buf = match node {
             Node::Leaf {
                 leaf,
                 offset,
                 shape,
             } => {
                 let n = prod(shape);
-                leaves
-                    .get(*offset..*offset + n)
-                    .ok_or_else(|| {
-                        candle_core::Error::Msg(format!(
-                            "leaf {leaf} needs {n} f32 values at offset {offset}, have {}",
-                            leaves.len()
-                        ))
-                    })?
-                    .to_vec()
+                Buf::owned(
+                    leaves
+                        .get(*offset..*offset + n)
+                        .ok_or_else(|| {
+                            candle_core::Error::Msg(format!(
+                                "leaf {leaf} needs {n} f32 values at offset {offset}, have {}",
+                                leaves.len()
+                            ))
+                        })?
+                        .to_vec(),
+                    shape.clone(),
+                )
             }
             Node::Binary { .. } | Node::Unary { .. } => {
-                exec_member(prep.ewise[idx].as_ref().unwrap(), &buffers, &[])
+                let (plan, locals) = prep.ewise[idx].as_ref().unwrap();
+                let packed: Vec<std::borrow::Cow<[f32]>> = locals
+                    .iter()
+                    .map(|&gi| buffers[gi].as_ref().expect("ewise input computed").packed())
+                    .collect();
+                let slices: Vec<&[f32]> = packed.iter().map(|c| c.as_ref()).collect();
+                Buf::owned(
+                    exec_member(plan, &slices, &[]),
+                    prep.shapes[idx].clone(),
+                )
             }
-            Node::Matmul { a, b, .. } => {
-                cpu_matmul(get(*a)?, &prep.shapes[*a], get(*b)?, &prep.shapes[*b])?
-            }
+            Node::Matmul { a, b, .. } => Buf::owned(
+                cpu_matmul(
+                    &get(*a)?.packed(),
+                    &prep.shapes[*a],
+                    &get(*b)?.packed(),
+                    &prep.shapes[*b],
+                )?,
+                prep.shapes[idx].clone(),
+            ),
             Node::Reduce {
                 kind,
                 dim,
                 keepdim,
                 input,
                 ..
-            } => tiny_reduce(kind, *dim, *keepdim, get(*input)?, &prep.shapes[*input])?,
-            Node::ReduceAll { kind, input, .. } => tiny_reduce_all(kind, get(*input)?)?,
+            } => Buf::owned(
+                tiny_reduce(kind, *dim, *keepdim, &get(*input)?.packed(), &prep.shapes[*input])?,
+                prep.shapes[idx].clone(),
+            ),
+            Node::ReduceAll { kind, input, .. } => Buf::owned(
+                tiny_reduce_all(kind, &get(*input)?.packed())?,
+                prep.shapes[idx].clone(),
+            ),
+            // The structural ops are metadata rewrites: no copy here. A
+            // consumer that needs packed data pays for it there, and a
+            // chain of views/narrows/permutes collapses to arithmetic.
             Node::BroadcastTo { input, shape } => {
-                tiny_broadcast_to(get(*input)?, &prep.shapes[*input], shape)
+                let src = get(*input)?;
+                let rank = shape.len();
+                let offset_dims = rank - src.shape.len();
+                let mut strides = vec![0usize; rank];
+                for j in 0..src.shape.len() {
+                    strides[offset_dims + j] = if src.shape[j] == 1 && shape[offset_dims + j] != 1 {
+                        0
+                    } else {
+                        src.strides[j]
+                    };
+                }
+                Buf {
+                    data: src.data.clone(),
+                    offset: src.offset,
+                    shape: shape.clone(),
+                    strides,
+                }
             }
             Node::Permute { order, input, .. } => {
-                tiny_permute(get(*input)?, &prep.shapes[*input], order)
+                let src = get(*input)?;
+                Buf {
+                    data: src.data.clone(),
+                    offset: src.offset,
+                    shape: order.iter().map(|&d| src.shape[d]).collect(),
+                    strides: order.iter().map(|&d| src.strides[d]).collect(),
+                }
             }
-            // Tiny-path buffers are always contiguous, so a view is free.
-            Node::View { input, .. } => get(*input)?.to_vec(),
+            Node::View { input, shape } => {
+                let src = get(*input)?;
+                if src.is_contiguous() {
+                    Buf {
+                        data: src.data.clone(),
+                        offset: src.offset,
+                        shape: shape.clone(),
+                        strides: row_major_strides(shape),
+                    }
+                } else {
+                    Buf::owned(src.packed().into_owned(), shape.clone())
+                }
+            }
             Node::Narrow {
                 dim,
                 start,
                 length,
                 input,
                 ..
-            } => tiny_narrow(get(*input)?, &prep.shapes[*input], *dim, *start, *length),
-            Node::Cat { a, b, dim, .. } => {
-                tiny_cat(get(*a)?, &prep.shapes[*a], get(*b)?, &prep.shapes[*b], *dim)
+            } => {
+                let src = get(*input)?;
+                let mut shape = src.shape.clone();
+                shape[*dim] = *length;
+                Buf {
+                    data: src.data.clone(),
+                    offset: src.offset + start * src.strides[*dim],
+                    shape,
+                    strides: src.strides.clone(),
+                }
             }
-            Node::OneHot { classes, input, .. } => tiny_one_hot(*classes, get(*input)?)?,
-            Node::IndexSelect { dim, input, index, .. } => tiny_index_select(
-                get(*input)?,
-                &prep.shapes[*input],
-                get(*index)?,
-                *dim,
-            )?,
+            Node::Cat { a, b, dim, .. } => Buf::owned(
+                tiny_cat(
+                    &get(*a)?.packed(),
+                    &prep.shapes[*a],
+                    &get(*b)?.packed(),
+                    &prep.shapes[*b],
+                    *dim,
+                ),
+                prep.shapes[idx].clone(),
+            ),
+            Node::OneHot { classes, input, .. } => Buf::owned(
+                tiny_one_hot(*classes, &get(*input)?.packed())?,
+                prep.shapes[idx].clone(),
+            ),
+            Node::IndexSelect { dim, input, index, .. } => Buf::owned(
+                tiny_index_select(
+                    &get(*input)?.packed(),
+                    &prep.shapes[*input],
+                    &get(*index)?.packed(),
+                    *dim,
+                )?,
+                prep.shapes[idx].clone(),
+            ),
             Node::ScatterAdd {
                 dim,
                 length,
                 input,
                 index,
                 ..
-            } => tiny_scatter_add(
-                get(*input)?,
-                &prep.shapes[*input],
-                get(*index)?,
-                *dim,
-                *length,
-            )?,
+            } => Buf::owned(
+                tiny_scatter_add(
+                    &get(*input)?.packed(),
+                    &prep.shapes[*input],
+                    &get(*index)?.packed(),
+                    *dim,
+                    *length,
+                )?,
+                prep.shapes[idx].clone(),
+            ),
             Node::Random {
                 kind,
                 stream,
                 shape,
-            } => random_data(kind, prod(shape), *stream, seed)?,
+            } => Buf::owned(random_data(kind, prod(shape), *stream, seed)?, shape.clone()),
         };
         if let Some(started) = started {
             record(
@@ -1468,12 +1711,16 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
             );
         }
         buffers[idx] = Some(out);
+        for input in node_inputs(node) {
+            release(&mut remaining, &mut buffers, &prep.is_root, input);
+        }
     }
     let mut out = Vec::new();
     for &r in &prep.roots {
-        out.extend_from_slice(buffers.get(r).and_then(|b| b.as_deref()).ok_or_else(|| {
+        let buf = buffers.get(r).and_then(|b| b.as_ref()).ok_or_else(|| {
             candle_core::Error::Msg(format!("root references missing node {r}"))
-        })?);
+        })?;
+        out.extend_from_slice(&buf.packed());
     }
     Ok(out)
 }
@@ -1674,28 +1921,19 @@ fn tiny_scatter_add(
         return Ok(out);
     }
 
-    // A single slice — the usual dim-0 aggregation over an edge list. Give
-    // each thread a block of output rows and let it scan the index for the
-    // entries landing in its block: an index entry is 8 bytes against the
-    // `inner` floats a hit copies, so re-reading it per thread beats
-    // coordinating the writes.
-    let per = (length / rayon::current_num_threads().max(1)).max(1);
-    out.par_chunks_mut(per * inner)
-        .enumerate()
-        .for_each(|(c, out)| {
-            let lo = c * per;
-            let hi = lo + out.len() / inner;
-            for (j, &row) in indices.iter().enumerate() {
-                if row < lo || row >= hi {
-                    continue;
-                }
-                let to = (row - lo) * inner;
-                let from = j * inner;
-                for k in 0..inner {
-                    out[to + k] += data[from + k];
-                }
-            }
-        });
+    // A single slice — the usual dim-0 aggregation over an edge list.
+    // One serial pass that walks the edges exactly once. The old
+    // per-thread block scan re-read the whole index once per thread
+    // (threads x E index reads); profiled on the GNCA mix it lost to
+    // even candle's serial index_add, so the simple loop wins until a
+    // sort-by-destination segmented reduce is worth its setup.
+    for (j, &row) in indices.iter().enumerate() {
+        let to = row * inner;
+        let from = j * inner;
+        for k in 0..inner {
+            out[to + k] += data[from + k];
+        }
+    }
     Ok(out)
 }
 

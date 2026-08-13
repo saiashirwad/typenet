@@ -165,6 +165,14 @@ function force(t: AnyTensor): AnyTensor {
 // Graphs touching at most this many elements (leaves + intermediate node
 // outputs) go to the native fused loop evaluator, which pays no dispatch
 // or BLAS setup cost. 65536 = one 256×256 matrix.
+//
+// The cutover was re-measured (2026-08) after the loop evaluator grew
+// strided views, buffer drop, and a single-pass scatter: on the
+// published GNCA training recipe (1024 nodes x 8, one [48, 80] bucket)
+// loops run 0.56 steps/s against candle CPU's 1.50 — the loss is
+// per-element dispatch in the fused passes, not copies — so candle
+// stays the default above the cap and the race with torch.mps rides on
+// a fused Metal step (PR17), not on lifting this constant.
 const LOOP_EVALUATOR_MAX_WORK = 65536
 
 /**
