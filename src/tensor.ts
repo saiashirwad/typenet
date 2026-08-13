@@ -25,6 +25,7 @@ import { resolveView } from "./shape.ts"
 import type {
   Broadcast,
   BroadcastCheck,
+  BroadcastToCheck,
   Cat,
   CatCheck,
   CatN,
@@ -44,6 +45,8 @@ import type {
   ResizeDim,
   ResolveView,
   Shape,
+  Slice,
+  SliceShape,
   Squeeze,
   SqueezeDim,
   SqueezeDimCheck,
@@ -55,10 +58,11 @@ import type {
   ViewCheck,
 } from "./shape.ts"
 import {
-  arrayCtor,
   contiguousStrides,
+  convertData,
   type DType,
   normalizeDim,
+  type NumericArray,
   prod,
   shapesEqual,
   showShape,
@@ -106,15 +110,13 @@ export function makeRaw(
   return makeStorage({ kind: "cpu", data }, shape, dtype)
 }
 
-/** CPU tensor from a flat buffer, using the buffer as storage when it already matches `dtype`. */
+/** CPU tensor from a flat buffer, converted into `dtype`'s storage. */
 export function fromFlat<const Sh extends Shape>(
-  data: ArrayLike<number>,
+  data: ArrayLike<number> | ArrayLike<bigint>,
   shape: Sh,
   dtype: DType = "float32",
 ): Tensor<Sh> {
-  const ctor = arrayCtor(dtype)
-  const buf = data instanceof ctor ? data : ctor.from(data)
-  return makeRaw(buf, shape, dtype) as any
+  return makeRaw(convertData(data, dtype), shape, dtype) as any
 }
 
 export function makeStorage(
@@ -226,7 +228,7 @@ export class Tensor<S extends Shape> {
     this.dtype = dtype
   }
 
-  get data(): TypedArray {
+  get data(): NumericArray {
     if (isTracing()) {
       const label = tensorNames.get(this as AnyTensor)
       throw new Error(
@@ -237,7 +239,7 @@ export class Tensor<S extends Shape> {
     if (this.#cpu === null) {
       force(this as AnyTensor)
     }
-    return this.#cpu!
+    return this.#cpu as NumericArray
   }
 
   get needsGrad(): boolean {
@@ -370,7 +372,7 @@ export class Tensor<S extends Shape> {
     dtype: D,
   ): Tensor<S> {
     if (dtype === this.dtype) return this as any
-    const data = arrayCtor(dtype).from(this.data)
+    const data = convertData(this.data, dtype)
     return makeMovedData(this, data, dtype) as any
   }
 
@@ -848,6 +850,55 @@ export class Tensor<S extends Shape> {
     return rawOneHot(this, classes) as any
   }
 
+  /**
+   * Expand-only broadcast to `shape`. Unlike the binary ops, the target
+   * must be *exactly* what broadcasting this tensor against it yields —
+   * `[2, 3].broadcastTo([3])` is rejected even though the two shapes are
+   * mutually broadcastable.
+   */
+  broadcastTo<const V extends Shape>(
+    shape: V & BroadcastToCheck<S, V>,
+  ): Tensor<V> {
+    if (shapesEqual(this.shape, shape as number[])) {
+      return this as any
+    }
+    const out = rawBroadcastTo(
+      this as AnyTensor,
+      [...(shape as number[])],
+    )
+    return withGrad(out, "broadcastTo", [this], g => [
+      sumTo(g, [...this.shape]),
+    ]) as any
+  }
+
+  /**
+   * Multi-axis narrow. Each axis is a `number` (end index, from 0), a
+   * `[start, end]` window, or `null` / `undefined` to keep the dim. The
+   * spec must have one entry per axis.
+   */
+  slice<const Spec extends readonly Slice[]>(
+    spec: Spec & { length: S["length"] },
+  ): Tensor<SliceShape<S, Spec>> {
+    if (spec.length !== this.shape.length) {
+      throw new Error(
+        `slice() expects ${this.shape.length} entries, got ${spec.length}`,
+      )
+    }
+    let out: AnyTensor = this as AnyTensor
+    for (let d = 0; d < this.shape.length; d++) {
+      const c = spec[d]!
+      if (c == null) continue
+      const start = typeof c === "number" ? 0 : c[0]
+      const length = typeof c === "number" ? c : c[1] - c[0]
+      out = (out as Tensor<any>).narrow(
+        d,
+        start,
+        length,
+      ) as AnyTensor
+    }
+    return out as any
+  }
+
   narrow<L extends number>(
     dim: 0,
     start: number,
@@ -1246,7 +1297,7 @@ function coerce(
 ): AnyTensor {
   if (typeof value === "number") {
     return makeRaw(
-      arrayCtor(like.dtype).of(value),
+      convertData([value], like.dtype),
       [],
       like.dtype,
     )

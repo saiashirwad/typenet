@@ -50,6 +50,17 @@ export function DimMul<const A extends number, const B extends number>(a: A, b: 
   return (a * b) as any
 }
 
+export type DimSub<A extends number, B extends number> =
+    IsExact<B, 0> extends true ? A
+  : number extends A ? number
+  : number extends B ? number
+  : Call<Numbers.Sub<A, B>> extends infer R extends number ? R
+  : number
+
+export function DimSub<const A extends number, const B extends number>(a: A, b: B): DimSub<A, B> {
+  return (a - b) as any
+}
+
 type NumDiv<A extends number, B extends number> =
     IsExact<B, 1> extends true ? A
   : number extends A ? number
@@ -238,6 +249,17 @@ export type BroadcastCheck<A extends Shape, B extends Shape> = CanBroadcast<A, B
   ? ErrorMessage<`Cannot broadcast ${ShowShape<A>} with ${ShowShape<B>}`>
   : unknown
 
+/**
+ * Public `broadcastTo` needs an *expand-only* check: `CanBroadcast` is
+ * symmetric, so `CanBroadcast<[2, 3], [3]>` is true and would let a
+ * `[2, 3]` tensor broadcast *down* to `[3]`. The target must be exactly
+ * what broadcasting the source against it yields.
+ */
+export type BroadcastToCheck<S extends Shape, V extends Shape> =
+    CanBroadcast<S, V> extends false ? ErrorMessage<`Cannot broadcast ${ShowShape<S>} to ${ShowShape<V>}`>
+  : IsExact<Broadcast<S, V>, V> extends false ? ErrorMessage<`broadcastTo target ${ShowShape<V>} is not a broadcast of ${ShowShape<S>}`>
+  : unknown
+
 export type DimEq<X extends number, Y extends number> =
     IsExact<X, Y> extends true ? true
   : IsExact<X, number> extends true ? true
@@ -424,6 +446,25 @@ export type ResizeDim<S extends Shape, D extends number, L extends number> =
       number extends I ? number[]
     : ReplaceAt<S, I, L>
   : never
+
+/** One axis of a `slice` spec: an end index (from 0), a `[start, end]` window, or keep-the-dim. */
+export type Slice = number | readonly [number, number] | null | undefined
+
+type SliceSize<C, D extends number> =
+    C extends null | undefined ? D
+  : C extends number ? C
+  : C extends readonly [infer Start extends number, infer End extends number] ? DimSub<End, Start>
+  : never
+
+/**
+ * `slice` folds {@link ResizeDim} over the axes: a `number` is an end
+ * index (the resulting length is that number), `[start, end]` is a
+ * window of length `end - start`, and `null` / `undefined` leave the
+ * dim unchanged.
+ */
+export type SliceShape<S extends Shape, Spec extends readonly Slice[]> = {
+  [K in keyof S]: SliceSize<Spec[K & keyof Spec], S[K] & number>
+}
 
 export type Stack<S extends Shape, N extends number, D extends number> =
     IsDynamic<S> extends true ? number[]
@@ -626,6 +667,24 @@ export function resizeDim(
   length: number,
 ): number[] {
   return shape.map((s, i) => (i === dim ? length : s))
+}
+
+/** Value twin of {@link SliceShape}. */
+export function sliceShape(
+  shape: readonly number[],
+  spec: readonly Slice[],
+): number[] {
+  if (spec.length !== shape.length) {
+    throw new Error(
+      `slice() expects ${shape.length} entries, got ${spec.length}`,
+    )
+  }
+  return shape.map((s, i) => {
+    const c = spec[i]
+    if (c == null) return s
+    if (typeof c === "number") return c
+    return c[1] - c[0]
+  })
 }
 
 /** Value twin of {@link Permute}. `order` must already be normalized. */

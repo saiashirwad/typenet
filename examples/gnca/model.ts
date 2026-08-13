@@ -39,8 +39,8 @@ export function graphTensors<
   // and `nodes` is typed `N`, so `fromFlat` reads the tuple types
   // straight off the shape literals.
   return {
-    src: fromFlat(edges.src, [edges.count]),
-    dst: fromFlat(edges.dst, [edges.count]),
+    src: fromFlat(edges.src, [edges.count], "int32"),
+    dst: fromFlat(edges.dst, [edges.count], "int32"),
     nodes,
     invDegree: fromFlat(invDegree, [nodes, 1]),
     logDegree: fromFlat(logDegree, [nodes, 1]),

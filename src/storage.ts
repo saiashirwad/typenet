@@ -1,11 +1,14 @@
 import type { AnyTensor } from "./tensor.ts"
 
-export type DType = "float32" | "float64"
+export type DType = "float32" | "float64" | "int32" | "int64"
 
 export type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
 import type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
 
-export type TypedArray = Float32Array | Float64Array
+export type TypedArray = Float32Array | Float64Array | Int32Array | BigInt64Array
+
+/** Typed arrays that store JS numbers; int64 storage is {@link BigInt64Array}. */
+export type NumericArray = Float32Array | Float64Array | Int32Array
 
 type CpuStorage = {
   readonly kind: "cpu"
@@ -87,8 +90,43 @@ type TensorStorage = CpuStorage | LazyStorage
 
 export type { CpuStorage, LazyNode, LazyNodeBody, LazyStorage, TensorStorage }
 
-function arrayCtor(dtype: DType) {
-  return dtype === "float64" ? Float64Array : Float32Array
+function arrayCtor(
+  dtype: DType,
+): Float32ArrayConstructor | Float64ArrayConstructor | Int32ArrayConstructor {
+  switch (dtype) {
+    case "float64":
+      return Float64Array
+    case "int32":
+      return Int32Array
+    case "int64":
+      throw new Error(
+        "arrayCtor: int64 storage is built by convertData()",
+      )
+    default:
+      return Float32Array
+  }
+}
+
+/**
+ * Element data converted to `dtype`'s storage. BigInt boundaries need an
+ * explicit map (`BigInt64Array.from` refuses plain numbers, and the
+ * reverse refuses bigints); a non-integral value into int64 throws,
+ * matching the integer-storage contract.
+ */
+function convertData(
+  data: ArrayLike<number> | ArrayLike<bigint>,
+  dtype: DType,
+): TypedArray {
+  if (dtype === "int64") {
+    return BigInt64Array.from(
+      data as ArrayLike<number | bigint>,
+      v => BigInt(v),
+    )
+  }
+  const ctor = arrayCtor(dtype)
+  return data instanceof BigInt64Array
+    ? ctor.from(Array.from(data, Number))
+    : ctor.from(data as ArrayLike<number>)
 }
 
 function prod(xs: readonly number[]): number {
@@ -149,4 +187,4 @@ function normalizeDim(
   return d
 }
 
-export { arrayCtor, broadcastStrides, contiguousStrides, normalizeDim, prod, shapesEqual, showShape }
+export { arrayCtor, broadcastStrides, contiguousStrides, convertData, normalizeDim, prod, shapesEqual, showShape }

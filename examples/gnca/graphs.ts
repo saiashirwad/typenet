@@ -11,11 +11,12 @@ export interface Points {
 
 /**
  * A directed edge list, both directions present. `src[i] -> dst[i]`.
- * Held as float32 because that is what typenet index tensors are.
+ * Held as int32 — typenet's index dtype — so a graph's edge lists feed
+ * `indexSelect` / `scatterAdd` directly.
  */
 export interface Edges<E extends number = number> {
-  readonly src: Float32Array
-  readonly dst: Float32Array
+  readonly src: Int32Array
+  readonly dst: Int32Array
   readonly count: E
 }
 
@@ -84,8 +85,8 @@ function fromPairs(pairs: Set<number>, n: number): Edges {
     both.push(a * n + b, b * n + a)
   }
   both.sort((x, y) => x - y)
-  const src = new Float32Array(both.length)
-  const dst = new Float32Array(both.length)
+  const src = new Int32Array(both.length)
+  const dst = new Int32Array(both.length)
   both.forEach((key, i) => {
     src[i] = Math.floor(key / n)
     dst[i] = key % n
@@ -157,8 +158,8 @@ export function batchEdges(
   nodes: number,
 ): Edges {
   const count = edges.count * batch
-  const src = new Float32Array(count)
-  const dst = new Float32Array(count)
+  const src = new Int32Array(count)
+  const dst = new Int32Array(count)
   for (let b = 0; b < batch; b++) {
     const offset = b * nodes
     const at = b * edges.count

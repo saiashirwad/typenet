@@ -2,7 +2,7 @@ import { isNativeEnabled, sgemmNative } from "./backends/native.ts"
 import { applyBinary, applyUnary, getActiveSeed, randomData } from "./kernels.ts"
 import type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
 import { broadcastShapes, catShape, matmulShape, reduceShape, resizeDim } from "./shape.ts"
-import { arrayCtor, broadcastStrides, contiguousStrides, type DType, prod, shapesEqual } from "./storage.ts"
+import { arrayCtor, broadcastStrides, contiguousStrides, type DType, prod, shapesEqual, type TypedArray } from "./storage.ts"
 import { type AnyTensor, makeRaw } from "./tensor.ts"
 
 // ---------------------------------------------------------------------------
@@ -350,15 +350,23 @@ export function evalRandomEager(
   )
 }
 
-// `index` holds integral values in a float
-// tensor — typenet has no integer dtype, and a float32 mantissa
-// addresses 16.7M rows exactly.
+// `index` holds integral values. typenet's integer dtypes (`int32` /
+// `int64`) store them directly; a float index (the pre-integer default)
+// addresses 16.7M rows exactly, the f32 mantissa limit.
 
 function checkIndex(
-  value: number,
+  value: number | bigint,
   limit: number,
   what: string,
 ): number {
+  if (typeof value === "bigint") {
+    if (value < 0n || value >= BigInt(limit)) {
+      throw new Error(
+        `${what}: index ${value} out of range for ${limit} rows`,
+      )
+    }
+    return Number(value)
+  }
   if (
     !Number.isInteger(value)
     || value < 0
@@ -384,7 +392,7 @@ export function evalIndexSelectEager(
   const dimSize = a.shape[dim]!
   const out = new (arrayCtor(a.dtype))(prod(outShape))
   const ad = a.data
-  const id = index.data
+  const id = index.data as TypedArray
   let o = 0
   for (let i = 0; i < outer; i++) {
     for (let j = 0; j < length; j++) {
@@ -412,7 +420,7 @@ export function evalScatterAddEager(
   const srcLength = a.shape[dim]!
   const out = new (arrayCtor(a.dtype))(prod(outShape))
   const ad = a.data
-  const id = index.data
+  const id = index.data as TypedArray
   for (let i = 0; i < outer; i++) {
     for (let j = 0; j < srcLength; j++) {
       const to = (i * length

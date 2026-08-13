@@ -130,8 +130,8 @@ export function keepEdges(
   for (let i = 0; i < edges.count; i++) {
     if (keep[i]) kept.push(i)
   }
-  const src = new Float32Array(kept.length)
-  const dst = new Float32Array(kept.length)
+  const src = new Int32Array(kept.length)
+  const dst = new Int32Array(kept.length)
   kept.forEach((e, i) => {
     src[i] = edges.src[e]!
     dst[i] = edges.dst[e]!

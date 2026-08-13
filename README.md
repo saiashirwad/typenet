@@ -75,12 +75,12 @@ pnpm example:gat      # graph attention network
 
 ## What the type system tracks
 
-| Property     | Mechanism                                                        |
-| ------------ | ---------------------------------------------------------------- |
-| shape        | tuple of literals: `Tensor<[32, 784]>`                           |
-| dynamic dims | `number` is a wildcard: `Tensor<[number, 784]>` takes any batch  |
-| dtype        | `"float32"` (default) or `"float64"`, via `.to("float64")`       |
-| gradients    | `.requiresGrad()` returns a new taped leaf over the same storage |
+| Property     | Mechanism                                                                   |
+| ------------ | --------------------------------------------------------------------------- |
+| shape        | tuple of literals: `Tensor<[32, 784]>`                                      |
+| dynamic dims | `number` is a wildcard: `Tensor<[number, 784]>` takes any batch             |
+| dtype        | `"float32"` (default), `"float64"`, `"int32"`, or `"int64"`, via `.to(...)` |
+| gradients    | `.requiresGrad()` returns a new taped leaf over the same storage            |
 
 The shape algebra lives in `src/shape.ts` (types only): `Broadcast`, `MatMul` (dot, mat-vec, vec-mat, batched), `ResolveView` (reshape with `-1`), `Transpose`/`Permute`/`Squeeze`/`Unsqueeze`, `ReduceDim`, `Stack`, `Cat`. Errors say what went wrong: `Cannot view tensor of shape [2, 3] as [7, 2] (6 vs 14 elements)`.
 
@@ -186,6 +186,8 @@ a.transpose(0, 2)
 a.permute(2, 0, 1)
 a.T
 a.narrow(1, 0, 4)
+a.slice([2, [1, 3], null]) // number = end, [start, end], null = keep
+a.broadcastTo([8, 3]) // expand-only
 Tensor.stack([a, b], 0)
 Tensor.cat(a, b, 1)
 
@@ -232,8 +234,10 @@ const aggregated = messages
   .mul(invDegree)
 ```
 
-Index tensors hold integral values in `float32` — there is no integer
-dtype, and an f32 mantissa addresses 16.7M rows exactly.
+Index tensors hold integral values — use `int32` / `int64` tensors
+(`fromFlat(new Int32Array(...), [n], "int32")` or `.to("int32")`), which
+are exact across the full integer range. `float32` indices remain legal
+for compatibility; an f32 mantissa addresses 16.7M rows exactly.
 
 `examples/gnca` is a full application of this: a graph cellular automaton
 that grows a pattern from one seed node and heals after damage, ported
@@ -268,10 +272,12 @@ Metal's `index_select`/`index_add` kernels are slow and such graphs are
 made of many small dispatches. Reach for `"gpu"` when a workload is
 dominated by large elementwise tensors.
 
-The native path handles float32 tensors with CPU-resident leaves only.
-With native enabled, a graph with a float64 leaf (or any leaf that is
-not a plain CPU buffer) throws instead of silently falling back to the
-JS interpreter — keep the graph in float32 or call `disableNative()`.
+The native path handles float32 compute with CPU-resident leaves.
+`int32` / `int64` leaves are allowed as gather/scatter indices (read as
+their native width, so they have no f32 mantissa limit). With native
+enabled, a graph with a float64 leaf — or an integer leaf used as a
+compute operand — throws instead of silently falling back to the JS
+interpreter: keep the graph in float32 or call `disableNative()`.
 Set `TYPENET_CHECK_SHAPES=1` to make the Rust side recompute every node
 shape and assert it matches what JS serialized.
 

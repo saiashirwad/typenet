@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { Tensor } from "../src/tensor.ts"
+import { fromFlat, Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
@@ -214,6 +214,157 @@ describe("narrow", () => {
     )
     expect(() => rows().narrow(0, -1, 2)).toThrow(
       /out of range/,
+    )
+  })
+})
+
+describe("slice", () => {
+  const grid = () =>
+    tensor([
+      [1, 2, 3, 4],
+      [5, 6, 7, 8],
+      [9, 10, 11, 12],
+    ])
+
+  it("slices each axis: number, [start, end], null", () => {
+    expect(grid().slice([2, [1, 3]]).toArray()).toEqual([
+      [2, 3],
+      [6, 7],
+    ])
+    expect(grid().slice([null, 2]).toArray()).toEqual([
+      [1, 2],
+      [5, 6],
+      [9, 10],
+    ])
+    expect(grid().slice([3, undefined]).toArray()).toEqual([
+      [1, 2, 3, 4],
+      [5, 6, 7, 8],
+      [9, 10, 11, 12],
+    ])
+  })
+
+  it("agrees across eager, lazy and native", () => {
+    expectAgree(() => grid().slice([2, [1, 3]]).mul(2))
+  })
+
+  it("rejects a spec with the wrong length", () => {
+    expect(() => rows().slice([1] as any)).toThrow(
+      /slice\(\) expects 2 entries, got 1/,
+    )
+  })
+})
+
+describe("broadcastTo", () => {
+  it("expands a smaller shape to a larger one", () => {
+    expect(tensor([1, 2, 3]).broadcastTo([2, 3]).toArray())
+      .toEqual([
+        [1, 2, 3],
+        [1, 2, 3],
+      ])
+    expect(tensor([[1], [2]]).broadcastTo([2, 3]).toArray())
+      .toEqual([
+        [1, 1, 1],
+        [2, 2, 2],
+      ])
+  })
+
+  it("returns the same tensor for an identical shape", () => {
+    const a = tensor([1, 2, 3])
+    expect(a.broadcastTo([3])).toBe(a)
+  })
+
+  it("rejects a target that is not an expansion", () => {
+    expect(() =>
+      (tensor([[1, 2], [3, 4]]) as any)
+        .broadcastTo([2])
+        .toArray()
+    ).toThrow(/is not a broadcast of/)
+  })
+
+  it("agrees across eager, lazy and native", () => {
+    expectAgree(() =>
+      tensor([1, 2, 3])
+        .broadcastTo([2, 3])
+        .mul(tensor([[1], [2]]))
+        .sum(0)
+    )
+  })
+
+  it("carries gradients back through the broadcast", () => {
+    const x = tensor([1, 2, 3]).requiresGrad()
+    const y = x.broadcastTo([2, 3]).sum()
+    y.backward()
+    expect(x.grad!.toArray()).toEqual([2, 2, 2])
+  })
+})
+
+describe("integer index tensors", () => {
+  it("gathers with an int32 index", () => {
+    const idx = fromFlat(
+      new Int32Array([2, 0, 2]),
+      [3],
+      "int32",
+    )
+    expect(rows().indexSelect(idx).toArray()).toEqual([
+      [5, 6],
+      [1, 2],
+      [5, 6],
+    ])
+  })
+
+  it("gathers with an int64 index", () => {
+    const idx = fromFlat([2n, 0n, 2n], [3], "int64")
+    expect(rows().indexSelect(idx).toArray()).toEqual([
+      [5, 6],
+      [1, 2],
+      [5, 6],
+    ])
+  })
+
+  it("scatters with an int32 index", () => {
+    const idx = fromFlat(
+      new Int32Array([1, 1, 0, 3]),
+      [4],
+      "int32",
+    )
+    expect(rows().scatterAdd(idx, 4).toArray()).toEqual([
+      [5, 6],
+      [4, 6],
+      [0, 0],
+      [7, 8],
+    ])
+  })
+
+  it("agrees across eager, lazy and native", () => {
+    expectAgree(() => {
+      const src = fromFlat(
+        new Int32Array([3, 1, 1, 0]),
+        [4],
+        "int32",
+      )
+      const dst = fromFlat(
+        new Int32Array([2, 0, 2, 1]),
+        [4],
+        "int32",
+      )
+      return rows()
+        .indexSelect(src)
+        .mul(2)
+        .scatterAdd(dst, 4)
+    })
+  })
+
+  it("rejects an out-of-range int32 index", () => {
+    const idx = fromFlat(new Int32Array([0, 9]), [2], "int32")
+    expect(() => rows().indexSelect(idx).toArray()).toThrow(
+      /index 9 out of range for 4 rows/,
+    )
+  })
+
+  it("rejects an out-of-range int64 index", () => {
+    const idx = fromFlat([0n, 9n], [2], "int64")
+    expect(() => rows().indexSelect(idx).toArray()).toThrow(
+      /index 9 out of range for 4 rows/,
     )
   })
 })

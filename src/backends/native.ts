@@ -3,18 +3,18 @@ import { createRequire } from "node:module"
 export type NativeModule = {
   evalGraph(
     graphJson: string,
-    leaves: Float32Array,
+    leaves: Uint8Array,
     seed: number,
   ): ArrayBuffer
   prepareGraph(graphJson: string): number
   pinLeaf(
     handle: number,
     leaf: number,
-    data: Float32Array,
+    data: Uint8Array,
   ): void
   evalPrepared(
     handle: number,
-    dirty: Float32Array,
+    dirty: Uint8Array,
     dirtyIndex: Uint32Array,
     seed: number,
   ): ArrayBuffer
@@ -134,7 +134,7 @@ function withNative<T>(
  */
 export function evalGraphNative(
   graphJson: string,
-  leaves: Float32Array,
+  leaves: Uint8Array,
   seed: number,
 ): Float32Array {
   return withNative(mod => new Float32Array(mod.evalGraph(graphJson, leaves, seed >>> 0)))
@@ -149,14 +149,14 @@ export function prepareGraphNative(
 export function pinLeafNative(
   handle: number,
   leaf: number,
-  data: Float32Array,
+  data: Uint8Array,
 ): void {
   withNative(mod => mod.pinLeaf(handle, leaf, data))
 }
 
 export function evalPreparedNative(
   handle: number,
-  dirty: Float32Array,
+  dirty: Uint8Array,
   dirtyIndex: Uint32Array,
   seed: number,
 ): Float32Array {

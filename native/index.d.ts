@@ -2,7 +2,7 @@
 /* eslint-disable */
 export declare function deviceName(): string
 
-export declare function evalGraph(graphJson: string, leaves: Float32Array, seed: number): Readback
+export declare function evalGraph(graphJson: string, leaves: Uint8Array, seed: number): Readback
 
 /**
  * Evaluate a plan: overlay the dirty leaves (packed in increasing leaf
@@ -10,10 +10,10 @@ export declare function evalGraph(graphJson: string, leaves: Float32Array, seed:
  * are single-threaded, so holding the handle lock through the
  * evaluation cannot deadlock; rayon workers never touch the handle map.
  */
-export declare function evalPrepared(handle: number, dirty: Float32Array, dirtyIndex: Uint32Array, seed: number): Readback
+export declare function evalPrepared(handle: number, dirty: Uint8Array, dirtyIndex: Uint32Array, seed: number): Readback
 
 /** Copy a leaf's current values into the handle's pinned buffer. */
-export declare function pinLeaf(handle: number, leaf: number, data: Float32Array): void
+export declare function pinLeaf(handle: number, leaf: number, data: Uint8Array): void
 
 /**
  * How many prepared-graph handles are currently held. Used by tests to

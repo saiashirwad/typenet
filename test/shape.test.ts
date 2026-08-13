@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest"
-import { broadcastShapes, broadcastToShape, catShape, matmulShape, permuteShape, reduceShape, resizeDim, resolveView } from "../src/shape.ts"
+import {
+  broadcastShapes,
+  broadcastToShape,
+  catShape,
+  matmulShape,
+  permuteShape,
+  reduceShape,
+  resizeDim,
+  resolveView,
+  sliceShape,
+} from "../src/shape.ts"
 import {
   BROADCAST_CASES,
   BROADCAST_FAIL_CASES,
@@ -12,6 +22,7 @@ import {
   PERMUTE_CASES,
   REDUCE_CASES,
   RESIZE_CASES,
+  SLICE_CASES,
   VIEW_CASES,
   VIEW_FAIL_CASES,
 } from "./shape-cases.ts"
@@ -56,6 +67,10 @@ describe("runtime shape functions agree with the case table", () => {
 
   it.each(RESIZE_CASES)("resize %j", c => {
     expect(resizeDim(c.s, c.dim, c.length)).toEqual(c.out)
+  })
+
+  it.each(SLICE_CASES)("slice %j", c => {
+    expect(sliceShape(c.s, c.spec)).toEqual(c.out)
   })
 
   it.each(PERMUTE_CASES)("permute %j", c => {

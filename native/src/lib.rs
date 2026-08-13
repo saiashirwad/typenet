@@ -50,6 +50,11 @@ enum Node {
         leaf: usize,
         offset: usize,
         shape: Vec<usize>,
+        /// "float32" (default) | "int32" | "int64". Integer leaves are
+        /// only legal as gather/scatter indices; the JS side enforces
+        /// that and packs every leaf as its native bytes.
+        #[serde(default)]
+        dtype: Option<String>,
     },
     Binary {
         kind: String,
@@ -187,6 +192,120 @@ impl Target {
 
 fn prod(shape: &[usize]) -> usize {
     shape.iter().product()
+}
+
+/// The storage type of a leaf. Compute leaves are `F32`; integer leaves
+/// (`I32` / `I64`) feed gather/scatter indices and are read as their
+/// native width, so no f32 mantissa limit applies to them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LeafTy {
+    F32,
+    I32,
+    I64,
+}
+
+impl LeafTy {
+    fn parse(dtype: Option<&str>) -> candle_core::Result<Self> {
+        match dtype.unwrap_or("float32") {
+            "float32" => Ok(LeafTy::F32),
+            "int32" => Ok(LeafTy::I32),
+            "int64" => Ok(LeafTy::I64),
+            other => Err(candle_core::Error::Msg(format!(
+                "unsupported leaf dtype {other}"
+            ))),
+        }
+    }
+
+    fn size(self) -> usize {
+        match self {
+            LeafTy::F32 | LeafTy::I32 => 4,
+            LeafTy::I64 => 8,
+        }
+    }
+}
+
+/// The byte slice of one leaf, bounds-checked against the buffer.
+fn leaf_bytes<'a>(
+    leaves: &'a [u8],
+    leaf: usize,
+    offset: usize,
+    n: usize,
+    width: usize,
+) -> candle_core::Result<&'a [u8]> {
+    let len = n.checked_mul(width).ok_or_else(|| {
+        candle_core::Error::Msg(format!("leaf {leaf} byte size overflows"))
+    })?;
+    let end = offset.checked_add(len).ok_or_else(|| {
+        candle_core::Error::Msg(format!("leaf {leaf} byte range overflows"))
+    })?;
+    leaves.get(offset..end).ok_or_else(|| {
+        candle_core::Error::Msg(format!(
+            "leaf {leaf} needs {len} bytes at offset {offset}, have {}",
+            leaves.len()
+        ))
+    })
+}
+
+/// Read a leaf as f32. Integer leaves are converted exactly — the loop
+/// evaluator only runs graphs below the element cap, so their row
+/// indices are far below f32's 16.7M exact-integer limit.
+fn read_leaf_f32(
+    leaves: &[u8],
+    leaf: usize,
+    offset: usize,
+    n: usize,
+    ty: LeafTy,
+) -> candle_core::Result<Vec<f32>> {
+    let bytes = leaf_bytes(leaves, leaf, offset, n, ty.size())?;
+    let mut out = Vec::with_capacity(n);
+    match ty {
+        LeafTy::F32 => {
+            for c in bytes.chunks_exact(4) {
+                out.push(f32::from_ne_bytes([c[0], c[1], c[2], c[3]]));
+            }
+        }
+        LeafTy::I32 => {
+            for c in bytes.chunks_exact(4) {
+                out.push(i32::from_ne_bytes([c[0], c[1], c[2], c[3]]) as f32);
+            }
+        }
+        LeafTy::I64 => {
+            for c in bytes.chunks_exact(8) {
+                let b: [u8; 8] = c.try_into().unwrap();
+                out.push(i64::from_ne_bytes(b) as f32);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn read_leaf_i32(
+    leaves: &[u8],
+    leaf: usize,
+    offset: usize,
+    n: usize,
+) -> candle_core::Result<Vec<i32>> {
+    let bytes = leaf_bytes(leaves, leaf, offset, n, 4)?;
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|c| i32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+        .collect())
+}
+
+fn read_leaf_i64(
+    leaves: &[u8],
+    leaf: usize,
+    offset: usize,
+    n: usize,
+) -> candle_core::Result<Vec<i64>> {
+    let bytes = leaf_bytes(leaves, leaf, offset, n, 8)?;
+    Ok(bytes
+        .chunks_exact(8)
+        .map(|c| {
+            let b: [u8; 8] = c.try_into().unwrap();
+            i64::from_ne_bytes(b)
+        })
+        .collect())
 }
 
 /// Indices of the nodes a node directly reads.
@@ -1068,8 +1187,8 @@ fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
 /// lists, targets) never change.
 struct HandleState {
     prep: Arc<PreparedGraph>,
-    leaves: Vec<f32>,
-    /// (offset, numel) per JSON `leaf` index.
+    leaves: Vec<u8>,
+    /// (byte offset, byte length) per JSON `leaf` index.
     offsets: Vec<(usize, usize)>,
 }
 
@@ -1084,13 +1203,23 @@ fn leaf_offsets(prep: &PreparedGraph) -> (Vec<(usize, usize)>, usize) {
     let mut offsets: Vec<(usize, usize)> = Vec::new();
     let mut total = 0usize;
     for node in &prep.graph.nodes {
-        if let Node::Leaf { leaf, offset, shape } = node {
+        if let Node::Leaf {
+            leaf,
+            offset,
+            shape,
+            dtype,
+        } = node
+        {
             let numel = prod(shape);
+            let bytes = numel
+                * LeafTy::parse(dtype.as_deref())
+                    .unwrap_or(LeafTy::F32)
+                    .size();
             if offsets.len() <= *leaf {
                 offsets.resize(*leaf + 1, (0, 0));
             }
-            offsets[*leaf] = (*offset, numel);
-            total = total.max(*offset + numel);
+            offsets[*leaf] = (*offset, bytes);
+            total = total.max(*offset + bytes);
         }
     }
     (offsets, total)
@@ -1108,7 +1237,7 @@ pub fn prepare_graph(graph_json: String) -> Result<u32> {
         handle,
         HandleState {
             prep,
-            leaves: vec![0.0; total],
+            leaves: vec![0u8; total],
             offsets,
         },
     );
@@ -1117,7 +1246,7 @@ pub fn prepare_graph(graph_json: String) -> Result<u32> {
 
 /// Copy a leaf's current values into the handle's pinned buffer.
 #[napi(js_name = "pinLeaf")]
-pub fn pin_leaf(handle: u32, leaf: u32, data: Float32Array) -> Result<()> {
+pub fn pin_leaf(handle: u32, leaf: u32, data: Uint8Array) -> Result<()> {
     let mut map = handles().lock().unwrap();
     let state = map.get_mut(&handle).ok_or_else(|| {
         Error::new(
@@ -1125,17 +1254,17 @@ pub fn pin_leaf(handle: u32, leaf: u32, data: Float32Array) -> Result<()> {
             format!("unknown prepared graph {handle}"),
         )
     })?;
-    let (offset, numel) = *state
+    let (offset, bytes) = *state
         .offsets
         .get(leaf as usize)
         .ok_or_else(|| Error::new(Status::InvalidArg, format!("unknown leaf {leaf}")))?;
-    if data.len() != numel {
+    if data.len() != bytes {
         return Err(Error::new(
             Status::InvalidArg,
-            format!("leaf {leaf} expects {numel} values, got {}", data.len()),
+            format!("leaf {leaf} expects {bytes} bytes, got {}", data.len()),
         ));
     }
-    state.leaves[offset..offset + numel].copy_from_slice(&data);
+    state.leaves[offset..offset + bytes].copy_from_slice(&data);
     Ok(())
 }
 
@@ -1159,7 +1288,7 @@ pub fn prepared_graph_count() -> u32 {
 #[napi(js_name = "evalPrepared")]
 pub fn eval_prepared(
     handle: u32,
-    dirty: Float32Array,
+    dirty: Uint8Array,
     dirty_index: Uint32Array,
     seed: u32,
 ) -> Result<Readback> {
@@ -1172,17 +1301,17 @@ pub fn eval_prepared(
     })?;
     let mut cursor = 0usize;
     for &leaf in dirty_index.iter() {
-        let (offset, numel) = *state.offsets.get(leaf as usize).ok_or_else(|| {
+        let (offset, bytes) = *state.offsets.get(leaf as usize).ok_or_else(|| {
             Error::new(Status::InvalidArg, format!("unknown dirty leaf {leaf}"))
         })?;
-        let chunk = dirty.get(cursor..cursor + numel).ok_or_else(|| {
+        let chunk = dirty.get(cursor..cursor + bytes).ok_or_else(|| {
             Error::new(
                 Status::InvalidArg,
                 format!("dirty buffer too short for leaf {leaf}"),
             )
         })?;
-        state.leaves[offset..offset + numel].copy_from_slice(chunk);
-        cursor += numel;
+        state.leaves[offset..offset + bytes].copy_from_slice(chunk);
+        cursor += bytes;
     }
     evaluate(&state.prep, &state.leaves, seed)
 }
@@ -1484,7 +1613,7 @@ fn exec_group(plan: &GroupPlan, inputs_slices: &[&[f32]]) -> Vec<f32> {
 
 /// Whole-graph execution from a prepared plan: leaf copies + raw loops,
 /// no parsing or planning. Returns all roots concatenated.
-fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Result<Vec<f32>> {
+fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Result<Vec<f32>> {
     let graph = &prep.graph;
     let n = graph.nodes.len();
     let mut buffers: Vec<Option<Buf>> = (0..n).map(|_| None).collect();
@@ -1547,18 +1676,12 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
                 leaf,
                 offset,
                 shape,
+                dtype,
             } => {
                 let n = prod(shape);
+                let ty = LeafTy::parse(dtype.as_deref())?;
                 Buf::owned(
-                    leaves
-                        .get(*offset..*offset + n)
-                        .ok_or_else(|| {
-                            candle_core::Error::Msg(format!(
-                                "leaf {leaf} needs {n} f32 values at offset {offset}, have {}",
-                                leaves.len()
-                            ))
-                        })?
-                        .to_vec(),
+                    read_leaf_f32(leaves, *leaf, *offset, n, ty)?,
                     shape.clone(),
                 )
             }
@@ -2258,8 +2381,10 @@ fn eval_one_hot(classes: usize, a: &Tensor) -> candle_core::Result<Tensor> {
     targets.eq(&range)?.to_dtype(DType::F32)
 }
 
-/// typenet has no integer dtype, so index tensors arrive as f32 holding
-/// integral values. candle's gather/scatter kernels want U32.
+/// Index tensors arrive as f32 (integral values, exact to 16.7M rows)
+/// or as int32/int64 (exact across the full integer range). candle's
+/// gather/scatter kernels want U32, so cast; the integer paths skip the
+/// f32 mantissa limit entirely.
 fn index_u32(index: &Tensor) -> candle_core::Result<Tensor> {
     index.contiguous()?.flatten_all()?.to_dtype(DType::U32)
 }
@@ -2291,10 +2416,23 @@ fn op_kind(node: &Node) -> &str {
 /// the leaf buffer. Constants coerced from JS numbers land here, and
 /// reading them this way costs nothing — no device readback, since the
 /// leaf buffer is host memory that has not been uploaded yet.
-fn scalar_leaf(graph: &Graph, leaves: &[f32], at: usize) -> Option<f32> {
+fn scalar_leaf(graph: &Graph, leaves: &[u8], at: usize) -> Option<f32> {
     match &graph.nodes[at] {
-        Node::Leaf { offset, shape, .. } if prod(shape) == 1 => {
-            leaves.get(*offset).copied()
+        Node::Leaf {
+            leaf,
+            offset,
+            shape,
+            dtype,
+        } if prod(shape) == 1 => {
+            // Only f32 one-element leaves are constant-folded; an int
+            // scalar never lands here (indices are never constants).
+            if LeafTy::parse(dtype.as_deref()).ok()? != LeafTy::F32 {
+                return None;
+            }
+            let bytes = leaf_bytes(leaves, *leaf, *offset, 1, 4).ok()?;
+            Some(f32::from_ne_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3],
+            ]))
         }
         _ => None,
     }
@@ -2314,7 +2452,7 @@ fn cached_index(
 
 fn run_graph(
     prep: &PreparedGraph,
-    leaves: &[f32],
+    leaves: &[u8],
     device: &Device,
     seed: u32,
 ) -> candle_core::Result<Vec<Tensor>> {
@@ -2325,8 +2463,8 @@ fn run_graph(
     let mut remaining = prep.consumers.clone();
     let mut outputs: Vec<Option<Tensor>> = (0..n).map(|_| None).collect();
     // Index tensors are read several times per rolled-out step — once per
-    // gather or scatter — and each read would otherwise re-run the f32 to
-    // u32 cast. Convert once and keep it for as long as the f32 original
+    // gather or scatter — and each read would otherwise re-run the dtype
+    // cast to u32. Convert once and keep it for as long as the original
     // is alive.
     let mut indices: Vec<Option<Tensor>> = (0..n).map(|_| None).collect();
     // Rows of ones for the gemv-style sums below, one per width needed.
@@ -2352,15 +2490,27 @@ fn run_graph(
                 leaf,
                 offset,
                 shape,
+                dtype,
             } => {
                 let n = prod(shape);
-                let data = leaves.get(*offset..*offset + n).ok_or_else(|| {
-                    candle_core::Error::Msg(format!(
-                        "leaf {leaf} needs {n} f32 values at offset {offset}, have {}",
-                        leaves.len()
-                    ))
-                })?;
-                Tensor::from_vec(data.to_vec(), shape.clone(), device)?
+                let ty = LeafTy::parse(dtype.as_deref())?;
+                match ty {
+                    LeafTy::F32 => Tensor::from_vec(
+                        read_leaf_f32(leaves, *leaf, *offset, n, ty)?,
+                        shape.clone(),
+                        device,
+                    )?,
+                    LeafTy::I32 => Tensor::from_vec(
+                        read_leaf_i32(leaves, *leaf, *offset, n)?,
+                        shape.clone(),
+                        device,
+                    )?,
+                    LeafTy::I64 => Tensor::from_vec(
+                        read_leaf_i64(leaves, *leaf, *offset, n)?,
+                        shape.clone(),
+                        device,
+                    )?,
+                }
             }
             Node::Binary {
                 kind,
@@ -2604,7 +2754,7 @@ fn vec_readback(mut vec: Vec<f32>) -> Readback {
 }
 
 #[napi(js_name = "evalGraph")]
-pub fn eval_graph(graph_json: String, leaves: Float32Array, seed: u32) -> Result<Readback> {
+pub fn eval_graph(graph_json: String, leaves: Uint8Array, seed: u32) -> Result<Readback> {
     let prep = prepared(&graph_json)?;
     evaluate(&prep, &leaves, seed)
 }
@@ -2701,7 +2851,7 @@ pub fn sgemm_entry(
 }
 
 /// Run a prepared graph on the evaluator it was planned for.
-fn evaluate(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> Result<Readback> {
+fn evaluate(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> Result<Readback> {
     let target = forced_target().unwrap_or(prep.target);
     if target == Target::Loops {
         let data = execute(prep, leaves, seed).map_err(to_napi_err)?;

@@ -53,8 +53,8 @@ export function checkpointGraph(checkpoint: Checkpoint): {
       dim: checkpoint.dim,
     },
     edges: {
-      src: Float32Array.from(checkpoint.edges.src),
-      dst: Float32Array.from(checkpoint.edges.dst),
+      src: Int32Array.from(checkpoint.edges.src),
+      dst: Int32Array.from(checkpoint.edges.dst),
       count: checkpoint.edges.src.length,
     },
   }

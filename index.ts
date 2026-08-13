@@ -23,10 +23,11 @@ export type { AdamOptions, SGDOptions } from "./src/optim.ts"
 // arithmetic on literal dims, the function returns it at runtime, so a
 // constructor width like `DimAdd(DimMul(3, channels), 1)` carries its
 // derived type with no cast.
-export { DimAdd, DimMul } from "./src/shape.ts"
+export { DimAdd, DimMul, DimSub } from "./src/shape.ts"
 export type {
   Broadcast,
   BroadcastCheck,
+  BroadcastToCheck,
   CanBroadcast,
   Cat,
   ErrorMessage,
@@ -39,6 +40,8 @@ export type {
   ResizeDim,
   ResolveView,
   Shape,
+  Slice,
+  SliceShape,
   Squeeze,
   Stack,
   Transpose,

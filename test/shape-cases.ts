@@ -59,6 +59,12 @@ export const RESIZE_CASES = [
   { s: [8, 16] as [8, 16], dim: 1 as const, length: 4 as const, out: [8, 4] as [8, 4] },
 ] as const
 
+export const SLICE_CASES = [
+  { s: [4, 5] as [4, 5], spec: [2, 3] as [2, 3], out: [2, 3] as [2, 3] },
+  { s: [4, 5] as [4, 5], spec: [null, [1, 3]] as [null, [1, 3]], out: [4, 2] as [4, 2] },
+  { s: [3, 7, 2] as [3, 7, 2], spec: [undefined, [2, 5], 1] as [undefined, [2, 5], 1], out: [3, 3, 1] as [3, 3, 1] },
+] as const
+
 export const PERMUTE_CASES = [
   {
     s: [2, 3, 4] as [2, 3, 4],

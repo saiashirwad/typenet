@@ -12,13 +12,14 @@ import type {
   ReduceDim,
   ResizeDim,
   ResolveView,
+  SliceShape,
   Squeeze,
   Stack,
   Transpose,
   Unsqueeze,
 } from "../src/shape.ts"
 import { fromFlat, Tensor } from "../src/tensor.ts"
-import { BROADCAST_CASES, CAT_CASES, MATMUL_CASES, PERMUTE_CASES, REDUCE_CASES, RESIZE_CASES, VIEW_CASES } from "./shape-cases.ts"
+import { BROADCAST_CASES, CAT_CASES, MATMUL_CASES, PERMUTE_CASES, REDUCE_CASES, RESIZE_CASES, SLICE_CASES, VIEW_CASES } from "./shape-cases.ts"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
   <T>() => T extends B ? 1 : 2
@@ -114,6 +115,16 @@ type _tr0 = Expect<
     ResizeDim<RCase[0]["s"], RCase[0]["dim"], RCase[0]["length"]>,
     RCase[0]["out"]
   >
+>
+type SCase = typeof SLICE_CASES
+type _ts0 = Expect<
+  Equal<SliceShape<SCase[0]["s"], SCase[0]["spec"]>, SCase[0]["out"]>
+>
+type _ts1 = Expect<
+  Equal<SliceShape<SCase[1]["s"], SCase[1]["spec"]>, SCase[1]["out"]>
+>
+type _ts2 = Expect<
+  Equal<SliceShape<SCase[2]["s"], SCase[2]["spec"]>, SCase[2]["out"]>
 >
 type PCase = typeof PERMUTE_CASES
 type _tp0 = Expect<
@@ -216,6 +227,25 @@ function _tensors() {
       >
     >
   >
+
+  const sliced = randn([4, 5, 6]).slice([2, [1, 4], null])
+  type _18 = Expect<Equal<typeof sliced.shape, [2, 3, 6]>>
+
+  const bcastTo = tensor([1, 2, 3]).broadcastTo([2, 3])
+  type _19 = Expect<Equal<typeof bcastTo.shape, [2, 3]>>
+
+  const bcastRank = a.broadcastTo([2, 2, 3])
+  type _20 = Expect<Equal<typeof bcastRank.shape, [2, 2, 3]>>
+
+  // @ts-expect-error [2, 3] does not broadcast down to [3]
+  a.broadcastTo([3])
+
+  // @ts-expect-error [2, 3] and [4] cannot broadcast
+  a.broadcastTo([4, 3])
+
+  // slice needs one entry per axis
+  // @ts-expect-error rank 2 needs two entries
+  a.slice([2])
 }
 
 function _nn() {

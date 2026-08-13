@@ -14,7 +14,7 @@ import {
   evalScatterAddEager,
   evalUnaryEager,
 } from "./eager.ts"
-import { isLazyMode, nodeInputs, type SerializedNode, serializeNode, setLazyMode, topoOrder } from "./ir.ts"
+import { isLazyMode, nodeInputs, OP_DESC, type SerializedNode, serializeNode, setLazyMode, topoOrder } from "./ir.ts"
 import { nextSeed, reseed, setActiveSeed } from "./kernels.ts"
 import { type CpuStorage, type LazyNode, type LazyStorage, prod, showShape } from "./storage.ts"
 import { _internal, type AnyTensor } from "./tensor.ts"
@@ -195,7 +195,7 @@ function pickTarget(work: number): "loops" | "cpu" | "gpu" {
 
 function serializeLazyGraph(roots: AnyTensor[]): {
   json: string
-  leaves: Float32Array
+  leaves: Uint8Array
   rootShapes: number[][]
   leafTensors: AnyTensor[]
   leafOffsets: number[]
@@ -204,9 +204,12 @@ function serializeLazyGraph(roots: AnyTensor[]): {
   const order = topoOrder(roots)
   const nodes: SerializedNode[] = []
   const index = new Map<AnyTensor, number>()
-  const leafData: Float32Array[] = []
+  const leafChunks: Uint8Array[] = []
   const leafTensors: AnyTensor[] = []
   const leafOffsets: number[] = []
+  // Integer leaves may only feed gather/scatter `index` slots; compute
+  // leaves stay f32. Kept as node indices for the post-pass below.
+  const intLeaves = new Set<number>()
   let leafBytes = 0
   let work = 0
 
@@ -214,27 +217,36 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     index.set(t, nodes.length)
     const source = _internal.sourceOf(t)
     if (source.kind !== "lazy" || _internal.hasValue(t)) {
-      if (t.dtype !== "float32") {
-        // Native is f32-on-CPU-leaves only. This used to fall back to
-        // the JS interpreter silently; with native enabled that is a
+      if (t.dtype === "float64") {
+        // Native compute is f32-only. This used to fall back to the JS
+        // interpreter silently; with native enabled that is a
         // performance surprise, so it is now an error.
         throw new Error(
           `native backend requires float32 CPU leaves; got a ${t.dtype} leaf. `
             + "Keep the graph in float32 or call disableNative().",
         )
       }
-      const data = (_internal.cpuOf(t)
-        ?? (source as CpuStorage).data) as Float32Array
+      const data = _internal.cpuOf(t)
+        ?? (source as CpuStorage).data
+      const bytes = new Uint8Array(
+        data.buffer,
+        data.byteOffset,
+        data.byteLength,
+      )
       nodes.push({
         op: "leaf",
         leaf: leafTensors.length,
         offset: leafBytes,
         shape: [...t.shape],
+        dtype: t.dtype,
       })
-      leafData.push(data)
+      if (t.dtype !== "float32") {
+        intLeaves.add(nodes.length - 1)
+      }
+      leafChunks.push(bytes)
       leafTensors.push(t)
       leafOffsets.push(leafBytes)
-      leafBytes += data.length
+      leafBytes += bytes.length
       work += data.length
       continue
     }
@@ -245,14 +257,35 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     nodes.push(serializeNode(node, u => index.get(u)!))
   }
 
+  // Integer leaves are gather/scatter indices only. A compute op that
+  // reads one would either error in candle or silently convert through
+  // the loop evaluator, so reject it up front.
+  for (const node of nodes) {
+    if (node.op === "leaf") continue
+    const op = node.op as keyof typeof OP_DESC
+    for (const slot of OP_DESC[op].tensors) {
+      if (
+        (op === "indexSelect" || op === "scatterAdd")
+        && slot === "index"
+      ) {
+        continue
+      }
+      const ref = node[slot] as number
+      if (intLeaves.has(ref)) {
+        throw new Error(
+          `native backend: an integer leaf must feed a gather/scatter index, but one feeds ${op}`,
+        )
+      }
+    }
+  }
+
   const rootIndices = roots.map(root => index.get(root)!)
   const rootShapes = roots.map(root => [...root.shape])
-  const total = leafData.reduce((n, d) => n + d.length, 0)
-  const leaves = new Float32Array(total)
+  const leaves = new Uint8Array(leafBytes)
   let offset = 0
-  for (const d of leafData) {
-    leaves.set(d, offset)
-    offset += d.length
+  for (const chunk of leafChunks) {
+    leaves.set(chunk, offset)
+    offset += chunk.length
   }
   return {
     json: JSON.stringify({
@@ -330,10 +363,15 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
     planRegistry.register(plan, handle, plan)
     forcePlans.set(first, plan)
   }
-  const dirty = new Float32Array(plan!.leafBytes)
+  const dirty = new Uint8Array(plan!.leafBytes)
   plan!.leafTensors.forEach((t, i) => {
+    const data = _internal.cpuOf(t)!
     dirty.set(
-      _internal.cpuOf(t) as Float32Array,
+      new Uint8Array(
+        data.buffer,
+        data.byteOffset,
+        data.byteLength,
+      ),
       plan!.leafOffsets[i]!,
     )
   })

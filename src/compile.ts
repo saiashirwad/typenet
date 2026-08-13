@@ -295,14 +295,18 @@ export function compile<
     ;(buffer as Float32Array).set(values)
   }
 
-  const pinnedBuffer = (leaf: AnyTensor): Float32Array => {
+  const pinnedBytes = (leaf: AnyTensor): Uint8Array => {
     const buffer = _internal.cpuOf(leaf)
     if (buffer === null) {
       throw new Error(
         "compiled function: a captured tensor is not CPU storage — compiled graphs require captured leaves (e.g. parameters) to stay put",
       )
     }
-    return buffer as Float32Array
+    return new Uint8Array(
+      buffer.buffer,
+      buffer.byteOffset,
+      buffer.byteLength,
+    )
   }
 
   const runNative = (state: State): AnyTensor[] => {
@@ -320,7 +324,7 @@ export function compile<
         nativeBackend.pinLeafNative(
           native.handle!,
           i,
-          pinnedBuffer(leaf),
+          pinnedBytes(leaf),
         )
       )
       const resent = new Set<AnyTensor>([
@@ -335,14 +339,14 @@ export function compile<
     const dirtyIndex = Uint32Array.from(native.dirty!)
     let dirtyLength = 0
     for (const i of native.dirty!) {
-      dirtyLength += pinnedBuffer(native.leafTensors[i]!).length
+      dirtyLength += pinnedBytes(native.leafTensors[i]!).length
     }
-    const dirty = new Float32Array(dirtyLength)
+    const dirty = new Uint8Array(dirtyLength)
     let cursor = 0
     for (const i of native.dirty!) {
-      const buffer = pinnedBuffer(native.leafTensors[i]!)
-      dirty.set(buffer, cursor)
-      cursor += buffer.length
+      const bytes = pinnedBytes(native.leafTensors[i]!)
+      dirty.set(bytes, cursor)
+      cursor += bytes.length
     }
     const data = nativeBackend.evalPreparedNative(
       native.handle,
