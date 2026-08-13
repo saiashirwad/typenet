@@ -71,6 +71,15 @@ function cloneParams(params: AnyTensor[]): AnyTensor[] {
   })
 }
 
+describe("optimizer dtype validation", () => {
+  it("rejects integer parameters", () => {
+    const i32 = tensor([1, 2, 3]).to("int32").requiresGrad()
+    const i64 = tensor([1, 2, 3]).to("int64").requiresGrad()
+    expect(() => new SGD([i32], { lr: 0.1 })).toThrow(/float32 or float64/)
+    expect(() => new Adam([i64], { lr: 0.1 })).toThrow(/float32 or float64/)
+  })
+})
+
 describe("optimizer in the lazy graph", () => {
   it("lazy SGD (momentum + weight decay) tracks eager across steps", () => {
     const eager = makeNet()

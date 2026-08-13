@@ -197,6 +197,11 @@ export abstract class Optimizer {
           "Optimizer received a tensor without requiresGrad",
         )
       }
+      if (p.dtype === "int32" || p.dtype === "int64") {
+        throw new Error(
+          `Optimizer cannot use ${p.dtype} parameters — parameters must be float32 or float64, integer storage cannot hold gradient updates`,
+        )
+      }
     }
   }
 
