@@ -1,11 +1,6 @@
 import { createRequire } from "node:module"
 
 export type NativeModule = {
-  evalGraph(
-    graphJson: string,
-    leaves: Uint8Array,
-    seed: number,
-  ): ArrayBuffer
   prepareGraph(graphJson: string): number
   pinLeaf(
     handle: number,
@@ -125,19 +120,6 @@ function withNative<T>(
       `native backend: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
-}
-
-/**
- * `seed` drives any random nodes in the graph; it is an argument rather
- * than part of the JSON so that replaying a graph keeps hitting the
- * same prepared plan.
- */
-export function evalGraphNative(
-  graphJson: string,
-  leaves: Uint8Array,
-  seed: number,
-): Float32Array {
-  return withNative(mod => new Float32Array(mod.evalGraph(graphJson, leaves, seed >>> 0)))
 }
 
 export function prepareGraphNative(

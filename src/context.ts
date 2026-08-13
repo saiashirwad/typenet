@@ -4,7 +4,7 @@ import { rngState, setRngState } from "./kernels.ts"
 
 /**
  * The runtime knobs as one structured view, with save/patch/restore
- * scoping — the same stack pattern as `noGrad` / `lazily`, not
+ * scoping — the same stack pattern as `noGrad` / `eagerly`, not
  * AsyncLocalStorage (the library is synchronous). `configure()` mutates
  * the same underlying state as a script-level default; `withContext`
  * scopes a change to a callback and puts everything back.

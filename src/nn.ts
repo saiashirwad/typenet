@@ -60,18 +60,6 @@ export class Linear<
   }
 }
 
-export interface Layer<
-  In extends number,
-  Out extends number,
-> {
-  readonly inFeatures?: In
-  readonly outFeatures?: Out
-
-  forward<B extends number>(
-    x: Tensor<[B, NoInfer<In>]>,
-  ): Tensor<[B, NoInfer<Out>]>
-}
-
 class Activation extends Module {
   constructor(
     private readonly apply: (x: AnyTensor) => AnyTensor,
@@ -203,16 +191,16 @@ type ChainCheck<
     : never
   : unknown
 
-// L is deliberately NOT bounded by `Layer<number, number>`: Tensor is
-// invariant in S, so `Linear<2, 16>` would not be assignable to it and
-// every real call would be rejected. ChainCheck does the real work.
+// L is deliberately unconstrained: Tensor is invariant in S, so bounding
+// it to a rank-2 layer type would make `Linear<2, 16>` unassignable and
+// reject every real call. ChainCheck does the real work.
 export function sequential<
   const L extends readonly unknown[],
 >(
   ...layers: L & ChainCheck<L>
 ): Sequential<L>
 export function sequential(
-  ...layers: Layer<any, any>[]
+  ...layers: readonly { readonly inFeatures?: number; readonly outFeatures?: number }[]
 ): Sequential<readonly unknown[]> {
   let prevOut: number | undefined
   layers.forEach((l, i) => {

@@ -46,16 +46,6 @@ function eagerly<T>(fn: () => T): T {
   }
 }
 
-function lazily<T>(fn: () => T): T {
-  const prev = isLazyMode()
-  setLazyMode(true)
-  try {
-    return fn()
-  } finally {
-    setLazyMode(prev)
-  }
-}
-
 /**
  * One IR node, replayed through the eager kernels. Inputs are forced
  * first, so this never re-enters the dispatchers or flips the mode
@@ -412,4 +402,4 @@ export function forceMany(ts: AnyTensor[]): void {
   for (const t of ts) force(t)
 }
 
-export { eagerly, force, lazily, serializeLazyGraph }
+export { eagerly, force, serializeLazyGraph }

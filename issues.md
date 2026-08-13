@@ -12,10 +12,10 @@ Check the box when the fix lands (one commit per item, lowercase messages).
   `step()`, an `int32` param silently truncates, and `finishGraphUpdates`
   papers over it with `(u.target.data as Float32Array)`. Fixed by rejecting
   `int32`/`int64` params in the `Optimizer` constructor with a clear error.
-- [ ] **`leaf_offsets` swallows unknown leaf dtype.** `native/src/lib.rs:1213-1217`
+- [x] **`leaf_offsets` swallows unknown leaf dtype.** `native/src/lib.rs:1213-1217`
   — `LeafTy::parse(...).unwrap_or(LeafTy::F32)` masks the "unsupported leaf
   dtype" error every other call site propagates with `?`. Fix: `LeafTy::parse(...)?`.
-- [ ] **`Target::parse` silently falls back to CPU.** `native/src/lib.rs:188`
+- [x] **`Target::parse` silently falls back to CPU.** `native/src/lib.rs:188`
   — `_ => Target::Cpu` turns a typo like `TYPENET_EVALUATOR=metal`/`=cuda` into
   a silent CPU run. Fix: error on unknown non-empty hints.
 - [ ] **`Adam.dispose()` leaves the optimizer unusable.** `src/optim.ts:432-438`
@@ -26,20 +26,20 @@ Check the box when the fix lands (one commit per item, lowercase messages).
 
 ## Tier 2 — dead code (safe deletions)
 
-- [ ] **Dead Rust structural ops.** `native/src/lib.rs:2173-2231` — `tiny_broadcast_to`,
+- [x] **Dead Rust structural ops.** `native/src/lib.rs:2173-2231` — `tiny_broadcast_to`,
   `tiny_permute`, `tiny_narrow` are never used (the loop evaluator does these as
   zero-copy `Buf` metadata rewrites). Delete them.
-- [ ] **Dead `lazily()`.** `src/lazy.ts:49` (exported at `:415`) is never called;
+- [x] **Dead `lazily()`.** `src/lazy.ts:49` (exported at `:415`) is never called;
   only `eagerly` is used.
-- [ ] **Dead `evalGraphNative()`.** `src/backends/native.ts:135` plus the one-shot
+- [x] **Dead `evalGraphNative()`.** `src/backends/native.ts:135` plus the one-shot
   `evalGraph` NAPI binding are unused — the path uses `prepareGraphNative` +
   `evalPreparedNative`.
-- [ ] **Vestigial `Layer` interface.** `src/nn.ts:63-73` (re-exported at `index.ts:18`)
+- [x] **Vestigial `Layer` interface.** `src/nn.ts:63-73` (re-exported at `index.ts:18`)
   — nothing implements it, and its rank-2-only `forward` contradicts `Linear`.
   Remove it or make `Linear`/`Activation` actually implement it.
-- [ ] **Dead test helper.** `test/optim-graph.test.ts:66-72` — `cloneParams` is
+- [x] **Dead test helper.** `test/optim-graph.test.ts:66-72` — `cloneParams` is
   never called.
-- [ ] **Dead import.** `test/random.test.ts:4` — `tensor` imported but unused.
+- [x] **Dead import.** `test/random.test.ts:4` — `tensor` imported but unused.
 
 ## Tier 3 — stale comments / docs
 
@@ -48,7 +48,7 @@ Check the box when the fix lands (one commit per item, lowercase messages).
 - [ ] **"use `Math.random`".** `src/lazy.ts:24-28` — `configure({ seed })` says it
   does not affect `Tensor.rand`/`randn`, "which use `Math.random`". Wrong: they
   draw from the seeded hash generator and `configure({seed})` reseeds them.
-- [ ] **Misattached doc comment.** `native/src/lib.rs:2282-2286` — a `///` block
+- [x] **Misattached doc comment.** `native/src/lib.rs:2282-2286` — a `///` block
   about "this stub remains…" now documents `reinsert_dim`; there is no stub.
 - [ ] **Garbled `sent_shape` doc.** `native/src/lib.rs:349-351` — first line
   describes the previous function `node_shapes`.

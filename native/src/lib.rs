@@ -181,11 +181,14 @@ enum Target {
 }
 
 impl Target {
-    fn parse(hint: Option<&str>) -> Self {
+    fn parse(hint: Option<&str>) -> candle_core::Result<Self> {
         match hint {
-            Some("loops") => Target::Loops,
-            Some("gpu") => Target::Accelerator,
-            _ => Target::Cpu,
+            None | Some("cpu") => Ok(Target::Cpu),
+            Some("loops") => Ok(Target::Loops),
+            Some("gpu") => Ok(Target::Accelerator),
+            Some(other) => Err(candle_core::Error::Msg(format!(
+                "unknown evaluator {other} (expected loops | cpu | gpu)"
+            ))),
         }
     }
 }
@@ -1133,7 +1136,7 @@ impl PreparedGraph {
             ));
         }
 
-        let target = Target::parse(graph.device.as_deref());
+        let target = Target::parse(graph.device.as_deref())?;
 
         Ok(PreparedGraph {
             graph,
@@ -1199,7 +1202,7 @@ fn handles() -> &'static Mutex<HashMap<u32, HandleState>> {
     PLAN_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn leaf_offsets(prep: &PreparedGraph) -> (Vec<(usize, usize)>, usize) {
+fn leaf_offsets(prep: &PreparedGraph) -> candle_core::Result<(Vec<(usize, usize)>, usize)> {
     let mut offsets: Vec<(usize, usize)> = Vec::new();
     let mut total = 0usize;
     for node in &prep.graph.nodes {
@@ -1211,10 +1214,7 @@ fn leaf_offsets(prep: &PreparedGraph) -> (Vec<(usize, usize)>, usize) {
         } = node
         {
             let numel = prod(shape);
-            let bytes = numel
-                * LeafTy::parse(dtype.as_deref())
-                    .unwrap_or(LeafTy::F32)
-                    .size();
+            let bytes = numel * LeafTy::parse(dtype.as_deref())?.size();
             if offsets.len() <= *leaf {
                 offsets.resize(*leaf + 1, (0, 0));
             }
@@ -1222,14 +1222,14 @@ fn leaf_offsets(prep: &PreparedGraph) -> (Vec<(usize, usize)>, usize) {
             total = total.max(*offset + bytes);
         }
     }
-    (offsets, total)
+    Ok((offsets, total))
 }
 
 /// Parse and plan a graph once, returning a handle for `evalPrepared`.
 #[napi(js_name = "prepareGraph")]
 pub fn prepare_graph(graph_json: String) -> Result<u32> {
     let prep = prepared(&graph_json)?;
-    let (offsets, total) = leaf_offsets(&prep);
+    let (offsets, total) = leaf_offsets(&prep).map_err(to_napi_err)?;
     let mut next = NEXT_HANDLE.lock().unwrap();
     let handle = *next;
     *next += 1;
@@ -2170,66 +2170,6 @@ fn tiny_reduce_all(kind: &str, data: &[f32]) -> candle_core::Result<Vec<f32>> {
     }
 }
 
-fn tiny_broadcast_to(data: &[f32], from: &[usize], to: &[usize]) -> Vec<f32> {
-    let strides = broadcast_strides(from, to);
-    let same = from == to;
-    let mut out = vec![0f32; prod(to)];
-    over_chunks(&mut out, |base, slice| {
-        let mut coords = vec![0usize; to.len()];
-        for (k, dst) in slice.iter_mut().enumerate() {
-            let i = base + k;
-            flat_to_coords(i, to, &mut coords);
-            *dst = read_bcast(data, &strides, same, i, &coords);
-        }
-    });
-    out
-}
-
-fn tiny_permute(data: &[f32], shape: &[usize], order: &[usize]) -> Vec<f32> {
-    let in_strides = row_major_strides(shape);
-    let out_shape: Vec<usize> = order.iter().map(|&d| shape[d]).collect();
-    // Output coords -> input index via the permuted input strides.
-    let strides: Vec<usize> = order.iter().map(|&d| in_strides[d]).collect();
-    let mut out = vec![0f32; prod(&out_shape)];
-    over_chunks(&mut out, |base, slice| {
-        let mut coords = vec![0usize; out_shape.len()];
-        for (k, dst) in slice.iter_mut().enumerate() {
-            let i = base + k;
-            flat_to_coords(i, &out_shape, &mut coords);
-            let mut idx = 0usize;
-            for j in 0..coords.len() {
-                idx += coords[j] * strides[j];
-            }
-            *dst = data[idx];
-        }
-    });
-    out
-}
-
-/// A window along one dim is a run of contiguous blocks, so this is a
-/// series of copies rather than a per-element index computation.
-fn tiny_narrow(data: &[f32], shape: &[usize], dim: usize, start: usize, length: usize) -> Vec<f32> {
-    let inner = row_major_strides(shape)[dim];
-    let outer = prod(&shape[..dim]);
-    let rows = shape[dim];
-    let block = length * inner;
-    let mut out = vec![0f32; outer * block];
-    let copy = |i: usize, out: &mut [f32]| {
-        let from = (i * rows + start) * inner;
-        out.copy_from_slice(&data[from..from + block]);
-    };
-    if out.len() < PARALLEL_MIN {
-        out.chunks_mut(block.max(1))
-            .enumerate()
-            .for_each(|(i, out)| copy(i, out));
-    } else {
-        out.par_chunks_mut(block.max(1))
-            .enumerate()
-            .for_each(|(i, out)| copy(i, out));
-    }
-    out
-}
-
 /// Likewise a concatenation: each output slice along `dim` is one block
 /// from each side, copied whole.
 fn tiny_cat(
@@ -2278,11 +2218,6 @@ fn tiny_one_hot(classes: usize, data: &[f32]) -> candle_core::Result<Vec<f32>> {
     }
     Ok(out)
 }
-
-/// Whole-graph evaluation on Vec<f32> buffers is plan/exec based — see
-/// PreparedGraph above. This stub remains only to keep the section
-/// structure obvious: eval_graph calls prepared() + execute().
-
 
 // Candle's dim-reductions (sum/max/min) squeeze the dim; typenet's
 // keepdim semantics require re-inserting it.
@@ -2753,12 +2688,6 @@ fn vec_readback(mut vec: Vec<f32>) -> Readback {
     }
 }
 
-#[napi(js_name = "evalGraph")]
-pub fn eval_graph(graph_json: String, leaves: Uint8Array, seed: u32) -> Result<Readback> {
-    let prep = prepared(&graph_json)?;
-    evaluate(&prep, &leaves, seed)
-}
-
 // ---------------------------------------------------------------------------
 // Op-kind profiling, off unless TYPENET_PROFILE is set. Wall time and
 // element counts per op kind, accumulated across evaluations and drained
@@ -2815,12 +2744,16 @@ pub fn take_profile() -> String {
 
 /// Overrides the JS side's evaluator choice, for measuring one against
 /// another: TYPENET_EVALUATOR=loops | cpu | gpu.
-fn forced_target() -> Option<Target> {
+fn forced_target() -> candle_core::Result<Option<Target>> {
     static CHOICE: OnceLock<Option<Target>> = OnceLock::new();
-    *CHOICE.get_or_init(|| match std::env::var("TYPENET_EVALUATOR") {
-        Ok(name) if !name.is_empty() => Some(Target::parse(Some(name.as_str()))),
+    if let Some(target) = CHOICE.get() {
+        return Ok(*target);
+    }
+    let parsed = match std::env::var("TYPENET_EVALUATOR") {
+        Ok(name) if !name.is_empty() => Target::parse(Some(name.as_str())).map(Some)?,
         _ => None,
-    })
+    };
+    Ok(*CHOICE.get_or_init(|| parsed))
 }
 
 /// Row-major C = A·B for one packed f32 pair — the eager fast path's
@@ -2852,7 +2785,7 @@ pub fn sgemm_entry(
 
 /// Run a prepared graph on the evaluator it was planned for.
 fn evaluate(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> Result<Readback> {
-    let target = forced_target().unwrap_or(prep.target);
+    let target = forced_target().map_err(to_napi_err)?.unwrap_or(prep.target);
     if target == Target::Loops {
         let data = execute(prep, leaves, seed).map_err(to_napi_err)?;
         return Ok(vec_readback(data));

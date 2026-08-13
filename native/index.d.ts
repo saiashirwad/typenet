@@ -2,8 +2,6 @@
 /* eslint-disable */
 export declare function deviceName(): string
 
-export declare function evalGraph(graphJson: string, leaves: Uint8Array, seed: number): Readback
-
 /**
  * Evaluate a plan: overlay the dirty leaves (packed in increasing leaf
  * index, listed by `dirty_index`) onto the pins, then run. JS callers

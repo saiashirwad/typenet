@@ -63,14 +63,6 @@ function makeNet() {
   return { x, y, params, forward, loss }
 }
 
-function cloneParams(params: AnyTensor[]): AnyTensor[] {
-  return params.map(p => {
-    const q = Tensor.zeros(p.shape) as AnyTensor
-    q.data.set(p.data)
-    return q.requiresGrad()
-  })
-}
-
 describe("optimizer dtype validation", () => {
   it("rejects integer parameters", () => {
     const i32 = tensor([1, 2, 3]).to("int32").requiresGrad()

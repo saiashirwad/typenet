@@ -15,7 +15,7 @@ export { disableNative, isNativeAvailable, isNativeEnabled, nativeDevice, native
 export { crossEntropy, LeakyReLU, Linear, Module, mseLoss, ReLU, sequential, Sigmoid, Softmax, Tanh } from "./src/nn.ts"
 // The Sequential *type* is public for annotations; construction goes
 // through sequential(...) only.
-export type { Layer, Sequential } from "./src/nn.ts"
+export type { Sequential } from "./src/nn.ts"
 export { Adam, clipGradNorm, Optimizer, SGD } from "./src/optim.ts"
 export type { AdamOptions, SGDOptions } from "./src/optim.ts"
 
