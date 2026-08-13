@@ -1,13 +1,3 @@
-// Eager typed-array loops: the raw* kernels that walk real bytes. Each
-// one checks `lazyMode` and either runs the CPU loop or records a lazy
-// graph node, which is the lazy/eager dispatch we have not yet deduped
-// (see the linked review item). That makes this module and lazy.ts
-// import each other — safe because the cross-calls only happen inside
-// function bodies, never at module load.
-//
-// reshapeRaw, rawRandom, and the public uniform/normal live here too:
-// they are the same kind of "build a tensor, maybe lazily" helpers.
-
 import { applyBinary, applyUnary, getActiveSeed, nextStream, randomData } from "./kernels.ts"
 import { lazyMode, makeLazy } from "./lazy.ts"
 import type { Shape } from "./shape.ts"
@@ -28,8 +18,6 @@ import {
 } from "./storage.ts"
 import { type AnyTensor, type DefaultParams, makeRaw, makeStorage, type Tensor } from "./tensor.ts"
 
-// Shared odometer for the three strided kernels: walk `shape` in
-// row-major order and keep one running offset per stride vector.
 function forEachStrided(
   shape: readonly number[],
   strideSets: readonly (readonly number[])[],
@@ -435,11 +423,6 @@ function rawRandom(
 /**
  * Uniform values in [0, 1), redrawn on every evaluation.
  *
- * Unlike {@link Tensor.rand}, which draws once and hands back fixed
- * data, this is a node in the graph: a compiled function gets fresh
- * numbers on every call, which is what a stochastic update rule needs.
- * In eager mode there is no graph to defer to, so it draws immediately.
- *
  * Seeded by `configure({ seed })`, not `Math.random`.
  */
 export function uniform<const Sh extends Shape>(
@@ -465,11 +448,7 @@ export function normal<const Sh extends Shape>(
   ) as any
 }
 
-// --- gather / scatter ---------------------------------------------
-// The two ops message passing on a graph is built from, and each
-// other's gradient: indexSelect reads row index[j] of the input into
-// row j of the output, scatterAdd sums row j of the input into row
-// index[j] of the output. `index` holds integral values in a float
+// `index` holds integral values in a float
 // tensor — typenet has no integer dtype, and a float32 mantissa
 // addresses 16.7M rows exactly.
 

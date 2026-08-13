@@ -1,13 +1,5 @@
 import { createRequire } from "node:module"
 
-/**
- * Optional Rust/candle backend (phase 2). The native addon is loaded
- * lazily via require() so the library keeps working when the .node
- * binary has not been built — a clear error is thrown only when
- * useNative() is called explicitly or a lazy graph is forced while
- * native mode is enabled.
- */
-
 export type NativeModule = {
   evalGraph(
     graphJson: string,
@@ -40,7 +32,6 @@ function loadNative(): NativeModule | null {
   return moduleCache
 }
 
-/** True when the @typenet/native addon is built and loadable. */
 export function isNativeAvailable(): boolean {
   return loadNative() !== null
 }
@@ -56,16 +47,8 @@ export function nativeDeviceMode(): "cpu" | "gpu" {
 }
 
 /**
- * Enable the native backend for lazy-graph evaluation. Throws when the
- * addon is not built; run `pnpm build:native` first. Only affects lazy
- * mode — eager execution is unchanged.
- *
- * `device` picks what non-tiny graphs run on: `"cpu"` (the default) is
- * candle's CPU device, which on macOS uses Accelerate for matmul;
- * `"gpu"` is the best accelerator available. CPU is the default because
- * it wins on the graph shapes typenet produces — see `pickTarget` in
- * src/tensor.ts for the measurements. Reach for `"gpu"` when a workload
- * is dominated by large elementwise tensors.
+ * Throws when the addon is not built; run `pnpm build:native` first.
+ * Only affects lazy mode — eager execution is unchanged.
  */
 export function useNative(
   options: { device?: "cpu" | "gpu" } = {},
@@ -82,7 +65,6 @@ export function useNative(
   nativeEnabled = true
 }
 
-/** Disable the native backend (lazy graphs use the interpreter). */
 export function disableNative(): void {
   nativeEnabled = false
 }
@@ -117,10 +99,9 @@ function withNative<T>(
 }
 
 /**
- * Evaluate a serialized lazy graph in one FFI hop. Internal — called
- * from force() in src/tensor.ts. `seed` drives any random nodes in the
- * graph; it is an argument rather than part of the JSON so that
- * replaying a graph keeps hitting the same prepared plan.
+ * `seed` drives any random nodes in the graph; it is an argument rather
+ * than part of the JSON so that replaying a graph keeps hitting the
+ * same prepared plan.
  */
 export function evalGraphNative(
   graphJson: string,
@@ -130,21 +111,12 @@ export function evalGraphNative(
   return withNative(mod => new Float32Array(mod.evalGraph(graphJson, leaves, seed >>> 0)))
 }
 
-/**
- * Parse and plan a graph once, returning a handle to evaluate it by.
- *
- * `compile()` replays one graph thousands of times; going through
- * `evalGraphNative` every call would ship the whole JSON across the FFI
- * boundary and hash it just to find the plan again, and for a rolled-out
- * automaton that string is hundreds of kilobytes.
- */
 export function prepareGraphNative(
   graphJson: string,
 ): number {
   return withNative(mod => mod.prepareGraph(graphJson))
 }
 
-/** Evaluate a graph prepared by {@link prepareGraphNative}. */
 export function evalPreparedNative(
   handle: number,
   leaves: Float32Array,
@@ -153,12 +125,11 @@ export function evalPreparedNative(
   return withNative(mod => new Float32Array(mod.evalPrepared(handle, leaves, seed >>> 0)))
 }
 
-/** Release a prepared graph. No-op when the addon is not loaded. */
+/** No-op when the addon is not loaded. */
 export function releaseGraphNative(handle: number): void {
   withNative(mod => mod.releaseGraph(handle), () => undefined)
 }
 
-/** How many prepared-graph handles the native side currently holds. */
 export function preparedGraphCountNative(): number {
   return withNative(mod => mod.preparedGraphCount(), () => 0)
 }

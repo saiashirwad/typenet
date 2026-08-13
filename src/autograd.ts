@@ -1,9 +1,3 @@
-// The autograd engine: a tape of GradNodes recorded on each op and
-// walked in reverse by Tensor.backward(). withGrad attaches a node only
-// when grad is enabled and some input needs grad. Depends on the
-// Tensor class only as a type (AnyTensor), so this layer has no runtime
-// edge upward.
-
 import type { AnyTensor } from "./tensor.ts"
 
 interface GradNode {
@@ -26,10 +20,7 @@ export function noGrad<T>(fn: () => T): T {
 }
 
 /**
- * Post-order traversal of the autograd tape behind `root`: every
- * tensor appears after the inputs it was computed from, so walking the
- * result in reverse visits each node only once its own gradient is
- * complete. Iterative for the same reason as `topoOrder` — the tape
+ * Iterative for the same reason as `topoOrder` — the tape
  * behind a long rollout is thousands of nodes deep.
  */
 function tapeOrder(root: AnyTensor): AnyTensor[] {

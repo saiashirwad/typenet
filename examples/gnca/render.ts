@@ -1,12 +1,3 @@
-// Draw node states as an SVG: one circle per node at its position, in its
-// own colour, at its own alpha. Enough to see whether the pattern grew and
-// whether a wound closed, which is the only question worth asking of a
-// checkpoint.
-//
-// The reference renders animated gifs with matplotlib. SVG needs no
-// dependency and a browser will animate a series of them; 3-d targets are
-// projected flat, sorted back to front.
-
 /** One frame: RGBA rows, flat, four floats per node. */
 export type Frame = Float32Array
 
@@ -17,11 +8,6 @@ const clamp01 = (v: number) =>
     ? 1
     : v
 
-/**
- * `frames` side by side, each `size` pixels across, with `labels`
- * underneath. Node radius scales with the graph so a 4096-node graph does
- * not turn into a solid disc.
- */
 export function renderSvg(
   positions: Float32Array,
   dim: number,
@@ -39,7 +25,6 @@ export function renderSvg(
   const gap = 12
   const labelRoom = labels.length > 0 ? 20 : 0
 
-  // Back to front in 3-d, so nearer nodes draw over farther ones.
   const order = Array.from({ length: n }, (_, i) => i)
   if (dim === 3) {
     order.sort(
@@ -84,7 +69,6 @@ export function renderSvg(
   )
 }
 
-/** The first four channels of a flat state, as a frame. */
 export function visible(
   state: Float32Array,
   nodes: number,

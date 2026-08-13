@@ -1,8 +1,3 @@
-// The graphs the cellular automaton lives on. Each builder returns node
-// positions plus an edge list, and nothing downstream cares which one it
-// came from: perception happens over edges, and positions only decide
-// who is a neighbor.
-//
 // Ported from ~/code/graph-cellular-automata/src/gnca/graphs.py.
 
 import { rng } from "./rng.ts"
@@ -45,18 +40,10 @@ function squaredDistance(
   return total
 }
 
-/**
- * k-nearest-neighbor graph over given positions, made bidirectional and
- * deduplicated. Works for anything with coordinates: random points, a
- * ring, a surface point cloud.
- */
 export function knnGraph(pos: Points, k = 8): Edges {
   const n = pos.n
   const neighbors = Math.min(k, n - 1)
-  // Undirected pairs, so an edge found from either end appears once.
   const pairs = new Set<number>()
-  // Selection of the k smallest distances per node: k passes over n is
-  // plenty at these sizes and needs no sort.
   const best = new Float64Array(neighbors)
   const bestAt = new Int32Array(neighbors)
   for (let i = 0; i < n; i++) {
@@ -106,10 +93,6 @@ function fromPairs(pairs: Set<number>, n: number): Edges {
   return { src, dst, count: both.length }
 }
 
-/**
- * Uniform random points in the unit cube with k-nearest-neighbor edges.
- * `dim` 2 gives a flat graph, 3 a solid one.
- */
 export function randomGeometricGraph(options: {
   nodes?: number
   k?: number
@@ -126,11 +109,6 @@ export function randomGeometricGraph(options: {
   return { pos, edges: knnGraph(pos, k) }
 }
 
-/**
- * Watts-Strogatz small-world graph: a ring lattice with a `beta` chance
- * of rewiring each edge into a shortcut. Growth spreads around the ring
- * and occasionally jumps across it. Positions are the ring itself.
- */
 export function wattsStrogatzGraph(options: {
   nodes?: number
   k?: number
@@ -154,7 +132,6 @@ export function wattsStrogatzGraph(options: {
     for (let d = 1; d <= k / 2; d++) {
       let j = (i + d) % nodes
       if (random.next() < beta) {
-        // any node but i
         j = random.int(nodes - 1)
         if (j >= i) j++
       }
@@ -165,7 +142,6 @@ export function wattsStrogatzGraph(options: {
   const data = new Float32Array(nodes * 2)
   for (let i = 0; i < nodes; i++) {
     const theta = (i / nodes) * 2 * Math.PI
-    // the unit circle mapped into [0, 1]^2
     data[i * 2] = (Math.cos(theta) + 1) / 2
     data[i * 2 + 1] = (Math.sin(theta) + 1) / 2
   }
@@ -175,10 +151,6 @@ export function wattsStrogatzGraph(options: {
   }
 }
 
-/**
- * Replicate an edge list `batch` times with node-index offsets, so one
- * graph op covers a batch of independent copies of the same graph.
- */
 export function batchEdges(
   edges: Edges,
   batch: number,
@@ -198,10 +170,6 @@ export function batchEdges(
   return { src, dst, count }
 }
 
-/**
- * In-degree of every node: how many edges point at it. The graph never
- * changes during a run, so this is computed once and passed in.
- */
 export function inDegrees(
   edges: Edges,
   nodes: number,
@@ -213,7 +181,6 @@ export function inDegrees(
   return degrees
 }
 
-/** Index of the node closest to `at`. Used to place the seed. */
 export function nearestNode(
   pos: Points,
   at: readonly number[],

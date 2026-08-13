@@ -1,13 +1,3 @@
-// Lazy graph machinery: build nodes, walk them, and materialize them
-// either with the TS interpreter or in one native FFI hop. Also owns
-// the lazy-mode flag and the configure()/eagerly()/lazily() dispatch
-// every raw* kernel consults.
-//
-// evalNode calls back into the eager raw* kernels to materialize a
-// node, while those same kernels call makeLazy here to record one —
-// the eager↔lazy cycle. It resolves at runtime because every cross
-// call sits inside a function body.
-
 import * as nativeBackend from "./backends/native.ts"
 import {
   rawBinary,
@@ -67,10 +57,6 @@ function lazily<T>(fn: () => T): T {
   }
 }
 
-// One descriptor per lazy op: tensor inputs, JSON fields, and how
-// printGraph names the node. nodeInputs / serializeLazyGraph /
-// printGraph all read this; evalNode stays a dispatch because it
-// calls a different raw* kernel per op.
 type TensorField = "a" | "b" | "input" | "index"
 type JsonField =
   | TensorField
@@ -201,7 +187,6 @@ function nodeInputs(node: LazyNode): AnyTensor[] {
   return OP_DESC[node.op].tensors.map(k => rec[k] as AnyTensor)
 }
 
-/** SSA-ish `op(inputs) {attrs}` used by printGraph. */
 function formatLazyOp(
   node: LazyNode,
   arg: (t: AnyTensor) => string,
@@ -386,12 +371,6 @@ function topoOrder(
   return order
 }
 
-/**
- * Evaluate `roots` and everything they depend on with the TS
- * interpreter, deepest node first. Walking in topological order means
- * each `evalNode` call finds its inputs already materialized, so the
- * `force()` calls inside it never recurse.
- */
 function evalInterpreted(roots: AnyTensor[]): void {
   // One seed per evaluation: every random node in this pass draws from
   // it, and the next pass over the same graph draws different numbers.
@@ -415,13 +394,6 @@ function force(t: AnyTensor): AnyTensor {
   ;(t as { _storage: TensorStorage })._storage = storage.cache!._storage
   return t
 }
-
-// --- native (candle) backend -------------------------------------
-// Serialize the whole lazy graph to JSON with leaves as indexed
-// placeholders, evaluate it natively in one FFI hop, and wrap the
-// result as a CPU tensor. Returns null when the graph is not
-// supported natively (float64) so force() falls back to the
-// interpreter.
 
 type SerializedNode = Record<string, unknown> & {
   op: string
@@ -464,18 +436,11 @@ function serializeLazyGraph(roots: AnyTensor[]): {
   const leafTensors: AnyTensor[] = []
   const leafOffsets: number[] = []
   let leafBytes = 0
-  // Rough work estimate (elements touched) — used to pin tiny graphs
-  // to the candle CPU device, where per-kernel Metal dispatch and
-  // readback overhead would dwarf the compute.
   let work = 0
 
   for (const t of order) {
     index.set(t, nodes.length)
     if (t._storage.kind !== "lazy") {
-      // A leaf: its data becomes one slice of the concatenated leaf
-      // buffer. Anything the native bridge cannot take (float64,
-      // non-CPU storage) aborts serialization so the caller falls
-      // back to the interpreter.
       if (
         t._storage.kind !== "cpu"
         || t.dtype !== "float32"
@@ -526,12 +491,6 @@ function serializeLazyGraph(roots: AnyTensor[]): {
   }
 }
 
-// Evaluate every root in one FFI hop. The roots share a single
-// serialized graph (memoized on tensor identity), so subexpressions
-// shared across roots are evaluated once natively. On success each
-// root's LazyStorage cache is filled with a CPU tensor viewing its
-// slice of the returned buffer and true is returned; force()/forceMany()
-// then do the usual in-place storage swap.
 function evalNativeMany(roots: AnyTensor[]): boolean {
   if (!nativeBackend.isNativeEnabled()) return false
   for (const t of roots) {
@@ -565,10 +524,6 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
   return true
 }
 
-// Force several lazy tensors, preferring a single multi-root native
-// eval. Falls back to forcing each tensor with the interpreter, whose
-// per-LazyStorage memoization still evaluates shared subgraphs once.
-// Exported for src/optim.ts (optimizer-in-graph forcing point).
 export function forceMany(ts: AnyTensor[]): void {
   const pending = ts.filter(t => {
     const storage = t._storage
@@ -577,11 +532,8 @@ export function forceMany(ts: AnyTensor[]): void {
   if (pending.length > 0 && !evalNativeMany(pending)) {
     evalInterpreted(pending)
   }
-  // Everything is materialized by now; force() only swaps storages in.
   for (const t of ts) force(t)
 }
 
 export { eagerly, force, formatLazyOp, lazily, lazyMode, makeLazy, serializeLazyGraph, topoOrder }
-// CpuStorage/LazyStorage are re-exported so compile.ts can narrow
-// storages without a second import hop back through tensor.ts.
 export type { CpuStorage, LazyStorage, TensorStorage }

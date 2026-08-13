@@ -11,22 +11,21 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
   : false
 type Expect<T extends true> = T
 
-// operator-form cross-broadcasts resolve with precise result shapes
-const _col = tensor([[1], [2]]) // Tensor<[2, 1]>
-const _rowVec = tensor([[10, 20, 30]]) // Tensor<[1, 3]>
-const _outer = _col + _rowVec // Tensor<[2, 3]>
+const _col = tensor([[1], [2]])
+const _rowVec = tensor([[10, 20, 30]])
+const _outer = _col + _rowVec
 type _op1 = Expect<Equal<typeof _outer.shape, [2, 3]>>
 
 const _a = tensor([
   [1, 2, 3],
   [4, 5, 6],
-]) // Tensor<[2, 3]>
-const _mixedRank = _a + tensor([1, 2, 3]) // [2,3] + [3] -> [2,3]
+])
+const _mixedRank = _a + tensor([1, 2, 3])
 type _op2 = Expect<Equal<typeof _mixedRank.shape, [2, 3]>>
 
-const _scalarRhs = _a * 2 // Tensor<[2, 3]>
+const _scalarRhs = _a * 2
 type _op3 = Expect<Equal<typeof _scalarRhs.shape, [2, 3]>>
-const _scalarLhs = 1 - _a // Tensor<[2, 3]>
+const _scalarLhs = 1 - _a
 type _op4 = Expect<Equal<typeof _scalarLhs.shape, [2, 3]>>
 
 // type-only: incompatible shapes must not resolve. Wrapped in an uncalled

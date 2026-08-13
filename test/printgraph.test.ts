@@ -35,7 +35,6 @@ describe("named + printGraph", () => {
     expect(out[3]).toBe(
       "%3 = mul(%2, %0) [4] float32 ; root",
     )
-    // idempotent: same tensor prints the same listing twice
     expect(printGraph(b)).toBe(out.join("\n"))
   })
 
@@ -59,7 +58,6 @@ describe("named + printGraph", () => {
     const q = shared.neg()
     const out = printGraph([p, q])
     const lines = out.split("\n")
-    // x and shared each appear exactly once
     expect(
       lines.filter(l => l.startsWith("x ")).length,
     ).toBe(1)
@@ -69,10 +67,8 @@ describe("named + printGraph", () => {
     expect(lines).toHaveLength(4)
     expect(out).toContain("exp(shared) [2, 2] float32")
     expect(out).toContain("neg(shared) [2, 2] float32")
-    // both roots marked
     expect(lines[2]).toContain("; root")
     expect(lines[3]).toContain("; root")
-    // shared is not a root
     expect(lines[1]).not.toContain("; root")
   })
 
@@ -88,14 +84,11 @@ describe("named + printGraph", () => {
     const x = Tensor.rand([2, 2]).named("x")
     x.requires_grad()
     const loss = x.mul(x).sum().named("loss")
-    // the forward graph is still lazy and prints with names
     const fwd = printGraph(loss)
     expect(fwd).toContain("x    = leaf [2, 2] float32")
     expect(fwd).toContain("mul(x, x) [2, 2] float32")
     expect(fwd).toContain("loss = reduceAll.sum(")
     loss.backward()
-    // lazy backward builds the grad as a lazy expression and forces
-    // it in one hop, so .grad prints as an honest leaf line
     expect(printGraph(x.grad!)).toBe(
       "%0 = leaf [2, 2] float32 ; root",
     )

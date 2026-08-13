@@ -1,8 +1,3 @@
-// Checkpoints have to round-trip a rule exactly, or a resumed run is a
-// different run — and the zero-padding warm start has to leave the loaded
-// rule functionally identical, which is the whole basis of the reference's
-// ablation ladder.
-
 import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -90,17 +85,12 @@ describe("checkpoints", () => {
     expect(Array.from(rebuilt.edges.src)).toEqual(
       Array.from(graph.edges.src),
     )
-    // and the graph really is the one k-NN would build from those points
     expect(
       Array.from(knnGraph(rebuilt.pos, 8).src),
     ).toEqual(Array.from(graph.edges.src))
   })
 
   it("warm-starts a wider percept without changing the rule", () => {
-    // A checkpoint whose first layer is narrower — the reference's case
-    // is a percept that gained the degree feature. Zero-padding the new
-    // input columns must leave the rule's output bit-identical, since a
-    // zero column contributes nothing.
     const narrow = new GraphNCA(8, 16)
     narrow.parameters().forEach((p, i) => {
       const data = p.data as Float32Array
@@ -111,7 +101,6 @@ describe("checkpoints", () => {
     const path = join(scratch, "narrow.json")
     saveCheckpoint(path, meta(1), narrow.parameters())
 
-    // Fake a wider model by growing only the first layer's input side.
     const wide = new GraphNCA(8, 16)
     const first = wide.parameters()[0]!
     const grown = Tensor.zeros([
@@ -127,7 +116,6 @@ describe("checkpoints", () => {
     for (let i = 0; i < saved.length; i++) {
       expect(loaded[i]).toBe(saved[i])
     }
-    // the padding really is zero
     for (let i = saved.length; i < loaded.length; i++) {
       expect(loaded[i]).toBe(0)
     }
@@ -190,7 +178,7 @@ describe("rendering", () => {
     const graphs = graphTensors(graph.edges, nodes)
     const model = new GraphNCA(8, 16)
     let x = Tensor.zeros([nodes, 8]) as AnyTensor
-    ;(x.data as Float32Array).fill(5) // deliberately out of range
+    ;(x.data as Float32Array).fill(5)
     configure({ lazy: true })
     x = model.forward(x, graphs, 1)
     configure({ lazy: false })
@@ -226,8 +214,6 @@ describe.skipIf(!haveBunny)("point clouds", () => {
     firstPos.forEach((v, i) => expect(cloud.pos.data[i]).toBeCloseTo(v, 6))
     firstRgba.forEach((v, i) => expect(cloud.target[i]).toBeCloseTo(v, 6))
 
-    // The longest axis fills [0.08, 0.92]; every node is on the surface,
-    // so alpha is 1 everywhere rather than a fraction of the graph.
     let lo = Infinity
     let hi = -Infinity
     for (let i = 0; i < cloud.pos.n; i++) {
@@ -250,7 +236,6 @@ describe.skipIf(!haveBunny)("point clouds", () => {
       expect(cloud.pos.data[i]).toBeGreaterThanOrEqual(0)
       expect(cloud.pos.data[i]).toBeLessThanOrEqual(1)
     }
-    // and a k-NN graph over it is connected enough to be useful
     const edges = knnGraph(cloud.pos, 12)
     expect(edges.count).toBeGreaterThan(400 * 12)
   })

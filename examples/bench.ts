@@ -14,11 +14,6 @@ import {
   useNative,
 } from "../index.ts"
 
-// Benchmark: eager CPU vs lazy interpreter vs lazy + native (candle).
-// Each workload is rebuilt from fresh leaves every iteration so lazy
-// graphs are re-serialized and re-evaluated — the timer covers graph
-// build + forcing for lazy modes and the kernels themselves for eager.
-
 function timeIter(
   fn: () => void,
   {
@@ -32,16 +27,12 @@ function timeIter(
   return (performance.now() - t0) / iters
 }
 
-// --- workload 1: matmul chain --------------------------------------------
-
 function matmulChain(size: number, chain: number): void {
   let h = randn([size, size])
   const weights = Array.from({ length: chain }, () => randn([size, size]))
   for (const w of weights) h = h.matmul(w)
-  void h.data // forcing point
+  void h.data
 }
-
-// --- workload 2: elementwise chain ---------------------------------------
 
 function elementwiseChain(size: number, ops: number): void {
   const other = randn([size, size])
@@ -56,10 +47,8 @@ function elementwiseChain(size: number, ops: number): void {
   for (let i = 0; i < ops; i++) {
     t = unary[i % unary.length]()
   }
-  void t.data // forcing point
+  void t.data
 }
-
-// --- workload 3: XOR MLP training loop ------------------------------------
 
 class XorNet extends Module {
   hidden = new Linear(2, 8)
@@ -92,16 +81,12 @@ function xorTrain(steps: number): number {
     const pred = net.forward(XOR_X)
     loss = pred.sub(XOR_Y).pow(2).mean()
     optim.zeroGrad()
-    loss.backward() // forcing point
+    loss.backward()
     optim.step()
   }
   return loss.item()
 }
 
-// The whole training step (forward + backward + SGD update) traced
-// once and replayed as one graph — the phase B task 4 path. Replay
-// evaluates everything in a single native hop (or one interpreter
-// pass) and writes updated params/velocities back into the leaves.
 function xorTrainCompiled(steps: number): number {
   const net = new XorNet()
   const optim = new SGD(net.parameters(), {
@@ -121,8 +106,6 @@ function xorTrainCompiled(steps: number): number {
   for (let i = 1; i < steps; i++) loss = step(XOR_X, XOR_Y)
   return loss.item()
 }
-
-// --- runner ----------------------------------------------------------------
 
 type Mode = {
   name: string
@@ -207,8 +190,6 @@ for (const w of workloads) {
   }
 }
 
-// Compiled training step (phase B task 4): the whole XOR step —
-// forward, backward, and the SGD update — is one replayed graph.
 for (
   const mode of [
     {

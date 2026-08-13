@@ -1,11 +1,5 @@
 "use tsover"
 
-// Where the time goes in a graph-CA training step. Times a compiled
-// step at several rollout lengths and graph sizes, so the fixed cost per
-// step separates from the cost per rolled-out time step.
-//
-//     pnpm vite-node examples/gnca/bench.ts
-
 import {
   Adam,
   clipGradNorm,
@@ -24,7 +18,7 @@ import { aliveMask, GraphNCA, graphTensors, seedState } from "./model.ts"
 type AnyTensor = Tensor<any, any>
 
 function time(label: string, runs: number, fn: () => void) {
-  fn() // warm up (traces the graph)
+  fn()
   const start = performance.now()
   for (let i = 0; i < runs; i++) fn()
   const ms = (performance.now() - start) / runs

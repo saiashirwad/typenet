@@ -3,16 +3,8 @@ import type { Tensor as TensorType } from "./tensor.ts"
 
 type AnyTensor = TensorType<any, any>
 
-// One in-graph update: `expr` evaluates to the new contents of the
-// `target` leaf buffer (a parameter or an optimizer state tensor).
 type GraphUpdate = { target: AnyTensor; expr: AnyTensor }
 
-// Finish the graph updates collected during step(): inside a compile()
-// trace they are handed to the tracer (becoming extra graph roots that
-// replay writes back); otherwise they are forced in one multi-root hop
-// and copied back into the leaf buffers in place. Grad tensors are
-// registered for materialization so `.grad` reads after a compiled
-// step see this step's values.
 function finishGraphUpdates(
   updates: GraphUpdate[],
   grads: AnyTensor[],
@@ -31,9 +23,6 @@ function finishGraphUpdates(
   }
 }
 
-// The in-graph path covers CPU float32 parameters in lazy mode (or a
-// compile() trace, which traces under lazy semantics); everything else
-// keeps the original eager loops.
 function useGraphStep(p: AnyTensor): boolean {
   return (
     (_activeUpdateTrace() !== null || isLazy())
@@ -41,8 +30,6 @@ function useGraphStep(p: AnyTensor): boolean {
   )
 }
 
-// Number vs tensor algebra so clip / SGD / Adam keep one formula and
-// only the storage (typed arrays vs graph leaves) differs by branch.
 type Algebra<T> = {
   of(n: number): T
   add(a: T, b: T | number): T
@@ -141,8 +128,7 @@ function adamUpdate<T>(
 
 /**
  * Scale every gradient down so their combined L2 norm is at most
- * `maxNorm`, leaving them alone when it already is. The standard fix for
- * a training run that diverges on the occasional huge gradient.
+ * `maxNorm`, leaving them alone when it already is.
  *
  * Call it between `backward()` and `step()`. Gradients are rewritten in
  * place, so a following `step()` sees the clipped values — and in
@@ -221,8 +207,6 @@ export class SGD extends Optimizer {
   private readonly momentum: number
   private readonly weightDecay: number
   private velocities: Float64Array[] | null = null
-  // Momentum state for the in-graph path: plain CPU leaf tensors whose
-  // buffers the update graph reads and rewrites on every step.
   private graphVelocities: AnyTensor[] | null = null
 
   constructor(params: AnyTensor[], options: SGDOptions) {
@@ -245,9 +229,6 @@ export class SGD extends Optimizer {
         const g = p.grad
         if (!g) return
         if (useGraphStep(p)) {
-          // Build the update as graph expressions instead of a
-          // CPU-side loop over `.data`; finishGraphUpdates forces
-          // them (or, inside compile(), hands them to the tracer).
           let velocity: AnyTensor | null = null
           if (this.momentum > 0) {
             if (!this.graphVelocities) {
@@ -319,7 +300,6 @@ export class Adam extends Optimizer {
   private t = 0
   private m: Float64Array[]
   private v: Float64Array[]
-  // First/second moments for the in-graph path, as CPU leaf tensors.
   private graphM: AnyTensor[] | null = null
   private graphV: AnyTensor[] | null = null
   // Step count for the in-graph path. It has to be a graph leaf rather

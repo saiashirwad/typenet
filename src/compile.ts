@@ -1,26 +1,8 @@
-// compile(): build-once, replay-many graphs, plus the graph dumper and
-// the optimizer-in-graph trace. Sits near the top of the stack: it
-// drives the lazy layer (trace under lazily, force/serialize/topoOrder)
-// and constructs tensors via makeRaw. _activeUpdateTrace is the hook
-// src/optim.ts and Tensor.backward read to know they are running inside
-// a compile() trace.
-
 import * as nativeBackend from "./backends/native.ts"
 import { nextSeed } from "./kernels.ts"
 import { force, forceMany, formatLazyOp, lazily, serializeLazyGraph, topoOrder } from "./lazy.ts"
 import { type CpuStorage, type LazyStorage, prod, shapesEqual, showShape, type TensorStorage } from "./storage.ts"
 import { type AnyTensor, makeRaw, Tensor } from "./tensor.ts"
-
-// --- optimizer in the graph (phase B task 4) ----------------------
-// In lazy mode an optimizer step builds its parameter/state updates
-// as lazy expressions instead of looping over `.data`, forces them in
-// one multi-root hop, and writes the results back into the leaf
-// buffers. During a compile() trace the updates are collected here
-// instead of forced, becoming extra graph roots that replay writes
-// back into the same leaves — the whole training step (forward +
-// backward + optimizer update) is then one graph. Optimizer state
-// (momentum velocities) lives in ordinary CPU leaf tensors carried
-// between steps (the typonet model).
 
 type GraphUpdate = {
   target: AnyTensor
@@ -29,23 +11,17 @@ type GraphUpdate = {
 
 type UpdateTrace = {
   updates: GraphUpdate[]
-  // Grad tensors the step consumed — replay materializes them so
-  // `.grad` reads after a compiled step see this step's values.
   materialize: AnyTensor[]
 }
 
 let updateTrace: UpdateTrace | null = null
 
-// Internal hook for src/optim.ts — not part of the public API.
 export function _activeUpdateTrace(): UpdateTrace | null {
   return updateTrace
 }
 
 type CompiledInput<T extends AnyTensor> = T extends Tensor<infer S, any> ? Tensor<S, any> | ArrayLike<number> : never
 
-// --- debug names + graph printing (phase C task 5) ----------------
-// Names are debug metadata only: a WeakMap from tensor object to
-// label, never consulted by compute, autograd, or serialization.
 // Forcing keeps a tensor's identity (its storage is swapped in
 // place), so a name survives materialization; names do NOT cross
 // detach()/clone()/compile() placeholders, which create fresh tensor
@@ -53,14 +29,6 @@ type CompiledInput<T extends AnyTensor> = T extends Tensor<infer S, any> ? Tenso
 
 const tensorNames = new WeakMap<AnyTensor, string>()
 
-/**
- * Dump the lazy graph behind `root` (or several roots) as a readable
- * SSA-ish listing: one line per node, in topological order, with
- * inputs, output shape, and dtype. Named tensors (see `.named()`)
- * print under their name; unnamed nodes get `%0`, `%1`, ... in
- * traversal order. Shared subgraphs print once. An eager tensor has
- * no graph and prints as a single `leaf` line.
- */
 export function printGraph(
   roots: AnyTensor | AnyTensor[],
 ): string {
@@ -90,18 +58,7 @@ export function printGraph(
 
 export { tensorNames }
 
-// --- compile(): build once, replay many ---------------------------
-// compile(fn) traces fn once in lazy mode with placeholder leaves,
-// serializes the graph once, and replays it on each call: the caller's
-// input data is copied into the placeholder leaf buffers and the whole
-// graph is evaluated in one multi-root native hop (interpreter
-// fallback when native is unavailable). Closure-captured tensors
-// (e.g. module parameters) are graph leaves too, read live on every
-// call, so in-place optimizer steps are visible to the compiled fn.
-
 /**
- * Trace `fn` once and replay the resulting graph on every call.
- *
  * The first call must pass CPU float32 tensors (their shapes/dtype
  * pin the traced graph); later calls may pass either tensors of the
  * same shape or flat `ArrayLike<number>` buffers of matching length.
@@ -139,16 +96,8 @@ export function compile<
     outputs: AnyTensor[]
     tuple: boolean
     shapes: number[][]
-    // Optimizer updates traced inside fn: on every replay the update
-    // roots are evaluated together with the outputs and written back
-    // into the target leaf buffers (parameters, optimizer state).
     updates: GraphUpdate[]
-    // Grad tensors to materialize per replay (lazy tensor + its
-    // original storage, so the result can be swapped in like force()).
     materialize: { t: AnyTensor; storage: LazyStorage }[]
-    // Native replay: serialized once at trace time and handed to the
-    // backend once as a prepared plan, so a call ships only the leaf
-    // buffer, rebuilt from the live leaf tensors.
     native: {
       json: string
       handle: number | null
@@ -157,8 +106,6 @@ export function compile<
       leafBytes: number
       rootShapes: number[][]
     } | null
-    // Interpreter replay: every lazy tensor in the traced graph with
-    // its original storage, so caches can be reset between calls.
     lazy: { t: AnyTensor; storage: LazyStorage }[]
   }
   let state: State | null = null
@@ -179,7 +126,6 @@ export function compile<
           `compile() only supports CPU float32 inputs, argument ${i} is ${t.dtype}`,
         )
       }
-      // Own copy of the data: replay mutates this buffer per call.
       return makeRaw(
         (t._storage.data as Float32Array).slice(),
         t.shape,
@@ -218,7 +164,6 @@ export function compile<
       }
       return { t, storage: t._storage }
     })
-    // Root order: outputs, then update expressions, then grads.
     const roots = [
       ...outputs,
       ...updates.map(u => u.expr),
@@ -308,7 +253,6 @@ export function compile<
     })
   }
 
-  // Write one evaluated update root back into its target leaf buffer.
   const applyUpdate = (
     u: GraphUpdate,
     values: Float32Array,
@@ -342,8 +286,6 @@ export function compile<
         native.leafOffsets[i]!,
       )
     })
-    // Prepared once, then replayed by handle: the graph JSON never
-    // crosses the boundary again.
     if (native.handle === null) {
       native.handle = nativeBackend.prepareGraphNative(
         native.json,
@@ -364,7 +306,6 @@ export function compile<
     const outputs = native.rootShapes
       .slice(0, state.outputs.length)
       .map(shape => makeRaw(take(shape), shape, "float32"))
-    // Root order: outputs, update expressions, grads (see trace()).
     for (const u of state.updates) {
       applyUpdate(u, take([...u.expr.shape]))
     }
@@ -381,8 +322,6 @@ export function compile<
   }
 
   const runInterpreter = (state: State): AnyTensor[] => {
-    // Reset every traced lazy tensor so the graph re-evaluates with
-    // the swapped leaf data instead of serving stale caches.
     for (const { t, storage } of state.lazy) {
       storage.cache = null
       ;(t as { _storage: TensorStorage })._storage = storage
@@ -395,8 +334,6 @@ export function compile<
     for (const u of state.updates) {
       applyUpdate(u, u.expr.data as Float32Array)
     }
-    // Fresh tensors sharing this call's result buffers — the next
-    // call allocates new buffers, so callers can hold onto these.
     return state.outputs.map(out => makeRaw(out.data, out.shape, out.dtype))
   }
 

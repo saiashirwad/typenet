@@ -17,7 +17,6 @@ function expectClose(a: AnyTensor, b: AnyTensor): void {
   }
 }
 
-// The same forward graph in eager mode — the reference numerics.
 function forwardEager(
   x: AnyTensor,
   w: AnyTensor,
@@ -57,7 +56,6 @@ describe("compile (interpreter)", () => {
       forwardEager(tensor(xData), tensor(wData)),
       first,
     )
-    // Swap both inputs — tensors, then a flat buffer.
     const x2 = tensor([
       [0, 1],
       [1, 0],
@@ -72,7 +70,6 @@ describe("compile (interpreter)", () => {
       forwardEager(x3Tensor, tensor(wData)),
       compiled(x3, tensor(wData)),
     )
-    // Earlier results are not clobbered by later calls.
     expectClose(
       forwardEager(tensor(xData), tensor(wData)),
       first,
@@ -128,7 +125,6 @@ describe("compile (interpreter)", () => {
     configure({ lazy: false })
     const result = compiled(tensor([1, 2, 3]))
     expect(result.toArray()).toEqual([3, 5, 7])
-    // Eager mode still works after compiling under lazy.
     expect(tensor([1]).add(1).item()).toBe(2)
   })
 
@@ -141,7 +137,6 @@ describe("compile (interpreter)", () => {
       )
     const eagerNet = makeNet()
     const compiledNet = makeNet()
-    // Share parameters so both nets are identical.
     for (
       const [p, q] of eagerNet
         .parameters()
@@ -161,7 +156,6 @@ describe("compile (interpreter)", () => {
     const step = compile((xIn: AnyTensor, tIn: AnyTensor) => mseLoss(compiledNet.forward(xIn), tIn))
     const loss = step(x, t)
     expectClose(mseLoss(eagerNet.forward(x), t), loss)
-    // Replay after an in-place parameter nudge tracks eager.
     for (const p of compiledNet.parameters()) {
       p.data.set(p.data.map(v => v * 0.9))
     }
@@ -231,7 +225,6 @@ describe.skipIf(!available)("compile (native)", () => {
     expect(preparedGraphCountNative()).toBe(before + 16)
     for (const fn of compiled) fn.dispose()
     expect(preparedGraphCountNative()).toBe(before)
-    // dispose is idempotent
     for (const fn of compiled) fn.dispose()
     expect(preparedGraphCountNative()).toBe(before)
   })

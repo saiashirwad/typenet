@@ -10,13 +10,7 @@ export type Shape = number[]
 export type IsDynamic<S extends Shape> = number[] extends S ? true : false
 
 /**
- * Dimension arithmetic, for shapes derived from a generic dim — a percept
- * of `3 * C + 1` channels, say.
- *
- * These are smart constructors: unconditional rewrite rules first, literal
- * folding last. One law of type-level evaluation drives the design:
- *
- *   The first guard that mentions a naked generic defers the WHOLE chain.
+ * The first guard that mentions a naked generic defers the WHOLE chain.
  *
  * Deferral is not a failure — it is the residual. TS re-fires the
  * constructor when the generic is instantiated, so `DimAdd<C, 1>` hovers as
@@ -130,13 +124,6 @@ type InsertAt<
 type IsExact<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
 
 /**
- * Broadcast one dim — the single rewrite system for broadcast
- * compatibility: `BroadcastRev` accumulates it into the result shape,
- * `CanBroadcastRev` detects its `never`. (There used to be a separate
- * `DimCompatible` chain to keep in sync by hand; a missing wildcard case in
- * one of the two was how `[number, 2] + [4, 2]` once became a silent
- * `[never, 2]`.)
- *
  * Guard order obeys the law on `DimAdd`: the size-1 cases come first
  * because each guard mentions only ONE operand, so `BroadcastDim<C, 1>`
  * reduces to `C` even while `C` is an unresolved generic — the case that
@@ -372,11 +359,6 @@ export type ReduceDim<S extends Shape, D extends number, Keep extends boolean = 
     : RemoveAt<S, I>
   : never
 
-/**
- * Shape of the gather/scatter pair: dim `D` is resized to `L` and every
- * other dim survives. `indexSelect` sets `L` to the index length,
- * `scatterAdd` to the requested output length.
- */
 export type ResizeDim<S extends Shape, D extends number, L extends number> =
     IsDynamic<S> extends true ? number[]
   : NormalizeDim<S, D> extends infer I extends number ?

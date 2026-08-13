@@ -26,8 +26,6 @@ function expectClose(
   }
 }
 
-// A small fixed-init MLP step (matmul/bias/tanh/sigmoid + mse), run
-// in either mode; returns the loss and the (mutated) parameters.
 function makeNet() {
   const x = tensor([
     [0, 0],
@@ -195,7 +193,6 @@ describe("compiled training step (forward + backward + optimizer)", () => {
 
   it("matches the eager loss trajectory and final params", () => {
     const { reference, compiled, refLosses, losses } = compiledRun(50)
-    // Loss decreases and tracks eager closely at every step.
     expect(losses[0]!).toBeCloseTo(refLosses[0]!, 5)
     for (let i = 0; i < losses.length; i++) {
       expect(losses[i]!).toBeCloseTo(refLosses[i]!, 3)
@@ -204,7 +201,6 @@ describe("compiled training step (forward + backward + optimizer)", () => {
       losses[0]!,
     )
     reference.params.forEach((p, i) => expectClose(p, compiled.params[i]!, 1e-3))
-    // Grads after a compiled step see this step's values.
     reference.params.forEach((p, i) => expectClose(p.grad!, compiled.params[i]!.grad!, 1e-3))
   })
 
@@ -289,7 +285,7 @@ describe("compiled training step (forward + backward + optimizer)", () => {
       refOpt.zeroGrad()
       refLoss.backward()
       const norm = clipGradNorm(reference.params, 1)
-      expect(norm).toBeGreaterThan(1) // clipping really engaged
+      expect(norm).toBeGreaterThan(1)
       refOpt.step()
       expect(
         step(compiled.x, compiled.y).item(),
@@ -304,7 +300,7 @@ describe("clipGradNorm", () => {
   it("scales to exactly maxNorm when over", () => {
     const a = Tensor.of([3, 4]).requires_grad() as AnyTensor
     a.mul(1).sum().backward()
-    ;(a.grad!.data as Float32Array).set([3, 4]) // norm 5
+    ;(a.grad!.data as Float32Array).set([3, 4])
     const norm = clipGradNorm([a], 1)
     expect(norm).toBeCloseTo(5, 5)
     expect(a.grad!.get(0)).toBeCloseTo(3 / 5, 5)

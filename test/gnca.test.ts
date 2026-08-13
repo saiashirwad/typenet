@@ -1,14 +1,3 @@
-// Parity against the PyTorch graph cellular automaton in
-// ~/code/graph-cellular-automata: the model typenet is meant to be able
-// to describe and train.
-//
-// The fixture is produced by test/fixtures/dump_gnca_reference.py, which
-// records a k-NN graph, a set of weights, a three-step rollout, its loss
-// and every gradient. This test rebuilds the graph from the same node
-// positions, runs the same rollout, and checks the edge list, the final
-// state, the loss and all five parameter gradients — in eager mode, the
-// lazy interpreter, and natively.
-
 import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it } from "vitest"
 import { batchEdges, knnGraph, nearestNode, randomGeometricGraph } from "../examples/gnca/graphs.ts"
@@ -96,7 +85,6 @@ const N = reference.nodes
 const C = reference.channels
 const B = reference.batch
 
-/** The k-NN graph rebuilt from the reference's node positions. */
 const pos = {
   data: Float32Array.from(reference.pos),
   n: N,
@@ -122,7 +110,6 @@ function buildModel(): {
   return { model, params }
 }
 
-/** The rollout the fixture recorded: alive-mask, step, mask again. */
 function rollout(
   model: GraphNCA<number, number>,
   x0: AnyTensor,
@@ -235,8 +222,6 @@ describe("graph cellular automaton, against PyTorch", () => {
   )
 
   it("matches through a compiled training step", () => {
-    // compile() traces the same rollout and replays it, so the loss it
-    // returns has to be the reference's on the first call.
     const { model, params } = buildModel()
     const graph = graphTensors(
       batchEdges(edges, B, N),
@@ -272,9 +257,6 @@ describe("graph cellular automaton, against PyTorch", () => {
   })
 
   it("trains: the loss falls over compiled steps", () => {
-    // The whole machinery in one place — a rolled-out rollout, in-graph
-    // input noise and update mask, gradient clipping and Adam, replayed
-    // from one compiled graph — on a small graph so it stays a test.
     const nodes = 96
     const batch = 2
     const channels = 8
@@ -341,15 +323,12 @@ describe("graph cellular automaton, against PyTorch", () => {
     expect(last, `${first} -> ${last}`).toBeLessThan(
       first * 0.7,
     )
-    // and the parameters actually moved
     expect(
       Array.from(params[2]!.data).some(v => v !== 0),
     ).toBe(true)
   })
 
   it("redraws the update mask each step of a compiled rollout", () => {
-    // With updateRate 0.5 the mask gates about half the nodes, so two
-    // calls of the same compiled step must not agree.
     const { model } = buildModel()
     const graph = graphTensors(
       batchEdges(edges, B, N),

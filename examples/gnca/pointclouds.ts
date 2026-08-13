@@ -1,13 +1,4 @@
-// Surface point clouds as 3-d growth targets. The procedural sphere,
-// torus and jack paint a thin shell inside a random cube of nodes, so only
-// a fifth of the graph is the pattern and a demo looks like dust. Here
-// every node sits on a real mesh surface: the graph *is* the shape, alpha
-// is 1 everywhere, and colour comes from surface normals, so a regrown ear
-// is a regrown colour you can check.
-//
 // Ported from ~/code/graph-cellular-automata/src/gnca/pointclouds.py.
-// Clouds live as .npz under that repo's data/pointclouds/, produced by its
-// scripts/fetch_pointclouds.py.
 
 import { readFileSync } from "node:fs"
 import { inflateRawSync } from "node:zlib"
@@ -15,21 +6,12 @@ import type { Points } from "./graphs.ts"
 import { hueRgb } from "./targets.ts"
 import type { Target } from "./targets.ts"
 
-/**
- * Cloud name to a seed hint in [0,1]^3 — the node nearest that point
- * becomes the seed. The hints aim at a distinctive tip, so growth has a
- * clear place to start from.
- */
 export const POINTCLOUDS: Record<string, number[]> = {
-  bunny: [0.5, 0.85, 0.55], // near the ears
-  spot: [0.5, 0.75, 0.7], // head and horns
-  armadillo: [0.5, 0.8, 0.55], // head
-  teapot: [0.75, 0.55, 0.55], // spout tip
+  bunny: [0.5, 0.85, 0.55],
+  spot: [0.5, 0.75, 0.7],
+  armadillo: [0.5, 0.8, 0.55],
+  teapot: [0.75, 0.55, 0.55],
 }
-
-// --- just enough of the npz format ---------------------------------
-// An .npz is a zip of .npy members. Both formats are simple enough to
-// read directly, which beats taking a dependency to load four files.
 
 /**
  * Members of a zip, by name, decompressed. Stored and deflated only.
@@ -105,7 +87,6 @@ function unzip(bytes: Buffer): Map<string, Buffer> {
   return out
 }
 
-/** Offset of the first central directory entry. */
 function centralDirectoryStart(bytes: Buffer): number {
   // The end-of-central-directory record is last, but a trailing comment
   // may follow it, so scan back for its signature.
@@ -182,9 +163,6 @@ function readNpy(bytes: Buffer): {
   return { values, shape }
 }
 
-// --- clouds ---------------------------------------------------------
-
-/** Centre and scale so the cloud fills [margin, 1 - margin]^dim. */
 function toUnitCube(
   pos: Float32Array,
   dim: number,
@@ -217,7 +195,6 @@ function toUnitCube(
   return out
 }
 
-/** Rainbow by azimuth, dimmed by elevation: a readable regeneration cue. */
 function colourByNormals(
   normals: Float32Array,
   dim: number,
@@ -241,15 +218,7 @@ function colourByNormals(
   return out
 }
 
-/**
- * Load a prepared cloud: its positions in the unit cube, an RGBA target
- * coloured by surface normal, and where to put the seed.
- *
- * `nodes` subsamples evenly when it is smaller than the stored cloud —
- * evenly rather than randomly, because reproducing numpy's PRNG is not
- * worth it and a stride keeps the surface evenly covered. A cloud cannot
- * be *grown*: there are no surface points to invent.
- */
+/** `nodes` subsamples evenly when it is smaller than the stored cloud. */
 export function loadCloud(
   path: string,
   options: { nodes?: number; seedAt?: number[] } = {},

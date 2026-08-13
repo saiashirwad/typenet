@@ -1,9 +1,3 @@
-// Storage/kind definitions and the pure shape math that describes them.
-// This is the shared leaf below every other subsystem: kernels, eager
-// loops, lazy graph nodes, and the Tensor class all import from here.
-// The only upward reference is the type-only `AnyTensor` alias, erased
-// at compile time, so there is no runtime cycle.
-
 import type { AnyTensor } from "./tensor.ts"
 
 export type DType = "float32" | "float64"

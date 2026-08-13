@@ -1,13 +1,5 @@
-// Finite-difference gradcheck for every backward rule, in both eager
-// and lazy (interpreter) modes. For each rule we build a scalar loss,
-// read the analytic gradient from backward(), and compare it against a
-// central finite difference of the forward pass.
-//
-// Tensors are float32 (the default dtype). Central differences with
-// eps = 1e-3: the truncation error is O(eps^2) but the float32
-// rounding noise in the loss (~1e-7 relative) is amplified by 1/eps,
-// giving a noise floor of roughly 1e-4 relative — so the tightest
-// genuinely stable tolerance is 1e-3 relative, not the f64-style 1e-4.
+// Central differences at eps = 1e-3: f32 loss noise (~1e-7) is amplified
+// by 1/eps, so the stable relative tolerance is 1e-3, not f64-style 1e-4.
 
 import { afterEach, describe, expect, it } from "vitest"
 import { configure, noGrad, Tensor } from "../src/tensor.ts"
@@ -41,11 +33,8 @@ interface Case {
   readonly tol?: number
 }
 
-// default: moderate values, mostly away from 0
 const defaultSample = (rand: () => number): number => (rand() * 2 - 1) * 1.5 + 0.6
-// strictly away from 0 in either direction
 const awayFromZero = (rand: () => number): number => (rand() > 0.5 ? 1 : -1) * (0.5 + rand())
-// positive only, for log/sqrt
 const positive = (rand: () => number): number => 0.5 + rand() * 2
 // |x| in [0.2, 0.7] or [1.5, 2.5] — never within EPS of ±1, so the
 // corners of clamp/maximum/minimum stay outside the difference window
@@ -131,7 +120,6 @@ const CASES: Case[] = [
     name: "div",
     shapes: [[3], [3]],
     build: ([a, b]) => a!.div(b!).sum(),
-    // keep denominators away from 0
     sample: awayFromZero,
   },
 
@@ -185,7 +173,6 @@ const CASES: Case[] = [
     name: "log",
     shapes: [[4]],
     build: ([a]) => a!.log().sum(),
-    // log and sqrt are only defined for positive input
     sample: positive,
   },
   {
@@ -198,7 +185,6 @@ const CASES: Case[] = [
     name: "abs",
     shapes: [[4]],
     build: ([a]) => a!.abs().sum(),
-    // stay away from the kink at 0
     sample: awayFromZero,
   },
   {
@@ -327,7 +313,6 @@ const CASES: Case[] = [
     build: ([a, b]) => Tensor.cat(a!, b!, 1).mul(2).sum(),
   },
 
-  // composites — the rules have to chain, not just work in isolation
   {
     name: "mse-style ((a-b)^2).mean()",
     shapes: [
@@ -364,8 +349,6 @@ const CASES: Case[] = [
     tol: 2e-3,
   },
 
-  // Gather/scatter. Repeated indices are the interesting part: they make
-  // indexSelect's backward accumulate and scatterAdd's forward sum.
   {
     name: "indexSelect(dim 0), repeated indices",
     shapes: [[4, 3]],
@@ -412,7 +395,6 @@ const CASES: Case[] = [
         .sum(),
   },
   {
-    // the message-passing shape: gather over an edge list, aggregate back
     name: "message passing: gather, scale, scatter",
     shapes: [
       [4, 3],
@@ -429,8 +411,6 @@ const CASES: Case[] = [
     },
   },
 
-  // Kinked ops: `awayFromUnit` keeps every sample clear of ±1 by more
-  // than EPS, so the finite difference never straddles a corner.
   {
     name: "maximum(a, -1)",
     shapes: [[5]],
@@ -483,7 +463,6 @@ const CASES: Case[] = [
         .sum(),
   },
   {
-    // the overflow penalty the graph CA trains with
     name: "overflow penalty (x - clamp(x)).abs().mean()",
     shapes: [[6]],
     build: ([a]) => a!.sub(a!.clamp(-1, 1)).abs().mean() as AnyTensor,

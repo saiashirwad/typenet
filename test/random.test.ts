@@ -1,8 +1,3 @@
-// uniform() / normal() are graph nodes, not fixed data: a compiled
-// function redraws them on every call. These tests pin the three
-// properties that matters for: fresh values per evaluation, stable
-// values within one evaluation, and reproducibility from a seed.
-
 import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
 import { compile, configure, normal, printGraph, Tensor, tensor, uniform } from "../src/tensor.ts"
@@ -101,7 +96,6 @@ describe("random nodes in a graph", () => {
     const first = Array.from(step(zeros).data)
     const second = Array.from(step(zeros).data)
     expect(second).not.toEqual(first)
-    // still uniform, not garbage
     for (const x of second) {
       expect(x).toBeGreaterThanOrEqual(0)
       expect(x).toBeLessThan(1)
@@ -178,7 +172,6 @@ describe.skipIf(!isNativeAvailable())(
       const first = step(zeros).item()
       const second = step(zeros).item()
       expect(first).not.toBe(second)
-      // mean 0.5 over 4096 draws
       expect(first / 4096).toBeCloseTo(0.5, 1)
       expect(second / 4096).toBeCloseTo(0.5, 1)
     })

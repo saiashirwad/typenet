@@ -1,9 +1,3 @@
-// A seeded PRNG for the host-side sampling the training loop does
-// outside the graph: which pool samples to draw, where to punch a hole,
-// which nodes to scatter damage over. Randomness *inside* the graph
-// (the stochastic update mask, input noise) comes from typenet's
-// uniform() / normal() instead — see src/tensor.ts.
-
 /** mulberry32: small, fast, good enough for sampling, and seedable. */
 export function rng(seed: number): Rng {
   let a = seed >>> 0
@@ -16,13 +10,9 @@ export function rng(seed: number): Rng {
   }
   return {
     next,
-    /** Integer in [0, n). */
     int: (n: number) => Math.floor(next() * n),
-    /** Uniform in [lo, hi). */
     range: (lo: number, hi: number) => lo + next() * (hi - lo),
-    /** Integer in [lo, hi], both ends included. */
     intRange: (lo: number, hi: number) => lo + Math.floor(next() * (hi - lo + 1)),
-    /** `count` distinct entries of `values`, order shuffled. */
     sample: (values: ArrayLike<number>, count: number) => {
       const pool = Array.from(values)
       const take = Math.min(count, pool.length)

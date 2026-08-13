@@ -1,17 +1,6 @@
 "use tsover"
 
-// Train a graph cellular automaton to grow a pattern on a random graph
-// from a single seed node, and to heal after damage.
-//
-//     pnpm gnca                      # train with the defaults
-//     pnpm gnca --steps 50           # a quick smoke run
-//     pnpm gnca --target star --nodes 512
-//
-// Ported from ~/code/graph-cellular-automata/scripts/train.py. The
-// recipe is the same one: a sample pool so the rule sees partly grown
-// states, damage on the best-formed samples so healing is what it
-// learns, and a heal probe as the number the whole thing chases —
-// training loss can fall while regeneration stays broken.
+// Ported from ~/code/graph-cellular-automata/scripts/train.py.
 
 import { writeFileSync } from "node:fs"
 import { Adam, clipGradNorm, compile, configure, isNativeAvailable, nativeDevice, nativeDeviceMode, normal, Tensor, useNative } from "../../index.ts"
@@ -27,8 +16,6 @@ import { type Target, TARGETS } from "./targets.ts"
 
 type AnyTensor = Tensor<any, any>
 
-// ------------------------------------------------------------- options ---
-
 const flags = parseFlags(process.argv.slice(2))
 const options = {
   nodes: number("nodes", 1024),
@@ -38,17 +25,14 @@ const options = {
   steps: number("steps", 8000),
   pool: number("pool", 512),
   batch: number("batch", 8),
-  /** Samples per batch to damage; the best-scoring ones are hit. */
   damage: number("damage", 3),
-  /** Rollout length range. Healing needs longer than growing. */
   horizon: [
     number("horizon-min", 48),
     number("horizon-max", 80),
   ],
   /**
    * How many distinct rollout lengths to draw from. Each gets its own
-   * compiled graph, since a graph traced once has a fixed depth — see
-   * the note on `rollouts` below.
+   * compiled graph, since a graph traced once has a fixed depth.
    */
   buckets: number("buckets", 5),
   noise: number("noise", 0.02),
@@ -58,12 +42,9 @@ const options = {
   updateRate: number("update-rate", 0.5),
   clip: number("clip", 1),
   target: text("target", "heart"),
-  /** Suffix for the checkpoint and picture filenames. */
   tag: text("tag", ""),
-  /** Checkpoint to warm-start the rule from. */
   initFrom: text("init-from", ""),
   graph: text("graph", "auto"),
-  /** Where the .npz surface clouds live, for the mesh targets. */
   clouds: text(
     "clouds",
     "../graph-cellular-automata/data/pointclouds",
@@ -106,14 +87,9 @@ function text(name: string, fallback: string): string {
   return flags.get(name) || fallback
 }
 
-// --------------------------------------------------- graph and target ---
-
 configure({ seed: options.seed })
 if (options.native && isNativeAvailable()) useNative()
 
-// Three kinds of target: a surface point cloud (the graph *is* the mesh),
-// a pattern on the Watts-Strogatz ring, or a pattern painted onto a random
-// geometric graph.
 const isCloud = options.target in POINTCLOUDS
 const useRing = !isCloud
   && (options.graph === "ws"
@@ -193,14 +169,9 @@ console.log(
   }`,
 )
 
-// The rule sees a batch as one big graph: B copies side by side in the
-// node dimension, with the edge list replicated at matching offsets.
 const single = graphTensors(edges, N)
 const batched = graphTensors(batchEdges(edges, B, N), B * N)
 
-// The target tiled over the batch, so the loss is a plain subtraction.
-// The heal probe scores on the host instead, since it reads the state
-// back anyway.
 const targetTiled = tensorFrom(tile(targetData, B), [
   B * N,
   4,
@@ -224,16 +195,10 @@ function tile(
   return out
 }
 
-// ------------------------------------------------------ model and loss ---
-
 const model = new GraphNCA(C, options.hidden)
 const params = model.parameters()
 const optimizer = new Adam(params, { lr: options.lr })
 
-/**
- * Roll the automaton forward `steps` times, masking dead nodes before
- * each step exactly as the growing NCA does.
- */
 function rollout(
   x0: AnyTensor,
   steps: number,
@@ -252,7 +217,6 @@ function rollout(
   return x
 }
 
-/** Squared error against the target on the four visible channels. */
 function visibleLoss(
   x: AnyTensor,
   against: AnyTensor,
@@ -260,19 +224,6 @@ function visibleLoss(
   return x.narrow(1, 0, 4).sub(against).pow(2).mean()
 }
 
-/**
- * One training step as a single graph: noise the inputs, roll out,
- * score, differentiate, clip, and apply the Adam update — all of it
- * evaluated in one pass over the graph.
- *
- * Compiled per rollout length. A graph traced once has a fixed depth, so
- * a variable-length rollout means one compiled graph per length; the
- * reference samples any length in [48, 80], and this draws from
- * `buckets` evenly spaced lengths in the same range instead. Variable
- * enough to keep the rule from locking onto one horizon, few enough
- * that the compiled graphs are worth their memory.
- */
-/** loss, mse, and the rolled-out state to write back into the pool. */
 type StepResult = [AnyTensor, AnyTensor, AnyTensor]
 
 const rollouts = new Map<
@@ -280,6 +231,12 @@ const rollouts = new Map<
   (x0: AnyTensor) => StepResult
 >()
 
+/**
+ * Compiled per rollout length. A graph traced once has a fixed depth, so
+ * a variable-length rollout means one compiled graph per length; the
+ * reference samples any length in [48, 80], and this draws from
+ * `buckets` evenly spaced lengths in the same range instead.
+ */
 function trainStep(
   x0: Float32Array,
   steps: number,
@@ -299,8 +256,6 @@ function trainStep(
         : input
       const x = rollout(noised, steps, batched)
       const mse = visibleLoss(x, targetTiled)
-      // States that run away are the usual failure after damage, so
-      // penalise magnitude outside [-1, 1] directly.
       const loss = options.overflow > 0
         ? mse.add(
           x
@@ -338,11 +293,6 @@ const horizons = Array.from(
     ),
 )
 
-// ------------------------------------------------------------- the pool ---
-// The sample pool is the reason the rule learns to keep a pattern rather
-// than to draw one: most steps start from a state some earlier rollout
-// left behind, not from the bare seed.
-
 const pool = new Float32Array(options.pool * N * C)
 for (let i = 0; i < options.pool; i++) {
   pool.set(seedState(1, N, C, center), i * N * C)
@@ -350,7 +300,6 @@ for (let i = 0; i < options.pool; i++) {
 
 const random = rng(options.seed + 1)
 
-/** Squared error of one flat sample against the target, visible channels. */
 function sampleError(
   state: Float32Array,
   offset: number,
@@ -366,7 +315,6 @@ function sampleError(
   return total / (N * 4)
 }
 
-/** Zero every channel of the given nodes in sample `b` of the batch. */
 function wipe(
   batchState: Float32Array,
   b: number,
@@ -380,11 +328,6 @@ function wipe(
     )
   }
 }
-
-// ------------------------------------------------------------- the probe ---
-// Grow, punch a hole, heal. Training loss can fall while regeneration
-// stays broken, so this is the number to watch. The hole is a fixed
-// blob, so the probe is comparable across steps and across runs.
 
 const probeHole = damage.ball(pos, inPattern, {
   frac: 0.25,
@@ -429,8 +372,6 @@ function healProbe(
   }
 }
 
-// -------------------------------------------------- checkpoints, pictures ---
-
 const checkpointPath = text("save", "")
   || `runs/gnca-${options.target}${options.tag ? `-${options.tag}` : ""}.json`
 const svgPath = text("svg", "")
@@ -457,7 +398,6 @@ function save(step: number): void {
   )
 }
 
-/** Target, grown and healed side by side, so the run is inspectable. */
 function drawProbe(probe: {
   grownState: Float32Array
   healedState: Float32Array
@@ -488,8 +428,6 @@ if (options.initFrom) {
   )
 }
 
-// -------------------------------------------------------------- training ---
-
 console.log(
   `training ${options.steps} steps, batch ${B}, `
     + `rollout lengths ${horizons.join("/")}, `
@@ -502,7 +440,6 @@ const chosen = new Int32Array(B)
 let lastReport = Date.now()
 
 for (let step = 1; step <= options.steps; step++) {
-  // Draw a batch from the pool.
   for (let b = 0; b < B; b++) {
     chosen[b] = random.int(options.pool)
   }
@@ -516,10 +453,6 @@ for (let step = 1; step <= options.steps; step++) {
     )
   }
 
-  // Rank worst-first, so batchState[0] is the least-formed pattern and
-  // the last entries the most. Damage lands on the best ones: healing a
-  // grown pattern is the behaviour we want, and gradient spent on an
-  // already-broken state is spent twice over.
   const order = Array.from({ length: B }, (_, b) => b).sort(
     (a, b) =>
       sampleError(batchState, b * N * C)
@@ -537,14 +470,10 @@ for (let step = 1; step <= options.steps; step++) {
   batchState.set(ranked)
   chosen.set(rankedChoice)
 
-  // Every eighth step, train the worst sample from the bare seed, so the
-  // rule keeps practising the long horizon from nothing.
   if (step % 8 === 0) {
     batchState.set(seedState(1, N, C, center), 0)
   }
 
-  // Damage the best-formed samples: one gets scattered noise, the rest
-  // get balls covering 20-50% of the pattern.
   for (let i = 0; i < Math.min(options.damage, B); i++) {
     const b = B - 1 - i
     wipe(
@@ -565,8 +494,6 @@ for (let step = 1; step <= options.steps; step++) {
     horizon,
   )
 
-  // Write the rollout back into the pool, and reset the worst sample to
-  // a fresh seed so the pool never fills with dead ends.
   let worst = 0
   let worstError = -Infinity
   for (let b = 0; b < B; b++) {

@@ -1,18 +1,6 @@
 "use tsover"
 
-// The update rule: one shared MLP applied to every node, Distill-NCA
-// style. Ported from ~/code/graph-cellular-automata/src/gnca/model.py.
-//
-// Perception (message passing): each node sees
-//     [ own state, mean of neighbour states, mean of (neighbour - own),
-//       log(1 + degree) ]
-// The degree scalar restores the neighbour COUNT that mean aggregation
-// erases. The difference term is gated per edge and per channel
-// (Perona-Malik style): the rule can turn diffusion OFF across pattern
-// boundaries instead of smearing them.
-//
-// Update: a tiny MLP produces a residual increment, applied to a random
-// subset of nodes each step.
+// Ported from ~/code/graph-cellular-automata/src/gnca/model.py.
 
 import { cat, Linear, Module, Tensor, uniform } from "../../index.ts"
 import type { DimAdd, DimMul, Shape } from "../../src/shape.ts"
@@ -28,35 +16,19 @@ export type Percept<C extends number> = DimAdd<
   1
 >
 
-/** The three channel blocks the gate is linear in. */
 export type GateIn<C extends number> = DimMul<3, C>
 
-/**
- * Everything about the graph the rule needs, as tensors. The graph never
- * changes during a run, so the degree terms are computed once here rather
- * than per step inside the rollout.
- *
- * `N` is the node count and `E` the edge count, both carried in the type,
- * so a rule cannot be handed a different graph's edge list and the per-edge
- * tensors inside `forward` stay tied to the state they came from.
- */
 export interface GraphTensors<
   N extends number,
   E extends number = number,
 > {
-  /** Source node of each edge. */
   readonly src: Tensor<[E]>
-  /** Destination node of each edge. */
   readonly dst: Tensor<[E]>
-  /** Node count these indices address. */
   readonly nodes: N
-  /** 1 / max(in-degree, 1). */
   readonly invDegree: Tensor<[N, 1]>
-  /** log(1 + in-degree). */
   readonly logDegree: Tensor<[N, 1]>
 }
 
-/** Build the rule's view of an edge list. */
 export function graphTensors<
   N extends number,
   E extends number,
@@ -91,24 +63,14 @@ function fromData<S extends Shape>(
   return fromFlat(data, shape) as unknown as Tensor<S>
 }
 
-/**
- * The update rule, generic over its channel count `C` and hidden width
- * `H`. Construct it with literals — `new GraphNCA(16, 128)` — and the
- * perception width, the gate's three blocks and the state shape are all
- * derived rather than assumed: handing `forward` a state with the wrong
- * channel count, or a different graph's edge list, is a compile error.
- */
 export class GraphNCA<
   C extends number = 16,
   H extends number = 128,
 > extends Module {
   readonly channels: C
   readonly hidden: H
-  /** Perception to hidden. Input is three channel blocks plus the degree. */
   readonly inner: Linear<Percept<C>, H>
-  /** Hidden to the state increment. Zero-init, so the rule starts as identity. */
   readonly outer: Linear<H, C>
-  /** Per-edge, per-channel diffusion conductivity. */
   readonly gate: Linear<GateIn<C>, C>
 
   constructor(channels: C = 16 as C, hidden: H = 128 as H) {
@@ -136,13 +98,6 @@ export class GraphNCA<
     ;(this.gate.bias!.data as Float32Array).fill(0)
   }
 
-  /**
-   * One step of the automaton: `[N, C]` state in, `[N, C]` state out.
-   *
-   * `N` is generic because a batch is B copies of the graph stacked into
-   * the node dimension — the same rule runs on one graph or eight side by
-   * side, and `graph` has to be the edge list for whichever it is.
-   */
   forward<N extends number, E extends number>(
     x: Tensor<[N, C]>,
     // NoInfer pins N to the state, so the edge list is *checked* against
@@ -155,20 +110,14 @@ export class GraphNCA<
     const c = this.channels
     const { src, dst, nodes, invDegree } = graph
 
-    // Gather each edge's endpoints once; both terms below need them.
     const fromNode = x.indexSelect(src)
     const toNode = x.indexSelect(dst)
     const difference = fromNode.sub(toNode)
 
-    /** Sum per-edge messages onto their destination node, and average. */
     const aggregate = (
       messages: Tensor<[E, C]>,
     ): Tensor<[N, C]> => messages.scatterAdd(dst, nodes).mul(invDegree)
 
-    // The gate is linear in [x_src, x_dst, |x_src - x_dst|], so its two
-    // endpoint terms are one matmul over nodes, then gathered per edge. As
-    // a single (E, 3C) matmul over edges it would cost several times as
-    // much — there are many more edges than nodes.
     const weight = this.gate.weight
     const endpoints = x.matmul(
       cat(weight.narrow(0, 0, c), weight.narrow(0, c, c), 1),
@@ -219,10 +168,6 @@ export class GraphNCA<
 /**
  * A node lives if it or any neighbour has alpha above `threshold` — the
  * graph equivalent of the growing NCA's 3×3 alive mask.
- *
- * The reference takes a max of alpha over neighbours and compares. This
- * counts live neighbours instead: the same predicate ("any neighbour above
- * threshold") through a scatter-add rather than a scatter-max.
  */
 export function aliveMask<
   N extends number,

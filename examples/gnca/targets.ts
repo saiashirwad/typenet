@@ -1,13 +1,3 @@
-// The patterns the automaton grows, sampled at the graph's node
-// positions. Each returns (n × 4) RGBA with alpha 1 inside the pattern
-// and all zeros outside.
-//
-// Shape matters for a regeneration demo: a blob heals invisibly, because
-// a filled hole looks like any other filled hole. A shape with arms, a
-// hole, or two lobes tells you whether it healed *correctly*, and
-// colouring by angle means a regrown arm comes back in a colour you can
-// check.
-//
 // Ported from ~/code/graph-cellular-automata/src/gnca/targets.py.
 
 import { point, type Points } from "./graphs.ts"
@@ -32,7 +22,6 @@ export function hueRgb(h: number): Colour {
   return table[sector]!
 }
 
-/** Distance from a centre and angle-as-hue, for the radial patterns. */
 function polar(
   pos: Points,
   i: number,
@@ -47,11 +36,6 @@ function polar(
   }
 }
 
-/**
- * Build a target from a per-node rule. `inside` decides membership,
- * `colour` the RGB; nodes outside the pattern are left fully zero, alpha
- * included, which is what makes the loss ask for empty space there.
- */
 function paint(
   pos: Points,
   rule: (i: number) => { inside: boolean; colour: Colour },
@@ -68,7 +52,6 @@ function paint(
   return out
 }
 
-/** A rainbow-ringed heart. The original, and a solid blob. */
 export function heart(pos: Points): Target {
   return paint(pos, i => {
     const x = (point(pos, i, 0) - 0.5) * 2.6
@@ -86,12 +69,6 @@ export function heart(pos: Points): Target {
   })
 }
 
-/**
- * A five-armed starfish, each arm its own hue. The best shape here for
- * watching regeneration: cut an arm off and the question is not just
- * whether tissue comes back, but whether it comes back as an arm, in the
- * right place, in the right colour.
- */
 export function star(pos: Points, arms = 5): Target {
   return paint(pos, i => {
     const { r, h } = polar(pos, i)
@@ -102,11 +79,6 @@ export function star(pos: Points, arms = 5): Target {
   })
 }
 
-/**
- * A ring with a hole, coloured by angle. A blob can heal by filling in;
- * this cannot, since closing the hole is as wrong as leaving a gap. The
- * rule has to rebuild a topology, not an area.
- */
 export function annulus(pos: Points): Target {
   return paint(pos, i => {
     const { r, h } = polar(pos, i)
@@ -117,11 +89,6 @@ export function annulus(pos: Points): Target {
   })
 }
 
-/**
- * Two discs joined by a thin bridge. Pairs with the edge-cutting demo:
- * sever the bridge and the halves are on their own, each holding its
- * own colour.
- */
 export function lobes(pos: Points): Target {
   return paint(pos, i => {
     const x = point(pos, i, 0)
@@ -138,11 +105,6 @@ export function lobes(pos: Points): Target {
   })
 }
 
-/**
- * Rainbow-by-angle on the ring graph, alive everywhere. Pairs with
- * wattsStrogatzGraph: the rule must grow a full colour wheel around the
- * ring from one seed, jumping through shortcut edges.
- */
 export function ring(pos: Points): Target {
   return paint(pos, i => ({
     inside: true,
@@ -150,12 +112,6 @@ export function ring(pos: Points): Target {
   }))
 }
 
-// A graph has no reason to be flat. These live in [0,1]^3 and pair with
-// randomGeometricGraph({ dim: 3 }). They paint a thin shell inside a
-// random cube, so only a fraction of nodes are ever alive. Damage in 3-d
-// is genuinely harder: a wound has a whole extra direction to heal from.
-
-/** A hollow shell, coloured by direction. Solid inside is empty. */
 export function sphere(pos: Points): Target {
   return paint(pos, i => {
     const d = [0, 1, 2].map(k => point(pos, i, k) - 0.5)
@@ -174,7 +130,6 @@ export function sphere(pos: Points): Target {
   })
 }
 
-/** A donut. The hole is the point: healing cannot just fill volume. */
 export function torus(
   pos: Points,
   R = 0.27,
@@ -191,11 +146,6 @@ export function torus(
   })
 }
 
-/**
- * Three arms along x, y and z, each its own colour: the 3-d answer to
- * the starfish. Lop off an arm and you can see at a glance whether the
- * right one grew back.
- */
 export function jack(
   pos: Points,
   half = 0.42,

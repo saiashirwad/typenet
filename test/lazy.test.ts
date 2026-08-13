@@ -357,7 +357,7 @@ describe("lazy mode", () => {
   it("evaluates shared subexpressions once and materializes aliases", () => {
     configure({ lazy: true })
     const x = tensor([1, 2, 3]).requires_grad()
-    const z = (x as AnyTensor).mul(x) // shared
+    const z = (x as AnyTensor).mul(x)
     const y = z.add(z)
     const w = z.sum()
     const loss = y.sum().add(w)

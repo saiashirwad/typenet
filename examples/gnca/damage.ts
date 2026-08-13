@@ -1,19 +1,9 @@
-// Ways to break a grown pattern, shared by training and evaluation. Each
-// function returns the node indices to wipe (or an edge keep-mask), and
-// nothing else decides what "a ball" or "a band" means — otherwise the
-// evaluation only measures what training optimized by luck.
-//
 // Ported from ~/code/graph-cellular-automata/src/gnca/damage.py.
 
 import { type Edges, point, type Points } from "./graphs.ts"
 import { quantile, type Rng, rng } from "./rng.ts"
 import type { Target } from "./targets.ts"
 
-/**
- * Indices of the nodes the target actually paints. Damage outside the
- * pattern is a no-op the rule already handles, so every shape below is
- * defined relative to these.
- */
 export function patternNodes(
   target: Target,
   threshold = 0.5,
@@ -61,7 +51,6 @@ export function ball(
   return Int32Array.from(hit)
 }
 
-/** A random fraction of the pattern nodes: damage with no shape at all. */
 export function scatter(
   pattern: Int32Array,
   options: { frac?: number; random?: Rng } = {},
@@ -74,7 +63,6 @@ export function scatter(
   return Int32Array.from(random.sample(pattern, count))
 }
 
-/** A horizontal slice through the middle of the pattern. */
 export function band(
   pos: Points,
   pattern: Int32Array,
@@ -92,7 +80,6 @@ export function band(
   return Int32Array.from(hit)
 }
 
-/** Everything on the far side of the pattern's centre; axis 0 is right. */
 export function half(
   pos: Points,
   pattern: Int32Array,
@@ -106,10 +93,6 @@ export function half(
   )
 }
 
-// Cutting edges instead of nodes: the graph-native damage a grid cannot
-// have. Both return a keep-mask over the edge list.
-
-/** Drop every edge that crosses the horizontal line `y`. */
 export function cutAcross(
   pos: Points,
   edges: Edges,
@@ -127,7 +110,6 @@ export function cutAcross(
   return keep
 }
 
-/** Drop a random fraction of all edges. */
 export function cutRandom(
   edges: Edges,
   frac: number,
@@ -140,7 +122,6 @@ export function cutRandom(
   return keep
 }
 
-/** Apply an edge keep-mask, producing a smaller edge list. */
 export function keepEdges(
   edges: Edges,
   keep: Uint8Array,

@@ -4,10 +4,6 @@ import { compile, configure, printGraph, Tensor, tensor } from "../src/tensor.ts
 
 type AnyTensor = Tensor<any, any>
 
-// Deep graphs are the shape a rolled-out cellular automaton takes: one
-// long chain of ops, differentiated end to end. Every graph walker has
-// to survive that depth, so these tests build chains far longer than
-// recursion would tolerate.
 const DEPTH = 20000
 
 afterEach(() => {
@@ -25,7 +21,6 @@ describe("deep graphs", () => {
   it("forces a chain far deeper than the JS stack", () => {
     configure({ lazy: true })
     const out = chain(tensor([1, 2]), DEPTH)
-    // 1.0001 applied DEPTH times, twice per iteration is one mul each.
     const expected = 1.0001 ** DEPTH
     expect(out.get(0)).toBeCloseTo(expected, 2)
     expect(out.get(1)).toBeCloseTo(2 * expected, 2)
@@ -53,7 +48,6 @@ describe("deep graphs", () => {
     configure({ lazy: true })
     const out = chain(tensor([1, 2]), DEPTH)
     const lines = printGraph(out).split("\n")
-    // one leaf, one scalar per mul/add, and one node per op
     expect(lines.length).toBeGreaterThan(DEPTH)
     expect(lines[lines.length - 1]).toContain("; root")
   })

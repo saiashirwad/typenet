@@ -1,13 +1,3 @@
-// The Tensor class: the public face of the library. Every other
-// subsystem is imported from its own module — storage/kernels/eager/
-// lazy/autograd/compile — and wired together by the methods here. Each
-// method is the same shape: coerce inputs, call a raw* kernel (which
-// itself decides eager vs lazy), then wrap the result in withGrad.
-//
-// tensor.ts also remains the import path every consumer (index.ts,
-// tests, optim.ts, nn.ts) has always used, so the moved symbols are
-// re-exported here and nothing outside src/ changes.
-
 import { Operator } from "tsover-runtime"
 import { type GradNode, noGrad, tapeOrder, withGrad } from "./autograd.ts"
 import { _activeUpdateTrace, tensorNames } from "./compile.ts"
@@ -92,13 +82,6 @@ export type ParamsOf<T> = T extends Tensor<any, infer P> ? P : never
 export type NestedNumbers = number | readonly NestedNumbers[]
 
 export type AnyTensor = Tensor<any, any>
-
-// --- construction primitives --------------------------------------
-// INTERNAL gates the constructor so callers go through the factories
-// below (and the raw* kernels) rather than `new Tensor`. makeStorage /
-// makeRaw are the trusted builders every subsystem constructs tensors
-// through; they live next to the class because they ARE the class's
-// constructor surface.
 
 const INTERNAL = Symbol("tensor-internal")
 
@@ -388,8 +371,7 @@ export class Tensor<
   }
 
   // Debug label, shown by printGraph(). Metadata only — no effect on
-  // computation, autograd, or graph semantics. Returns `this` so it
-  // chains inside an expression: `x.matmul(w).named("h")`.
+  // computation, autograd, or graph semantics.
   named(name: string): this {
     tensorNames.set(this as AnyTensor, name)
     return this
@@ -402,10 +384,6 @@ export class Tensor<
       )
     }
     let seed: AnyTensor
-    // Lazy symbolic backward: when the output is a lazy graph node,
-    // the whole backward pass is built as lazy expressions and forced
-    // in one multi-root hop instead of materializing the forward and
-    // running the GradNode engine eagerly.
     const lazyPath = lazyMode && this._storage.kind === "lazy"
     if (gradient) {
       if (!shapesEqual(gradient.shape, this.shape)) {
@@ -462,12 +440,6 @@ export class Tensor<
       })
 
     if (lazyPath) {
-      // Build all gradient expressions as lazy nodes — the backward
-      // rules compose public ops, which emit lazy nodes while lazy
-      // mode is on, and capture the lazy forward tensors, so forward
-      // values (e.g. tanh output) are shared subgraphs, not recomputed.
-      // Then materialize every parameter grad in a single multi-root
-      // forcing point (one native FFI hop when native is enabled).
       walk()
       // Materialize the whole forward topo plus every parameter grad
       // in a single multi-root forcing point (one native FFI hop when
@@ -489,8 +461,6 @@ export class Tensor<
       return
     }
 
-    // Eager path: materialize the forward graph; the GradNode engine
-    // then runs eagerly on real storages.
     for (const t of topo) force(t)
     eagerly(walk)
   }
@@ -587,7 +557,7 @@ export class Tensor<
   }
 
   /**
-   * Elementwise maximum. Gradient goes wholly to whichever operand won;
+   * Gradient goes wholly to whichever operand won;
    * ties go to the left one.
    */
   maximum(other: number): Tensor<S, P>
@@ -609,7 +579,7 @@ export class Tensor<
     ])
   }
 
-  /** Elementwise minimum; ties go to the left operand. */
+  /** Ties go to the left operand. */
   minimum(other: number): Tensor<S, P>
   minimum<S2 extends Shape>(
     other: Tensor<S2, any> & BroadcastCheck<S, S2>,
@@ -631,8 +601,7 @@ export class Tensor<
 
   /**
    * Clamp into `[min, max]`; pass `null` for an open end. Gradient is 1
-   * inside the range and 0 outside, since this is `maximum` composed
-   * with `minimum`.
+   * inside the range and 0 outside.
    */
   clamp(
     min: number | null,
@@ -890,12 +859,6 @@ export class Tensor<
     return rawOneHot(this, classes) as any
   }
 
-  /**
-   * A contiguous slice of `length` entries along `dim`, starting at
-   * `start` — the `x[:, a:b]` of tensor libraries. Used to read a block
-   * of channels out of a state tensor, or to split a weight matrix into
-   * the pieces of a fused layer.
-   */
   narrow<L extends number>(
     dim: 0,
     start: number,
@@ -925,9 +888,6 @@ export class Tensor<
       )
     }
     const out = rawNarrow(this, d, start, length)
-    // The gradient is the incoming one placed back in the window and
-    // zero everywhere else — a scatter over the window's indices, which
-    // costs an index of `length` entries rather than zero-padding.
     return withGrad(out, "narrow", [this], g => {
       const window = makeRaw(
         Float32Array.from({ length }, (_, i) => start + i),
@@ -939,12 +899,8 @@ export class Tensor<
   }
 
   /**
-   * Gather rows along `dim`: row `j` of the result is row `index[j]` of
-   * this tensor. `index` is a rank-1 tensor of integral values (typenet
+   * `index` is a rank-1 tensor of integral values (typenet
    * has no integer dtype); its length becomes the size of `dim`.
-   *
-   * The workhorse of graph message passing: with `index` an edge list,
-   * `x.indexSelect(src)` is "the state of each edge's source node".
    * Gradients flow to the gathered tensor, never to the index.
    */
   indexSelect<E extends number>(
@@ -973,10 +929,6 @@ export class Tensor<
    * `j` of this tensor is *added into* row `index[j]` of the result.
    * Rows no index points at stay zero. This is `index_add_` on a zero
    * tensor, and the exact reverse of {@link indexSelect}.
-   *
-   * The aggregation half of message passing: with `index` the
-   * destination side of an edge list, `messages.scatterAdd(dst, n)`
-   * sums each node's incoming messages.
    */
   scatterAdd<L extends number>(
     index: Tensor<[Dim0<S>], any>,
@@ -1367,11 +1319,6 @@ function swapLastTwo(rank: number): number[] {
   ]
   return order
 }
-
-// --- public re-exports --------------------------------------------
-// tensor.ts has always been the import path for index.ts, the tests,
-// and src/optim.ts / src/nn.ts. Re-export the symbols that moved into
-// the new modules so every existing import keeps working unchanged.
 
 export { forceMany, noGrad }
 export { _activeUpdateTrace }

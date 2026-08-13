@@ -310,7 +310,7 @@ describe.skipIf(!available)("native backend", () => {
     useNative()
     configure({ lazy: true })
     const x = tensor([1, 2, 3]).requires_grad()
-    const z = (x as AnyTensor).mul(x) // shared across y, w, and grads
+    const z = (x as AnyTensor).mul(x)
     const y = z.add(z)
     const w = z.sum()
     y.sum().add(w).backward()

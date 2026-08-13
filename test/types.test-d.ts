@@ -264,14 +264,10 @@ function _genericDims<
   return two
 }
 
-// hardening: checks fail open on unresolved generics, so valid generic
-// builders compile — while concrete mismatches inside them still error.
-
 function _genericOuter<
   N extends number,
   P extends TensorParams,
 >(col: Tensor<[N, 1], P>, row: Tensor<[1, N], any>) {
-  // structural overloads resolve the cross-broadcast to [N, N]
   const sum = col.add(row)
   type _1 = Expect<Equal<typeof sum.shape, [N, N]>>
   const prod = col.mul(row)
@@ -292,15 +288,11 @@ function _genericBatched<
   type _2 = Expect<Equal<typeof tr.shape, [B, 8, N]>>
   const s = q.sum(0)
   type _3 = Expect<Equal<typeof s.shape, [N, 8]>>
-  // cat along a generic dim compiles (the sum N+N stays symbolic)
   const c = Tensor.cat(q, q, 1)
   const cc = Tensor.cat(q, q, 2)
   type _4 = Expect<Equal<typeof cc.shape, [B, N, 16]>>
   return { out, c }
 }
-
-// fail-open must not weaken concrete checks: mismatches through generic
-// builders still error.
 
 function _genericNegative<
   N extends number,
@@ -349,9 +341,6 @@ function _noInfer<P extends TensorParams>(
   return ok
 }
 
-// gather / scatter: the index length flows into the output shape, and a
-// dim-0 scatter index must have one entry per source row.
-
 function _gatherScatter<
   N extends number,
   P extends TensorParams,
@@ -365,11 +354,9 @@ function _gatherScatter<
     Equal<typeof aggregated.shape, [1024, 16]>
   >
 
-  // an inner dim keeps the outer ones
   const channels = nodes.indexSelect(zeros([3]), 1)
   type _3 = Expect<Equal<typeof channels.shape, [1024, 3]>>
 
-  // a generic row count stays generic
   const generic = x.indexSelect(src)
   type _4 = Expect<Equal<typeof generic.shape, [4096, 16]>>
 
@@ -381,8 +368,6 @@ function _gatherScatter<
 
   return { gathered, aggregated }
 }
-
-// comparisons and clamp keep the operand shape; broadcasts still apply.
 
 function _compare(a: Tensor<[2, 3]>, b: Tensor<[3]>) {
   const mask = a.gt(b)
@@ -399,10 +384,6 @@ function _compare(a: Tensor<[2, 3]>, b: Tensor<[3]>) {
 
   return { mask, limited, outer }
 }
-
-// The graph cellular automaton's rule, as a worked example of shapes doing
-// real work: the perception width and the gate's blocks are derived from
-// the channel count, and the state comes back the shape it went in.
 
 import { aliveMask, GraphNCA, type GraphTensors, type Percept } from "../examples/gnca/model.ts"
 
@@ -428,7 +409,6 @@ function _gnca(
     Equal<typeof rule.outer.weight.shape, [128, 16]>
   >
 
-  // A step returns the state's own shape, for one graph or a batch.
   const next = rule.forward(nodes, graph)
   type _5 = Expect<Equal<typeof next.shape, [1024, 16]>>
   const nextBatch = rule.forward(batched, batchedGraph)
@@ -436,7 +416,6 @@ function _gnca(
     Equal<typeof nextBatch.shape, [8192, 16]>
   >
 
-  // The alive mask is one column per node.
   const alive = aliveMask(nodes, graph)
   type _7 = Expect<Equal<typeof alive.shape, [1024, 1]>>
   const masked = nodes.mul(alive)
@@ -453,8 +432,6 @@ function _gnca(
 
   return { next, nextBatch, alive }
 }
-
-// ---- smart constructors: eager rewrite rules, deferral as residual ----
 
 type PlusOne<C extends number> = DimAdd<C, 1>
 type Times3Plus1<C extends number> = DimAdd<DimMul<3, C>, 1>

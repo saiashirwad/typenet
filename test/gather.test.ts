@@ -1,10 +1,3 @@
-// indexSelect / scatterAdd (graph message passing) and the comparison,
-// maximum/minimum and clamp family. Every op is checked for its forward
-// values, then for agreement across all three execution paths: eager
-// CPU, the lazy interpreter, and the native backend.
-//
-// Gradients for all of these live in test/gradcheck.test.ts.
-
 import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
 import { configure, Tensor, tensor } from "../src/tensor.ts"
@@ -16,7 +9,6 @@ afterEach(() => {
   disableNative()
 })
 
-/** Run `fn` eagerly, through the lazy interpreter, and natively. */
 function allPaths(fn: () => AnyTensor): {
   eager: AnyTensor
   lazy: AnyTensor
@@ -134,7 +126,6 @@ describe("indexSelect", () => {
 
 describe("scatterAdd", () => {
   it("sums colliding rows and zero-fills the rest", () => {
-    // rows 0 and 1 both land on output row 1; output row 2 is untouched
     expect(
       rows()
         .scatterAdd(tensor([1, 1, 0, 3]), 4)
@@ -165,8 +156,6 @@ describe("scatterAdd", () => {
   })
 
   it("is the exact reverse of indexSelect", () => {
-    // gathering with an index then scattering back with the same index
-    // sums each source row once per time it was gathered
     const index = tensor([0, 2, 2, 3])
     const gathered = rows().indexSelect(index)
     const back = gathered.scatterAdd(index, 4)
@@ -180,8 +169,6 @@ describe("scatterAdd", () => {
 
   it("rejects an index length that does not match the source", () => {
     expect(() =>
-      // the type system rejects this too (see types.test-d.ts); the
-      // runtime check is what catches a dynamically sized index
       // @ts-expect-error index must have one entry per source row
       rows().scatterAdd(tensor([0, 1]), 4)
     ).toThrow(/2 indices for 4 rows along dim 0/)
@@ -310,9 +297,6 @@ describe("maximum, minimum and clamp", () => {
 describe.skipIf(!isNativeAvailable())(
   "native gather/scatter at a size that uses candle",
   () => {
-    // Above the loop evaluator's range a graph runs through candle, on
-    // the CPU device by default. The accelerator is opt-in and has its
-    // own kernels for these ops, so check both give the same answer.
     it.each(["cpu", "gpu"] as const)(
       "matches eager on the %s device",
       device => {
@@ -413,7 +397,6 @@ describe("empty dimensions", () => {
   })
 
   it("scatters into no rows along an inner dim", () => {
-    // outer > 1 with a zero-length scattered dim
     each(() =>
       (Tensor.zeros([3, 0]) as AnyTensor).scatterAdd(
         Tensor.zeros([0]) as any,
@@ -457,7 +440,6 @@ describe.skipIf(!isNativeAvailable())(
     const build = (rows: number, cols: number) => {
       const x = Tensor.zeros([rows, cols]) as AnyTensor
       const data = x.data as Float32Array
-      // deterministic, and deliberately near-cancelling
       for (let i = 0; i < data.length; i++) {
         data[i] = Math.sin(i * 12.9898) * 0.5
       }
@@ -496,7 +478,6 @@ describe.skipIf(!isNativeAvailable())(
             nativeError,
             `column ${c}: ${native.data[c]} vs exact ${exact[c]}`,
           ).toBeLessThan(band)
-          // and not materially worse than the order it replaced
           expect(
             nativeError,
             `column ${c}: native error ${nativeError} vs eager ${eagerError}`,
