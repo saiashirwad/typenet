@@ -38,8 +38,9 @@ pub fn device_name() -> String {
 
 // ---------------------------------------------------------------------------
 // Graph format: a topological list of nodes; inputs reference earlier
-// indices; the last node is the root. Leaves index into the `leaves`
-// Float32Array as contiguous slices of prod(shape) f32 values.
+// indices; `roots` lists the output nodes (defaulting to the last node
+// for single-root graphs). Leaves index into the `leaves` Float32Array
+// as contiguous slices of prod(shape) f32 values.
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -139,7 +140,7 @@ struct Graph {
 }
 
 /// Where a graph runs. The JS side chooses (see pickTarget in
-/// src/tensor.ts) because it knows the graph's total size before
+/// src/lazy.ts) because it knows the graph's total size before
 /// anything crosses the FFI boundary.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Target {
@@ -282,7 +283,7 @@ fn node_shapes(graph: &Graph) -> candle_core::Result<Vec<Vec<usize>>> {
 // Counter-based random numbers. Element `i` of stream `s` under seed `k`
 // is a pure hash of (k, s, i): no state to thread through the evaluator,
 // every element independent, and the same arithmetic as the TS side
-// (hash32 / unitFloat in src/tensor.ts). Uniform draws therefore match
+// (hash32 / unitFloat in src/kernels.ts). Uniform draws therefore match
 // exactly across paths — integer mixing and an exact power-of-two scale;
 // normal draws match to f32 rounding, since ln and cos are only
 // specified that closely. The seed is an argument of the eval call, not
@@ -599,8 +600,8 @@ fn apply_un(kind: Un, p: f32, x: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Tiny-graph CPU evaluator. Graphs the JS side pins with `device: "cpu"`
-// (≤ CPU_HINT_MAX_WORK total elements) are dominated by candle's per-op
+// Tiny-graph CPU evaluator. Graphs the JS side pins with `device: "loops"`
+// (≤ LOOP_EVALUATOR_MAX_WORK total elements) are dominated by candle's per-op
 // dispatch — ~0.7µs per kernel × ~60 kernels for a small training step,
 // while the FFI hop itself is ~0.8µs. For those we skip candle entirely
 // and evaluate the graph directly on Vec<f32> buffers with plain loops,

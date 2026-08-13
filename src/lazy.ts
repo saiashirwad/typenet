@@ -410,7 +410,8 @@ const LOOP_EVALUATOR_MAX_WORK = 65536
  * Tiny graphs go to the loop evaluator. Everything else goes to candle
  * on the CPU device, which on macOS means Accelerate for matmul. That is
  * not the obvious default, so the numbers behind it (Apple M5, see
- * LAZY.md): CPU matches Metal on chained large matmuls, loses to it by
+ * PLAN.md "History: measured numbers"): CPU matches Metal on chained
+ * large matmuls, loses to it by
  * ~1.5x on purely elementwise graphs, and beats it by ~7x on the
  * gather/scatter graphs message passing produces — candle's Metal
  * index_select/index_add are slow and the graphs are made of many small

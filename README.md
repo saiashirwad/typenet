@@ -266,6 +266,13 @@ Metal's `index_select`/`index_add` kernels are slow and such graphs are
 made of many small dispatches. Reach for `"gpu"` when a workload is
 dominated by large elementwise tensors.
 
+The native path handles float32 tensors with CPU-resident leaves only —
+today by silent fallback, not by error: when a graph has a float64 leaf
+(or any leaf that is not a plain CPU buffer), serialization returns
+nothing and the graph runs on the JS interpreter instead. No message is
+printed. If a lazy float64 workload is slower than expected, that
+fallback is why.
+
 Graphs small enough that a kernel launch would cost more than the
 arithmetic (≤ 65536 elements) skip candle altogether and run on a fused
 loop evaluator: chains of elementwise ops collapse into single passes, so

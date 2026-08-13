@@ -1,8 +1,9 @@
 # typenet roadmap — the plan to get everything good
 
-Consolidated plan, 2026-07-27. Branch: `lazy-native`. History and phase 1/2
-details live in `LAZY.md`; this file is the forward-looking plan. Update it as
-phases land.
+Consolidated plan, 2026-07-27. Branch: `lazy-native`. This file is the
+forward-looking plan and also holds the measured history that other files
+cite (see "History: measured numbers" at the bottom). Update it as phases
+land.
 
 ## Target state
 
@@ -22,7 +23,7 @@ its good ideas graduate here.
 3. **Type/runtime shape sync.** Lazy nodes compute runtime shapes from the
    same pure shape math the types mirror — the two must never drift.
 4. Every phase lands tested + benchmarked before the next starts. Update this
-   file and LAZY.md per phase.
+   file per phase.
 
 ## Key decisions (settled, don't re-litigate)
 
@@ -97,9 +98,9 @@ their 6–23x; grad parity tests still green.
 7. Graph-level optimization in Rust now that graphs are stable. Benchmarks
    demanded the tiny-graph side, not the big-graph side (Metal already
    wins 6–23x there): landed the tiny-graph plan/exec evaluator with
-   elementwise fusion, DCE, and a prepared-plan cache — see the Phase D
-   section of LAZY.md. Buffer pooling deliberately skipped (fusion made
-   it moot). Remaining conditional work, only if future benchmarks
+   elementwise fusion, DCE, and a prepared-plan cache — see "History:
+   measured numbers" below. Buffer pooling deliberately skipped (fusion
+   made it moot). Remaining conditional work, only if future benchmarks
    demand: Metal-side kernel fusion for large graphs.
 
 Gate: compiled ≤ eager ~3.5ms/200 steps — passed with margin: compiled
@@ -115,11 +116,12 @@ scratch files (`examples/basic.ts`, `examples/_gatdsl.ts`,
 ## Phase E — graph neural nets, and training one at speed
 
 Target: describe and train the graph cellular automaton in
-`~/code/graph-cellular-automata`. Landed — see the Phase E section of
-`LAZY.md` for the ops added (gather/scatter, narrow, comparisons, clamp,
-in-graph randomness, compilable Adam, gradient clipping), the stack-safety
-rewrite, the device-default finding, and the optimization pass that took a
-rolled-out training step from 141 ms to ~16 ms per time step.
+`~/code/graph-cellular-automata`. Landed — the ops added were
+gather/scatter, narrow, comparisons, clamp, in-graph randomness,
+compilable Adam, and gradient clipping, plus a stack-safety rewrite of
+the graph walkers, the device-default finding, and an optimization pass
+that took a rolled-out training step from 141 ms to ~16 ms per time step
+(see "History: measured numbers" below).
 
 `examples/gnca` is the port; `test/gnca.test.ts` checks it against the
 PyTorch original rather than trusting it.
@@ -130,8 +132,9 @@ four execution modes — passed. It trains.
 Still open, and both are real projects rather than tasks:
 
 8. **Parallel elementwise kernels.** candle's CPU elementwise ops are
-   single-threaded, which is the whole of the remaining ~3x against
-   PyTorch on MPS: one core busy out of ten. Either give the fused loop
+   single-threaded — one core busy out of ten. That is a real fact, and
+   the leading suspect for the remaining gap against PyTorch on MPS,
+   though the split has not been measured per-op. Either give the fused loop
    evaluator strided views so it can win outright (it already has fusion,
    rayon and BLAS, and trails candle only on `permute`/`narrow`, which are
    free views there), or parallelize candle's kernels upstream.
@@ -155,3 +158,45 @@ Still open, and both are real projects rather than tasks:
       safety, CPU device default, 9x on a rolled-out training step
 - [ ] Parallel elementwise kernels (the remaining ~3x vs PyTorch MPS)
 - [ ] Gradient checkpointing (peak memory is linear in rollout length)
+
+## History: measured numbers
+
+The sections other files cite. All measured on this machine (Apple M5,
+macOS aarch64) unless noted.
+
+### Device defaults (Phase E finding)
+
+candle's CPU device (Accelerate for matmul) is the native default, which
+is not the obvious choice. Measured: CPU matches Metal on chained large
+matmuls, loses to it by ~1.5x on purely elementwise graphs, and beats it
+by ~7x on the gather/scatter graphs message passing produces — candle's
+Metal `index_select`/`index_add` kernels are slow and such graphs are
+made of many small dispatches. `useNative({ device: "gpu" })` opts back
+in for elementwise-dominated workloads.
+
+### Phase D (tiny graphs)
+
+The tiny-graph plan/exec loop evaluator (elementwise fusion, DCE,
+prepared-plan cache) took compiled native XOR to 1.6 ms per 200 steps,
+the fastest mode overall (eager CPU: 2.1 ms). Graphs whose total element
+count is at most 65536 (`LOOP_EVALUATOR_MAX_WORK` in `src/lazy.ts`) are
+sent there with `device: "loops"`; everything larger goes to candle.
+
+### Phase E (GNCA at speed)
+
+An optimization pass over the compiled rolled-out training step
+(multi-root eval, in-graph Adam, buffer release during eval on the
+candle path) took it from 141 ms to ~16 ms per rolled-out time step at
+the reference settings (8192 nodes, 76592 edges). Published race as of
+2026-08: 0.7 training steps/s (typenet, candle CPU) vs 2.7 (PyTorch
+MPS) on the README GNCA training recipe. Nothing in-repo times
+`torch.mps` yet; treat those numbers as current until a checked bench
+lands.
+
+### Native dtype/device support (current behavior)
+
+Native is f32-on-CPU-leaves only, today by silent fallback:
+`serializeLazyGraph` returns null when any leaf is float64 or not on the
+CPU storage kind, and `evalNativeMany` then falls back to the JS
+interpreter. No error is raised. (A hard throw when native is enabled is
+planned; until then the fallback is the documented behavior.)

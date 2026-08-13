@@ -331,9 +331,9 @@ describe.skipIf(!isNativeAvailable())(
       },
     )
 
-    // Above CPU_HINT_MAX_WORK (65536 elements) the graph runs through
-    // candle rather than the tiny-graph loop evaluator, so this covers
-    // the other native code path.
+    // Above LOOP_EVALUATOR_MAX_WORK (65536 elements) the graph runs
+    // through candle rather than the tiny-graph loop evaluator, so this
+    // covers the other native code path.
     it("matches eager for a large gather/scatter round trip", () => {
       const n = 512
       const c = 64

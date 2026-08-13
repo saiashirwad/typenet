@@ -160,7 +160,7 @@ At those settings (8192 nodes, 76592 edges, forward + backward + Adam):
 about **16 ms per rolled-out time step**, or **0.7 training steps/s**
 against PyTorch on MPS at **2.7**, so ~4x slower.
 
-The gap is one thing: candle's CPU elementwise kernels are
+The leading suspect is that candle's CPU elementwise kernels are
 single-threaded, so the process sits at 100% of one core out of ten.
-`TYPENET_PROFILE=1` shows it. The Phase E section of `../../LAZY.md` has
-the numbers and what closing it would take.
+`TYPENET_PROFILE=1` shows it. The "History: measured numbers" section of
+`../../PLAN.md` has the numbers and what closing it would take.
