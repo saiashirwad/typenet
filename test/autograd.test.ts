@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { noGrad, Tensor, tensor } from "../src/tensor.ts"
+import { noGrad } from "../src/autograd.ts"
+import { tensor } from "../src/factories.ts"
+import { Tensor } from "../src/tensor.ts"
+import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -82,7 +85,7 @@ describe("autograd", () => {
   it("noGrad suppresses graph building", () => {
     const x = tensor([1, 2]).requiresGrad()
     const y = noGrad(() => x.mul(3))
-    expect(y.gradNode).toBeNull()
+    expect(testing.gradNodeOf(y)).toBeNull()
   })
 
   it("detach cuts the graph", () => {

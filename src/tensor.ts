@@ -1,5 +1,5 @@
 import { Operator } from "tsover-runtime"
-import { type GradNode, noGrad, tapeOrder, withGrad } from "./autograd.ts"
+import { type GradNode, noGrad, runBackward, withGrad } from "./autograd.ts"
 import { _activeUpdateTrace, tensorNames } from "./compile.ts"
 import {
   rawBinary,
@@ -131,11 +131,39 @@ export function makeStorage(
 type Dim0<S extends Shape> = S extends [infer A extends number, ...any[]] ? A : never
 type Dim1<S extends Shape> = S extends [any, infer B extends number, ...any[]] ? B : never
 
+/**
+ * Friend-module access to the private fields. Populated by a static
+ * block inside `Tensor` (the only scope that can reach `#` fields), and
+ * imported by the evaluator modules; tests go through `src/testing.ts`.
+ */
+export interface TensorInternal {
+  sourceOf(t: AnyTensor): TensorStorage
+  cpuOf(t: AnyTensor): TypedArray | null
+  setCpu(t: AnyTensor, data: TypedArray): void
+  /** Drop a lazy tensor's materialized value so a replay recomputes it. */
+  resetCpu(t: AnyTensor): void
+  hasValue(t: AnyTensor): boolean
+  gradNodeOf(t: AnyTensor): GradNode | null
+  setGradNode(t: AnyTensor, node: GradNode | null): void
+  /** Same source and materialized buffer under a new shape (free view). */
+  makeView(t: AnyTensor, shape: readonly number[]): AnyTensor
+}
+
+export let _internal!: TensorInternal
+
 type StackCheck<T extends readonly AnyTensor[]> = T[number] extends Tensor<ShapeOf<T[0]>> ? unknown
   : ErrorMessage<"stack: all tensors must have the same shape">
 
 export class Tensor<S extends Shape> {
-  readonly _storage: TensorStorage
+  /**
+   * Where the value comes from: a CPU buffer or a lazy graph node.
+   * Immutable for the life of the tensor — forcing fills {@link #cpu}
+   * instead of rewriting this field, so a lazy tensor stays lazy.
+   */
+  readonly #source: TensorStorage
+  /** The materialized CPU buffer; for lazy sources, filled by force. */
+  #cpu: TypedArray | null
+  #gradNode: GradNode | null = null
   readonly shape: S
   readonly dtype: DType
 
@@ -144,7 +172,32 @@ export class Tensor<S extends Shape> {
   /** Internal grad-leaf flag; read {@link needsGrad}, set via {@link requiresGrad}. */
   _requiresGrad = false
 
-  gradNode: GradNode | null = null
+  static {
+    _internal = {
+      sourceOf: t => t.#source,
+      cpuOf: t => t.#cpu,
+      setCpu: (t, data) => {
+        t.#cpu = data
+      },
+      resetCpu: t => {
+        if (t.#source.kind === "lazy") t.#cpu = null
+      },
+      hasValue: t => t.#cpu !== null,
+      gradNodeOf: t => t.#gradNode,
+      setGradNode: (t, node) => {
+        t.#gradNode = node
+      },
+      makeView: (t, shape) => {
+        const out = makeStorage(
+          t.#source,
+          shape,
+          t.dtype,
+        )
+        out.#cpu = t.#cpu
+        return out
+      },
+    }
+  }
 
   constructor(
     storage: TensorStorage,
@@ -165,20 +218,26 @@ export class Tensor<S extends Shape> {
         `Data length ${length} does not match shape ${showShape(shape)}`,
       )
     }
-    this._storage = storage
+    this.#source = storage
+    this.#cpu = storage.kind === "cpu" ? storage.data : null
     this.shape = shape as S
     this.dtype = dtype
   }
 
   get data(): TypedArray {
-    if (this._storage.kind === "lazy") {
-      return force(this as AnyTensor).data
+    if (this.#cpu === null) {
+      force(this as AnyTensor)
     }
-    return this._storage.data
+    return this.#cpu!
   }
 
   get needsGrad(): boolean {
-    return this._requiresGrad || this.gradNode !== null
+    return this._requiresGrad || this.#gradNode !== null
+  }
+
+  /** Whether an autograd tape reaches this tensor. */
+  get taped(): boolean {
+    return this.#gradNode !== null
   }
 
   get rank(): S["length"] {
@@ -278,10 +337,9 @@ export class Tensor<S extends Shape> {
    * rebind the result, do not rely on mutation.
    */
   requiresGrad(): Tensor<S> {
-    const leaf = makeStorage(
-      this._storage,
+    const leaf = _internal.makeView(
+      this as AnyTensor,
       this.shape,
-      this.dtype,
     ) as Tensor<S>
     leaf._requiresGrad = true
     return leaf
@@ -340,10 +398,9 @@ export class Tensor<S extends Shape> {
   }
 
   detach(): Tensor<S> {
-    return makeStorage(
-      this._storage,
+    return _internal.makeView(
+      this as AnyTensor,
       this.shape,
-      this.dtype,
     ) as any
   }
 
@@ -365,91 +422,11 @@ export class Tensor<S extends Shape> {
   }
 
   backward(gradient?: Tensor<S>): void {
-    if (!this.needsGrad) {
-      throw new Error(
-        "backward() on a tensor that does not require grad",
-      )
-    }
-    let seed: AnyTensor
-    const lazyPath = lazyMode && this._storage.kind === "lazy"
-    if (gradient) {
-      if (!shapesEqual(gradient.shape, this.shape)) {
-        throw new Error(
-          `backward() gradient shape ${showShape(gradient.shape)} does not match ${showShape(this.shape)}`,
-        )
-      }
-      seed = lazyPath
-        ? (gradient as AnyTensor)
-        : force(gradient as AnyTensor)
-    } else {
-      if (this.numel !== 1) {
-        throw new Error(
-          "backward() without a gradient requires a scalar output",
-        )
-      }
-      seed = makeRaw(
-        new (arrayCtor(this.dtype))(this.numel).fill(1),
-        this.shape,
-        this.dtype,
-      )
-    }
-
-    const topo = tapeOrder(this as AnyTensor)
-
-    const grads = new Map<AnyTensor, AnyTensor>()
-    grads.set(this, seed)
-
-    const walk = () =>
-      noGrad(() => {
-        for (let i = topo.length - 1; i >= 0; i--) {
-          const t = topo[i]!
-          const g = grads.get(t)
-          if (!g) continue
-          if (t.gradNode) {
-            const inputGrads = t.gradNode.backward(g)
-            t.gradNode.inputs.forEach((input, j) => {
-              const ig = inputGrads[j]
-              if (!ig || !input.needsGrad) return
-              const existing = grads.get(input)
-              grads.set(
-                input,
-                existing
-                  ? rawBinary(existing, ig, "add")
-                  : ig,
-              )
-            })
-          } else if (t._requiresGrad) {
-            t.grad = t.grad
-              ? (rawBinary(t.grad, g, "add") as any)
-              : (g as any)
-          }
-        }
-      })
-
-    if (lazyPath) {
-      walk()
-      // Materialize the whole forward topo plus every parameter grad
-      // in a single multi-root forcing point (one native FFI hop when
-      // native is enabled). The forward tensors are forced too so that
-      // values read after an in-place optimizer step (which mutates
-      // the leaf parameter data) still see pre-step values, matching
-      // eager and phase-1 lazy semantics. During a compile() trace the
-      // forcing is deferred: the lazy grads stay graph expressions and
-      // the traced optimizer updates (plus the grads themselves) become
-      // extra roots of the compiled graph, materialized on replay.
-      if (!_activeUpdateTrace()) {
-        forceMany([
-          ...topo,
-          ...topo
-            .filter(t => t._requiresGrad && t.grad)
-            .map(t => t.grad as AnyTensor),
-        ])
-      }
-      return
-    }
-
-    for (const t of topo) force(t)
-    eagerly(walk)
+    runBackward(
+      this as AnyTensor,
+      gradient as AnyTensor | undefined,
+      _activeUpdateTrace,
+    )
   }
 
   zeroGrad(): void {
@@ -1290,25 +1267,6 @@ function swapLastTwo(rank: number): number[] {
   return order
 }
 
-export { forceMany, noGrad }
-export { _activeUpdateTrace }
-export { compile, printGraph } from "./compile.ts"
-export type { CompiledFn } from "./compile.ts"
-export { normal, uniform } from "./eager.ts"
-export { configure, isLazy } from "./lazy.ts"
-export { broadcastShapes } from "./shape.ts"
-export type { DType, RandomKind } from "./storage.ts"
-
-export const tensor = Tensor.of
-export const zeros = Tensor.zeros
-export const ones = Tensor.ones
-export const full = Tensor.full
-export const rand = Tensor.rand
-export const randn = Tensor.randn
-export const eye = Tensor.eye
-export const arange = Tensor.arange
-export const scalar = Tensor.scalar
-export const stack = Tensor.stack
 function cat2(
   ta: AnyTensor,
   tb: AnyTensor,
@@ -1335,5 +1293,3 @@ function cat2(
     rawNarrow(g, d, lenA, lenB),
   ])
 }
-
-export const cat = Tensor.cat

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
-import { configure, Tensor, tensor } from "../src/tensor.ts"
+import { tensor } from "../src/factories.ts"
+import { configure } from "../src/lazy.ts"
+import { Tensor } from "../src/tensor.ts"
+import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -240,7 +243,7 @@ describe("comparisons", () => {
   it("stop gradients", () => {
     const x = tensor([-1, 1]).requiresGrad()
     const mask = (x as AnyTensor).gt(0)
-    expect(mask.gradNode).toBeNull()
+    expect(testing.gradNodeOf(mask)).toBeNull()
     expect(mask.needsGrad).toBe(false)
   })
 

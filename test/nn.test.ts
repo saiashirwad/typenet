@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
+import { tensor } from "../src/factories.ts"
 import { crossEntropy, Linear, Module, mseLoss, ReLU, sequential } from "../src/nn.ts"
 import { Adam, SGD } from "../src/optim.ts"
-import { Tensor, tensor } from "../src/tensor.ts"
+import { Tensor } from "../src/tensor.ts"
 
 describe("Linear", () => {
   it("computes x @ W + b with typed dims", () => {

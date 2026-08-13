@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { arange, eye, ones, Tensor, tensor, zeros } from "../src/tensor.ts"
+import { arange, eye, ones, tensor, zeros } from "../src/factories.ts"
+import { Tensor } from "../src/tensor.ts"
 
 describe("creation", () => {
   it("infers shape from nested arrays", () => {

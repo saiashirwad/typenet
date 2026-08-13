@@ -15,7 +15,7 @@ import {
   showShape,
   type UnaryOp,
 } from "./storage.ts"
-import { type AnyTensor, makeRaw, makeStorage, type Tensor } from "./tensor.ts"
+import { _internal, type AnyTensor, makeRaw, type Tensor } from "./tensor.ts"
 
 function forEachStrided(
   shape: readonly number[],
@@ -547,7 +547,7 @@ function reshapeRaw(
       t.dtype,
     )
   }
-  return makeStorage(t._storage, shape, t.dtype)
+  return _internal.makeView(t, shape)
 }
 
 export { sumTo }

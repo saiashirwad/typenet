@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
-import { compile, configure, printGraph, Tensor, tensor } from "../src/tensor.ts"
+import { compile, printGraph } from "../src/compile.ts"
+import { tensor } from "../src/factories.ts"
+import { configure } from "../src/lazy.ts"
+import { Tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any>
 

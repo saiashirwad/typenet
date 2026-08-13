@@ -1,3 +1,4 @@
+import { ones, randn, tensor, zeros } from "../src/factories.ts"
 import { Linear } from "../src/nn.ts"
 import { DimAdd, DimMul } from "../src/shape.ts"
 import type {
@@ -16,7 +17,7 @@ import type {
   Transpose,
   Unsqueeze,
 } from "../src/shape.ts"
-import { fromFlat, ones, randn, Tensor, tensor, zeros } from "../src/tensor.ts"
+import { fromFlat, Tensor } from "../src/tensor.ts"
 import { BROADCAST_CASES, CAT_CASES, MATMUL_CASES, PERMUTE_CASES, REDUCE_CASES, RESIZE_CASES, VIEW_CASES } from "./shape-cases.ts"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (

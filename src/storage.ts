@@ -115,7 +115,6 @@ type LazyNode = LazyNodeBody & {
 type LazyStorage = {
   readonly kind: "lazy"
   readonly node: LazyNode
-  cache: AnyTensor | null
 }
 
 type TensorStorage = CpuStorage | LazyStorage

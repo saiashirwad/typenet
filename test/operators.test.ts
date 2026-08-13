@@ -1,8 +1,9 @@
 "use tsover"
 
 import { describe, expect, it } from "vitest"
+import { tensor } from "../src/factories.ts"
 import { mseLoss } from "../src/nn.ts"
-import { Tensor, tensor } from "../src/tensor.ts"
+import { Tensor } from "../src/tensor.ts"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
   <T>() => T extends B ? 1 : 2

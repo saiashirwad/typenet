@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
-import { compile, configure, normal, printGraph, Tensor, tensor, uniform } from "../src/tensor.ts"
+import { compile, printGraph } from "../src/compile.ts"
+import { normal, uniform } from "../src/eager.ts"
+import { tensor } from "../src/factories.ts"
+import { configure } from "../src/lazy.ts"
+import { Tensor } from "../src/tensor.ts"
+import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -87,7 +92,7 @@ describe("random nodes in a graph", () => {
   it("stop gradients", () => {
     const u = uniform([4]) as AnyTensor
     expect(u.needsGrad).toBe(false)
-    expect(u.gradNode).toBeNull()
+    expect(testing.gradNodeOf(u)).toBeNull()
   })
 
   it("redraw on every call of a compiled function", () => {

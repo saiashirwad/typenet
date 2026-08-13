@@ -2,7 +2,9 @@
 // by 1/eps, so the stable relative tolerance is 1e-3, not f64-style 1e-4.
 
 import { afterEach, describe, expect, it } from "vitest"
-import { configure, noGrad, Tensor } from "../src/tensor.ts"
+import { noGrad } from "../src/autograd.ts"
+import { configure } from "../src/lazy.ts"
+import { Tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any>
 

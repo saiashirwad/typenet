@@ -16,7 +16,7 @@ import {
 } from "./eager.ts"
 import { getActiveSeed, nextSeed, randomData, reseed, setActiveSeed } from "./kernels.ts"
 import { type CpuStorage, type DType, type LazyNode, type LazyNodeBody, type LazyStorage, prod, showShape, type TensorStorage } from "./storage.ts"
-import { type AnyTensor, makeRaw, makeStorage } from "./tensor.ts"
+import { _internal, type AnyTensor, makeRaw, makeStorage } from "./tensor.ts"
 
 let lazyMode = false
 
@@ -248,7 +248,7 @@ function makeLazy(
     dtype,
   } as LazyNode
   return makeStorage(
-    { kind: "lazy", node, cache: null },
+    { kind: "lazy", node },
     shape,
     dtype,
   )
@@ -348,10 +348,13 @@ function topoOrder(
   const push = (t: AnyTensor): void => {
     if (seen.has(t)) return
     seen.add(t)
+    const source = _internal.sourceOf(t)
     stack.push({
       t,
-      inputs: t._storage.kind === "lazy"
-        ? nodeInputs(t._storage.node)
+      // A materialized lazy tensor is a leaf: its value is frozen, so
+      // nothing below it is walked (or re-randomized) again.
+      inputs: source.kind === "lazy" && !_internal.hasValue(t)
+        ? nodeInputs(source.node)
         : [],
       i: 0,
     })
@@ -376,22 +379,23 @@ function evalInterpreted(roots: AnyTensor[]): void {
   // it, and the next pass over the same graph draws different numbers.
   setActiveSeed(nextSeed())
   for (const t of topoOrder(roots)) {
-    const storage = t._storage
-    if (storage.kind !== "lazy") continue
-    if (!storage.cache) {
-      storage.cache = eagerly(() => evalNode(storage.node))
+    const source = _internal.sourceOf(t)
+    if (source.kind !== "lazy" || _internal.hasValue(t)) {
+      continue
     }
-    ;(t as { _storage: TensorStorage })._storage = storage.cache._storage
+    const result = eagerly(() => evalNode(source.node))
+    _internal.setCpu(t, result.data)
   }
 }
 
 function force(t: AnyTensor): AnyTensor {
-  const storage = t._storage
-  if (storage.kind !== "lazy") return t
-  if (!storage.cache && !evalNativeMany([t])) {
+  const source = _internal.sourceOf(t)
+  if (source.kind !== "lazy" || _internal.hasValue(t)) {
+    return t
+  }
+  if (!evalNativeMany([t])) {
     evalInterpreted([t])
   }
-  ;(t as { _storage: TensorStorage })._storage = storage.cache!._storage
   return t
 }
 
@@ -441,20 +445,19 @@ function serializeLazyGraph(roots: AnyTensor[]): {
 
   for (const t of order) {
     index.set(t, nodes.length)
-    if (t._storage.kind !== "lazy") {
-      if (
-        t._storage.kind !== "cpu"
-        || t.dtype !== "float32"
-      ) {
+    const source = _internal.sourceOf(t)
+    if (source.kind !== "lazy" || _internal.hasValue(t)) {
+      if (t.dtype !== "float32") {
         // Native is f32-on-CPU-leaves only. This used to fall back to
         // the JS interpreter silently; with native enabled that is a
         // performance surprise, so it is now an error.
         throw new Error(
-          `native backend requires float32 CPU leaves; got a ${t.dtype} ${t._storage.kind} leaf. `
+          `native backend requires float32 CPU leaves; got a ${t.dtype} leaf. `
             + "Keep the graph in float32 or call disableNative().",
         )
       }
-      const data = t._storage.data as Float32Array
+      const data = (_internal.cpuOf(t)
+        ?? (source as CpuStorage).data) as Float32Array
       nodes.push({
         op: "leaf",
         leaf: leafTensors.length,
@@ -468,7 +471,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
       work += data.length
       continue
     }
-    const node = t._storage.node
+    const node = (source as LazyStorage).node
     work += prod(node.shape)
     // Every input precedes `t` in topological order, so its index is
     // already assigned.
@@ -501,7 +504,12 @@ function serializeLazyGraph(roots: AnyTensor[]): {
 function evalNativeMany(roots: AnyTensor[]): boolean {
   if (!nativeBackend.isNativeEnabled()) return false
   for (const t of roots) {
-    if (t._storage.kind !== "lazy") return false
+    if (
+      _internal.sourceOf(t).kind !== "lazy"
+      || _internal.hasValue(t)
+    ) {
+      return false
+    }
   }
   const serialized = serializeLazyGraph(roots)
   if (!serialized) return false
@@ -513,14 +521,10 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
   let offset = 0
   serialized.rootShapes.forEach((shape, i) => {
     const n = prod(shape)
-    const storage = roots[i]!._storage
-    if (storage.kind === "lazy") {
-      storage.cache = makeRaw(
-        data.subarray(offset, offset + n),
-        shape,
-        "float32",
-      )
-    }
+    _internal.setCpu(
+      roots[i]!,
+      data.subarray(offset, offset + n),
+    )
     offset += n
   })
   if (offset !== data.length) {
@@ -532,10 +536,10 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
 }
 
 export function forceMany(ts: AnyTensor[]): void {
-  const pending = ts.filter(t => {
-    const storage = t._storage
-    return storage.kind === "lazy" && !storage.cache
-  })
+  const pending = ts.filter(t =>
+    _internal.sourceOf(t).kind === "lazy"
+    && !_internal.hasValue(t)
+  )
   if (pending.length > 0 && !evalNativeMany(pending)) {
     evalInterpreted(pending)
   }

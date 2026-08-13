@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest"
+import { tensor } from "../src/factories.ts"
 import { isLazy } from "../src/lazy.ts"
+import { configure } from "../src/lazy.ts"
 import { crossEntropy } from "../src/nn.ts"
 import { SGD } from "../src/optim.ts"
-import { configure, Tensor, tensor } from "../src/tensor.ts"
+import { Tensor } from "../src/tensor.ts"
+import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -74,13 +77,13 @@ describe("lazy mode", () => {
       [4, 5, 6],
     ])
     const b = a.add(tensor([10, 20, 30]))
-    expect(b._storage.kind).toBe("lazy")
+    expect(testing.storageOf(b)).toBe("lazy")
     expect(b.shape).toEqual([2, 3])
     expect(b.toArray()).toEqual([
       [11, 22, 33],
       [14, 25, 36],
     ])
-    expect(b._storage.kind).toBe("cpu")
+    expect(testing.storageOf(b)).toBe("materialized")
   })
 
   it("matches eager for binary broadcast", () => {
@@ -191,7 +194,7 @@ describe("lazy mode", () => {
     const eagerLeaf = tensor([1, 2, 3])
     configure({ lazy: true })
     const out = tensor([10, 20, 30]).add(eagerLeaf)
-    expect(out._storage.kind).toBe("lazy")
+    expect(testing.storageOf(out)).toBe("lazy")
     expect(out.toArray()).toEqual([11, 22, 33])
   })
 
@@ -372,7 +375,7 @@ describe("lazy mode", () => {
     // Aliasing: forcing the graph swapped the storage of every alias
     // of a shared node, so z (referenced by two parents plus sum) is
     // materialized exactly once and all aliases agree.
-    expect(z._storage.kind).toBe("cpu")
+    expect(testing.storageOf(z)).toBe("materialized")
     expect(z.toArray()).toEqual([1, 4, 9])
     expect(y.toArray()).toEqual([2, 8, 18])
   })

@@ -1,8 +1,8 @@
 import * as nativeBackend from "./backends/native.ts"
 import { nextSeed } from "./kernels.ts"
 import { force, forceMany, formatLazyOp, lazily, serializeLazyGraph, topoOrder } from "./lazy.ts"
-import { type CpuStorage, type LazyStorage, prod, shapesEqual, showShape, type TensorStorage } from "./storage.ts"
-import { type AnyTensor, makeRaw, Tensor } from "./tensor.ts"
+import { prod, shapesEqual, showShape } from "./storage.ts"
+import { _internal, type AnyTensor, makeRaw, Tensor } from "./tensor.ts"
 
 type GraphUpdate = {
   target: AnyTensor
@@ -34,10 +34,15 @@ export function printGraph(
 ): string {
   const rootList = Array.isArray(roots) ? roots : [roots]
   const ids = new Map<AnyTensor, number>()
-  const entries = topoOrder(rootList).map(t => ({
-    t,
-    node: t._storage.kind === "lazy" ? t._storage.node : null,
-  }))
+  const entries = topoOrder(rootList).map(t => {
+    const source = _internal.sourceOf(t)
+    return {
+      t,
+      node: source.kind === "lazy" && !_internal.hasValue(t)
+        ? source.node
+        : null,
+    }
+  })
   entries.forEach(({ t }, i) => ids.set(t, i))
   const label = (t: AnyTensor): string => tensorNames.get(t) ?? `%${ids.get(t)!}`
   const width = Math.max(
@@ -97,7 +102,7 @@ export function compile<
     tuple: boolean
     shapes: number[][]
     updates: GraphUpdate[]
-    materialize: { t: AnyTensor; storage: LazyStorage }[]
+    materialize: AnyTensor[]
     native: {
       json: string
       handle: number | null
@@ -106,7 +111,7 @@ export function compile<
       leafBytes: number
       rootShapes: number[][]
     } | null
-    lazy: { t: AnyTensor; storage: LazyStorage }[]
+    lazy: AnyTensor[]
   }
   let state: State | null = null
 
@@ -119,7 +124,7 @@ export function compile<
       }
       const t = force(input as AnyTensor)
       if (
-        t._storage.kind !== "cpu"
+        _internal.cpuOf(t) === null
         || t.dtype !== "float32"
       ) {
         throw new Error(
@@ -127,7 +132,7 @@ export function compile<
         )
       }
       return makeRaw(
-        (t._storage.data as Float32Array).slice(),
+        (_internal.cpuOf(t) as Float32Array).slice(),
         t.shape,
         "float32",
       )
@@ -157,21 +162,21 @@ export function compile<
     })
     const updates = traced.updates
     const materialize = traced.materialize.map(t => {
-      if (t._storage.kind !== "lazy") {
+      if (_internal.sourceOf(t).kind !== "lazy") {
         throw new Error(
           "compile(): an optimizer step produced a non-lazy gradient — compiled training steps need lazy gradients",
         )
       }
-      return { t, storage: t._storage }
+      return t
     })
     const roots = [
       ...outputs,
       ...updates.map(u => u.expr),
-      ...materialize.map(m => m.t),
+      ...materialize,
     ]
-    const lazy: State["lazy"] = topoOrder(roots)
-      .filter(t => t._storage.kind === "lazy")
-      .map(t => ({ t, storage: t._storage as LazyStorage }))
+    const lazy: State["lazy"] = topoOrder(roots).filter(
+      t => _internal.sourceOf(t).kind === "lazy",
+    )
     const serialized = serializeLazyGraph(roots)
     return {
       placeholders,
@@ -204,12 +209,12 @@ export function compile<
       )
     }
     inputs.forEach((input, i) => {
-      const storage = state.placeholders[i]!._storage
-      const buffer = (storage as CpuStorage)
-        .data as Float32Array
+      const buffer = _internal.cpuOf(
+        state.placeholders[i]!,
+      ) as Float32Array
       if (input instanceof Tensor) {
         const t = force(input as AnyTensor)
-        if (t._storage.kind !== "cpu") {
+        if (_internal.cpuOf(t) === null) {
           throw new Error(
             `compiled function argument ${i}: expected a CPU tensor`,
           )
@@ -226,7 +231,7 @@ export function compile<
             } — compiled graphs are shape-stable, recompile for a new shape`,
           )
         }
-        buffer.set(t._storage.data as Float32Array)
+        buffer.set(_internal.cpuOf(t) as Float32Array)
       } else if (
         input != null
         && typeof (input as ArrayLike<number>).length
@@ -257,32 +262,32 @@ export function compile<
     u: GraphUpdate,
     values: Float32Array,
   ): void => {
-    const storage = u.target._storage
-    if (storage.kind !== "cpu") {
+    if (_internal.sourceOf(u.target).kind !== "cpu") {
       throw new Error(
         "compiled function: an optimizer update target is not CPU storage — compiled graphs require parameters and optimizer state to stay put",
       )
     }
-    if (storage.data.length !== values.length) {
+    const buffer = _internal.cpuOf(u.target)!
+    if (buffer.length !== values.length) {
       throw new Error(
         "compiled function: an optimizer update target changed size",
       )
     }
-    ;(storage.data as Float32Array).set(values)
+    ;(buffer as Float32Array).set(values)
   }
 
   const runNative = (state: State): AnyTensor[] => {
     const native = state.native!
     const leaves = new Float32Array(native.leafBytes)
     native.leafTensors.forEach((leaf, i) => {
-      const storage = leaf._storage
-      if (storage.kind !== "cpu") {
+      const buffer = _internal.cpuOf(leaf)
+      if (buffer === null) {
         throw new Error(
           "compiled function: a captured tensor is not CPU storage — compiled graphs require captured leaves (e.g. parameters) to stay put",
         )
       }
       leaves.set(
-        storage.data as Float32Array,
+        buffer as Float32Array,
         native.leafOffsets[i]!,
       )
     })
@@ -310,26 +315,21 @@ export function compile<
       applyUpdate(u, take([...u.expr.shape]))
     }
     for (const m of state.materialize) {
-      const values = take([...m.t.shape])
-      m.storage.cache = makeRaw(
-        values,
-        [...m.t.shape],
-        "float32",
-      )
-      ;(m.t as { _storage: TensorStorage })._storage = m.storage.cache._storage
+      _internal.setCpu(m, take([...m.shape]))
     }
     return outputs
   }
 
   const runInterpreter = (state: State): AnyTensor[] => {
-    for (const { t, storage } of state.lazy) {
-      storage.cache = null
-      ;(t as { _storage: TensorStorage })._storage = storage
+    // Rewind: drop every materialized value from the previous replay so
+    // the whole graph recomputes against the freshly swapped inputs.
+    for (const t of state.lazy) {
+      _internal.resetCpu(t)
     }
     forceMany([
       ...state.outputs,
       ...state.updates.map(u => u.expr),
-      ...state.materialize.map(m => m.t),
+      ...state.materialize,
     ])
     for (const u of state.updates) {
       applyUpdate(u, u.expr.data as Float32Array)

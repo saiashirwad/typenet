@@ -1,4 +1,7 @@
-import { _activeUpdateTrace, forceMany, isLazy, noGrad, Tensor } from "./tensor.ts"
+import { noGrad } from "./autograd.ts"
+import { _activeUpdateTrace } from "./compile.ts"
+import { forceMany, isLazy } from "./lazy.ts"
+import { Tensor } from "./tensor.ts"
 import type { Tensor as TensorType } from "./tensor.ts"
 
 type AnyTensor = TensorType<any>

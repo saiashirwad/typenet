@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
+import { compile } from "../src/compile.ts"
+import { tensor } from "../src/factories.ts"
+import { configure } from "../src/lazy.ts"
 import { Adam, clipGradNorm, SGD } from "../src/optim.ts"
-import { compile, configure, Tensor, tensor } from "../src/tensor.ts"
+import { Tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any>
 

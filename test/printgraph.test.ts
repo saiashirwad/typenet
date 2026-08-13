@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { configure, printGraph, Tensor } from "../src/tensor.ts"
+import { printGraph } from "../src/compile.ts"
+import { configure } from "../src/lazy.ts"
+import { Tensor } from "../src/tensor.ts"
 
 afterEach(() => {
   configure({ lazy: false })

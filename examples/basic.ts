@@ -1,6 +1,6 @@
 "use tsover"
 
-import { randn } from "../src/tensor"
+import { randn } from "../index.ts"
 
 const a = randn([2, 3])
 const w = randn([3, 4])
