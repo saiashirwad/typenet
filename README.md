@@ -30,15 +30,14 @@ Feature dimensions are literal, the batch dimension stays generic:
 ```ts
 "use tsover"
 import { Linear, Module, SGD, Tensor, tensor } from "typenet"
-import type { TensorParams } from "typenet"
 
 class XorNet extends Module {
   hidden = new Linear(2, 8)
   out = new Linear(8, 1)
 
-  forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, 2], P>,
-  ): Tensor<[B, 1], P> {
+  forward<B extends number>(
+    x: Tensor<[B, 2]>,
+  ): Tensor<[B, 1]> {
     const h = this.hidden.forward(x).tanh() // Tensor<[B, 8]>
     return this.out.forward(h).sigmoid() // Tensor<[B, 1]>
   }

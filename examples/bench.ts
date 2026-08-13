@@ -10,7 +10,6 @@ import {
   SGD,
   type Tensor,
   tensor,
-  type TensorParams,
   useNative,
 } from "../index.ts"
 
@@ -54,9 +53,9 @@ class XorNet extends Module {
   hidden = new Linear(2, 8)
   out = new Linear(8, 1)
 
-  forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, 2], P>,
-  ): Tensor<[B, 1], P> {
+  forward<B extends number>(
+    x: Tensor<[B, 2]>,
+  ): Tensor<[B, 1]> {
     const h = this.hidden.forward(x).tanh()
     return this.out.forward(h).sigmoid()
   }

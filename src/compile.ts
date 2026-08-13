@@ -20,7 +20,7 @@ export function _activeUpdateTrace(): UpdateTrace | null {
   return updateTrace
 }
 
-type CompiledInput<T extends AnyTensor> = T extends Tensor<infer S, any> ? Tensor<S, any> | ArrayLike<number> : never
+type CompiledInput<T extends AnyTensor> = T extends Tensor<infer S> ? Tensor<S> | ArrayLike<number> : never
 
 // Forcing keeps a tensor's identity (its storage is swapped in
 // place), so a name survives materialization; names do NOT cross

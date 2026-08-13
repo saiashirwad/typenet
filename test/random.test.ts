@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
 import { compile, configure, normal, printGraph, Tensor, tensor, uniform } from "../src/tensor.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 afterEach(() => {
   configure({ lazy: false })

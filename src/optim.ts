@@ -1,7 +1,7 @@
 import { _activeUpdateTrace, forceMany, isLazy, noGrad, Tensor } from "./tensor.ts"
 import type { Tensor as TensorType } from "./tensor.ts"
 
-type AnyTensor = TensorType<any, any>
+type AnyTensor = TensorType<any>
 
 type GraphUpdate = { target: AnyTensor; expr: AnyTensor }
 

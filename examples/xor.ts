@@ -1,13 +1,13 @@
 "use tsover"
 
-import { Linear, Module, SGD, type Tensor, tensor, type TensorParams } from "../index.ts"
+import { Linear, Module, SGD, type Tensor, tensor } from "../index.ts"
 
 class XorNet extends Module {
   hidden = new Linear(2, 8)
   out = new Linear(8, 1)
 
-  forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, 2], P>,
+  forward<B extends number>(
+    x: Tensor<[B, 2]>,
   ) {
     const h = this.hidden.forward(x).tanh()
     return this.out.forward(h).sigmoid()

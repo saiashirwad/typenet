@@ -3,7 +3,7 @@ import { dirname } from "node:path"
 import type { Tensor } from "../../index.ts"
 import type { Edges, Points } from "./graphs.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 export interface Checkpoint {
   step: number

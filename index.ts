@@ -20,7 +20,7 @@ export {
   uniform,
   zeros,
 } from "./src/tensor.ts"
-export type { CompiledFn, DefaultParams, DType, NestedNumbers, ParamsOf, RandomKind, ShapeOf, TensorParams } from "./src/tensor.ts"
+export type { CompiledFn, DType, NestedNumbers, RandomKind, ShapeOf } from "./src/tensor.ts"
 
 export { disableNative, isNativeAvailable, isNativeEnabled, nativeDevice, nativeDeviceMode, useNative } from "./src/backends/native.ts"
 export { crossEntropy, LeakyReLU, Linear, Module, mseLoss, ReLU, Sequential, sequential, Sigmoid, Softmax, Tanh } from "./src/nn.ts"

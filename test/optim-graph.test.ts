@@ -3,7 +3,7 @@ import { disableNative, isNativeAvailable, useNative } from "../src/backends/nat
 import { Adam, clipGradNorm, SGD } from "../src/optim.ts"
 import { compile, configure, Tensor, tensor } from "../src/tensor.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 const available = isNativeAvailable()
 

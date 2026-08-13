@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { configure, noGrad, Tensor } from "../src/tensor.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 // mulberry32 — small seeded PRNG so the sampled inputs are
 // deterministic and the test is never flaky.

@@ -16,7 +16,7 @@ import {
   showShape,
   type UnaryOp,
 } from "./storage.ts"
-import { type AnyTensor, type DefaultParams, makeRaw, makeStorage, type Tensor } from "./tensor.ts"
+import { type AnyTensor, makeRaw, makeStorage, type Tensor } from "./tensor.ts"
 
 function forEachStrided(
   shape: readonly number[],
@@ -427,7 +427,7 @@ function rawRandom(
  */
 export function uniform<const Sh extends Shape>(
   shape: Sh,
-): Tensor<Sh, DefaultParams> {
+): Tensor<Sh> {
   return rawRandom(
     "uniform",
     shape,
@@ -439,7 +439,7 @@ export function uniform<const Sh extends Shape>(
 /** Standard normal values, redrawn per evaluation. See {@link uniform}. */
 export function normal<const Sh extends Shape>(
   shape: Sh,
-): Tensor<Sh, DefaultParams> {
+): Tensor<Sh> {
   return rawRandom(
     "normal",
     shape,

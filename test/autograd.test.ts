@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { noGrad, Tensor, tensor } from "../src/tensor.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 function gradCheck(
   f: (...inputs: AnyTensor[]) => AnyTensor,

@@ -139,11 +139,7 @@ function _tensors() {
     Equal<
       typeof rg,
       Tensor<
-        [2, 3],
-        {
-          requires_grad: true
-          dtype: "float32"
-        }
+        [2, 3]
       >
     >
   >
@@ -153,11 +149,7 @@ function _tensors() {
     Equal<
       typeof f64,
       Tensor<
-        [2, 3],
-        {
-          requires_grad: false
-          dtype: "float64"
-        }
+        [2, 3]
       >
     >
   >
@@ -179,7 +171,6 @@ function _nn() {
 }
 
 import { ReLU, Sequential, sequential } from "../src/nn.ts"
-import type { TensorParams } from "../src/tensor.ts"
 
 function _sequential() {
   const net = sequential(
@@ -237,11 +228,10 @@ function _negative() {
 
 function _genericDims<
   N extends number,
-  P extends TensorParams,
 >(
-  h: Tensor<[N, 24], P>,
-  adj: Tensor<[N, N], any>,
-): Tensor<[N, 16], P> {
+  h: Tensor<[N, 24]>,
+  adj: Tensor<[N, N]>,
+): Tensor<[N, 16]> {
   const w = zeros([24, 8])
   const wh = h.matmul(w)
   type _1 = Expect<Equal<typeof wh.shape, [N, 8]>>
@@ -284,8 +274,7 @@ function _genericBias<
 
 function _genericOuter<
   N extends number,
-  P extends TensorParams,
->(col: Tensor<[N, 1], P>, row: Tensor<[1, N], any>) {
+>(col: Tensor<[N, 1]>, row: Tensor<[1, N]>) {
   const sum = col.add(row)
   type _1 = Expect<Equal<typeof sum.shape, [N, N]>>
   const prod = col.mul(row)
@@ -298,8 +287,7 @@ function _genericOuter<
 function _genericBatched<
   B extends number,
   N extends number,
-  P extends TensorParams,
->(q: Tensor<[B, N, 8], P>, w: Tensor<[8, 16], any>) {
+>(q: Tensor<[B, N, 8]>, w: Tensor<[8, 16]>) {
   const out = q.matmul(w)
   type _1 = Expect<Equal<typeof out.shape, [B, N, 16]>>
   const tr = q.transpose(1, 2)
@@ -314,8 +302,7 @@ function _genericBatched<
 
 function _genericNegative<
   N extends number,
-  P extends TensorParams,
->(h: Tensor<[N, 24], P>, q: Tensor<[2, N, 16, 8], P>) {
+>(h: Tensor<[N, 24]>, q: Tensor<[2, N, 16, 8]>) {
   // @ts-expect-error inner dims 24 and 7 disagree
   h.matmul(zeros([7, 8]))
 
@@ -336,10 +323,10 @@ import { crossEntropy, mseLoss } from "../src/nn.ts"
 // NoInfer pins each repeated inference site to its first occurrence, so a
 // mismatched later argument is checked instead of re-inferring.
 
-function _noInfer<P extends TensorParams>(
-  pred: Tensor<[2, 3], P>,
-  logits: Tensor<[4, 3], P>,
-  badTargets: Tensor<[5], any>,
+function _noInfer(
+  pred: Tensor<[2, 3]>,
+  logits: Tensor<[4, 3]>,
+  badTargets: Tensor<[5]>,
 ) {
   const ok = mseLoss(
     pred,
@@ -361,8 +348,7 @@ function _noInfer<P extends TensorParams>(
 
 function _gatherScatter<
   N extends number,
-  P extends TensorParams,
->(x: Tensor<[N, 16], P>, nodes: Tensor<[1024, 16], P>) {
+>(x: Tensor<[N, 16]>, nodes: Tensor<[1024, 16]>) {
   const src = zeros([4096])
   const gathered = nodes.indexSelect(src)
   type _1 = Expect<Equal<typeof gathered.shape, [4096, 16]>>

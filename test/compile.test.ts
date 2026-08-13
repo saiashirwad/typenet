@@ -3,7 +3,7 @@ import { disableNative, isNativeAvailable, preparedGraphCountNative, useNative }
 import { Linear, mseLoss, sequential, Tanh } from "../src/nn.ts"
 import { compile, configure, Tensor, tensor } from "../src/tensor.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 const available = isNativeAvailable()
 

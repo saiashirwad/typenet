@@ -10,7 +10,7 @@ import { renderSvg, visible } from "../examples/gnca/render.ts"
 import { heart } from "../examples/gnca/targets.ts"
 import { configure, disableNative, Tensor } from "../index.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 const scratch = mkdtempSync(join(tmpdir(), "typenet-gnca-"))
 

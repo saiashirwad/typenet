@@ -58,30 +58,11 @@ import {
   type TypedArray,
 } from "./storage.ts"
 
-export type TensorParams = {
-  requires_grad: boolean
-  dtype: DType
-}
-
-export type DefaultParams = {
-  requires_grad: false
-  dtype: "float32"
-}
-
-type Clean<T> = { [K in keyof T]: T[K] } & unknown
-
-type Merge<A, B> = Clean<
-  {
-    [K in keyof A as K extends keyof B ? never : K]: A[K]
-  } & B
->
-
-export type ShapeOf<T> = T extends Tensor<infer S, any> ? S : never
-export type ParamsOf<T> = T extends Tensor<any, infer P> ? P : never
+export type ShapeOf<T> = T extends Tensor<infer S> ? S : never
 
 export type NestedNumbers = number | readonly NestedNumbers[]
 
-export type AnyTensor = Tensor<any, any>
+export type AnyTensor = Tensor<any>
 
 const INTERNAL = Symbol("tensor-internal")
 
@@ -144,18 +125,15 @@ export function makeStorage(
 type Dim0<S extends Shape> = S extends [infer A extends number, ...any[]] ? A : never
 type Dim1<S extends Shape> = S extends [any, infer B extends number, ...any[]] ? B : never
 
-type StackCheck<T extends readonly AnyTensor[]> = T[number] extends Tensor<ShapeOf<T[0]>, any> ? unknown
+type StackCheck<T extends readonly AnyTensor[]> = T[number] extends Tensor<ShapeOf<T[0]>> ? unknown
   : ErrorMessage<"stack: all tensors must have the same shape">
 
-export class Tensor<
-  S extends Shape = number[],
-  P extends TensorParams = DefaultParams,
-> {
+export class Tensor<S extends Shape> {
   readonly _storage: TensorStorage
   readonly shape: S
   readonly dtype: DType
 
-  grad: Tensor<S, P> | null = null
+  grad: Tensor<S> | null = null
 
   requiresGrad = false
 
@@ -206,7 +184,7 @@ export class Tensor<
 
   static of<const V extends NestedNumbers>(
     value: V,
-  ): Tensor<InferShape<V>, DefaultParams> {
+  ): Tensor<InferShape<V>> {
     const flat: number[] = []
     const shape: number[] = []
     flatten(value, flat, shape, 0)
@@ -220,26 +198,26 @@ export class Tensor<
   static full<const Sh extends Shape>(
     shape: Sh,
     value: number,
-  ): Tensor<Sh, DefaultParams> {
+  ): Tensor<Sh> {
     const data = new Float32Array(prod(shape)).fill(value)
     return makeRaw(data, shape, "float32") as any
   }
 
   static zeros<const Sh extends Shape>(
     shape: Sh,
-  ): Tensor<Sh, DefaultParams> {
+  ): Tensor<Sh> {
     return Tensor.full(shape, 0)
   }
 
   static ones<const Sh extends Shape>(
     shape: Sh,
-  ): Tensor<Sh, DefaultParams> {
+  ): Tensor<Sh> {
     return Tensor.full(shape, 1)
   }
 
   static rand<const Sh extends Shape>(
     shape: Sh,
-  ): Tensor<Sh, DefaultParams> {
+  ): Tensor<Sh> {
     const data = new Float32Array(prod(shape))
     for (let i = 0; i < data.length; i++) {
       data[i] = Math.random()
@@ -249,7 +227,7 @@ export class Tensor<
 
   static randn<const Sh extends Shape>(
     shape: Sh,
-  ): Tensor<Sh, DefaultParams> {
+  ): Tensor<Sh> {
     const data = new Float32Array(prod(shape))
     for (let i = 0; i < data.length; i += 2) {
       const u = 1 - Math.random()
@@ -265,7 +243,7 @@ export class Tensor<
 
   static eye<const N extends number>(
     n: N,
-  ): Tensor<[N, N], DefaultParams> {
+  ): Tensor<[N, N]> {
     const data = new Float32Array(n * n)
     for (let i = 0; i < n; i++) data[i * n + i] = 1
     return makeRaw(data, [n, n], "float32") as any
@@ -273,13 +251,13 @@ export class Tensor<
 
   static arange<const N extends number>(
     n: N,
-  ): Tensor<[N], DefaultParams> {
+  ): Tensor<[N]> {
     const data = new Float32Array(n)
     for (let i = 0; i < n; i++) data[i] = i
     return makeRaw(data, [n], "float32") as any
   }
 
-  static scalar(value: number): Tensor<[], DefaultParams> {
+  static scalar(value: number): Tensor<[]> {
     return makeRaw(
       Float32Array.of(value),
       [],
@@ -288,21 +266,20 @@ export class Tensor<
   }
 
   requires_grad(): Tensor<
-    S,
-    Merge<P, { requires_grad: true }>
+    S
   > {
     this.requiresGrad = true
     return this as any
   }
 
-  no_grad(): Tensor<S, Merge<P, { requires_grad: false }>> {
+  no_grad(): Tensor<S> {
     this.requiresGrad = false
     return this as any
   }
 
   to<const D extends DType>(
     dtype: D,
-  ): Tensor<S, Merge<P, { dtype: D }>> {
+  ): Tensor<S> {
     if (dtype === this.dtype) return this as any
     const data = arrayCtor(dtype).from(this.data)
     return makeMovedData(this, data, dtype) as any
@@ -352,7 +329,7 @@ export class Tensor<
     return `Tensor(shape=${showShape(this.shape)}, dtype=${this.dtype}, data=${JSON.stringify(this.toArray())})`
   }
 
-  detach(): Tensor<S, Merge<P, { requires_grad: false }>> {
+  detach(): Tensor<S> {
     return makeStorage(
       this._storage,
       this.shape,
@@ -360,7 +337,7 @@ export class Tensor<
     ) as any
   }
 
-  clone(): Tensor<S, P> {
+  clone(): Tensor<S> {
     force(this as AnyTensor)
     const t = makeRaw(
       this.data.slice(),
@@ -377,7 +354,7 @@ export class Tensor<
     return this
   }
 
-  backward(gradient?: Tensor<S, any>): void {
+  backward(gradient?: Tensor<S>): void {
     if (!this.needsGrad) {
       throw new Error(
         "backward() on a tensor that does not require grad",
@@ -469,18 +446,18 @@ export class Tensor<
     this.grad = null
   }
 
-  add(other: number): Tensor<S, P>
+  add(other: number): Tensor<S>
   add(
-    this: Tensor<[Dim0<S>, 1], P>,
-    other: Tensor<[1, Dim0<S>], any>,
-  ): Tensor<[Dim0<S>, Dim0<S>], P>
+    this: Tensor<[Dim0<S>, 1]>,
+    other: Tensor<[1, Dim0<S>]>,
+  ): Tensor<[Dim0<S>, Dim0<S>]>
   add(
-    this: Tensor<[1, Dim1<S>], P>,
-    other: Tensor<[Dim1<S>, 1], any>,
-  ): Tensor<[Dim1<S>, Dim1<S>], P>
+    this: Tensor<[1, Dim1<S>]>,
+    other: Tensor<[Dim1<S>, 1]>,
+  ): Tensor<[Dim1<S>, Dim1<S>]>
   add<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   add(other: AnyTensor | number): AnyTensor {
     const b = coerce(other, this)
     const out = rawBinary(this, b, "add")
@@ -490,18 +467,18 @@ export class Tensor<
     ])
   }
 
-  sub(other: number): Tensor<S, P>
+  sub(other: number): Tensor<S>
   sub(
-    this: Tensor<[Dim0<S>, 1], P>,
-    other: Tensor<[1, Dim0<S>], any>,
-  ): Tensor<[Dim0<S>, Dim0<S>], P>
+    this: Tensor<[Dim0<S>, 1]>,
+    other: Tensor<[1, Dim0<S>]>,
+  ): Tensor<[Dim0<S>, Dim0<S>]>
   sub(
-    this: Tensor<[1, Dim1<S>], P>,
-    other: Tensor<[Dim1<S>, 1], any>,
-  ): Tensor<[Dim1<S>, Dim1<S>], P>
+    this: Tensor<[1, Dim1<S>]>,
+    other: Tensor<[Dim1<S>, 1]>,
+  ): Tensor<[Dim1<S>, Dim1<S>]>
   sub<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   sub(other: AnyTensor | number): AnyTensor {
     const b = coerce(other, this)
     const out = rawBinary(this, b, "sub")
@@ -511,18 +488,18 @@ export class Tensor<
     ])
   }
 
-  mul(other: number): Tensor<S, P>
+  mul(other: number): Tensor<S>
   mul(
-    this: Tensor<[Dim0<S>, 1], P>,
-    other: Tensor<[1, Dim0<S>], any>,
-  ): Tensor<[Dim0<S>, Dim0<S>], P>
+    this: Tensor<[Dim0<S>, 1]>,
+    other: Tensor<[1, Dim0<S>]>,
+  ): Tensor<[Dim0<S>, Dim0<S>]>
   mul(
-    this: Tensor<[1, Dim1<S>], P>,
-    other: Tensor<[Dim1<S>, 1], any>,
-  ): Tensor<[Dim1<S>, Dim1<S>], P>
+    this: Tensor<[1, Dim1<S>]>,
+    other: Tensor<[Dim1<S>, 1]>,
+  ): Tensor<[Dim1<S>, Dim1<S>]>
   mul<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   mul(other: AnyTensor | number): AnyTensor {
     const b = coerce(other, this)
     const out = rawBinary(this, b, "mul")
@@ -532,18 +509,18 @@ export class Tensor<
     ])
   }
 
-  div(other: number): Tensor<S, P>
+  div(other: number): Tensor<S>
   div(
-    this: Tensor<[Dim0<S>, 1], P>,
-    other: Tensor<[1, Dim0<S>], any>,
-  ): Tensor<[Dim0<S>, Dim0<S>], P>
+    this: Tensor<[Dim0<S>, 1]>,
+    other: Tensor<[1, Dim0<S>]>,
+  ): Tensor<[Dim0<S>, Dim0<S>]>
   div(
-    this: Tensor<[1, Dim1<S>], P>,
-    other: Tensor<[Dim1<S>, 1], any>,
-  ): Tensor<[Dim1<S>, Dim1<S>], P>
+    this: Tensor<[1, Dim1<S>]>,
+    other: Tensor<[Dim1<S>, 1]>,
+  ): Tensor<[Dim1<S>, Dim1<S>]>
   div<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   div(other: AnyTensor | number): AnyTensor {
     const b = coerce(other, this)
     const out = rawBinary(this, b, "div")
@@ -560,10 +537,10 @@ export class Tensor<
    * Gradient goes wholly to whichever operand won;
    * ties go to the left one.
    */
-  maximum(other: number): Tensor<S, P>
+  maximum(other: number): Tensor<S>
   maximum<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   maximum(other: AnyTensor | number): AnyTensor {
     const b = coerce(other, this)
     const out = rawBinary(this, b, "maximum")
@@ -580,10 +557,10 @@ export class Tensor<
   }
 
   /** Ties go to the left operand. */
-  minimum(other: number): Tensor<S, P>
+  minimum(other: number): Tensor<S>
   minimum<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   minimum(other: AnyTensor | number): AnyTensor {
     const b = coerce(other, this)
     const out = rawBinary(this, b, "minimum")
@@ -606,7 +583,7 @@ export class Tensor<
   clamp(
     min: number | null,
     max: number | null = null,
-  ): Tensor<S, P> {
+  ): Tensor<S> {
     let out = this as AnyTensor
     if (min !== null) out = out.maximum(min)
     if (max !== null) out = out.minimum(max)
@@ -615,42 +592,42 @@ export class Tensor<
 
   // Comparisons produce 1.0 / 0.0 masks and stop gradients: a step
   // function has zero derivative wherever it is differentiable.
-  gt(other: number): Tensor<S, P>
+  gt(other: number): Tensor<S>
   gt<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   gt(other: AnyTensor | number): AnyTensor {
     return this.compare(other, "gt")
   }
 
-  ge(other: number): Tensor<S, P>
+  ge(other: number): Tensor<S>
   ge<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   ge(other: AnyTensor | number): AnyTensor {
     return this.compare(other, "ge")
   }
 
-  lt(other: number): Tensor<S, P>
+  lt(other: number): Tensor<S>
   lt<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   lt(other: AnyTensor | number): AnyTensor {
     return this.compare(other, "lt")
   }
 
-  le(other: number): Tensor<S, P>
+  le(other: number): Tensor<S>
   le<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   le(other: AnyTensor | number): AnyTensor {
     return this.compare(other, "le")
   }
 
-  eq(other: number): Tensor<S, P>
+  eq(other: number): Tensor<S>
   eq<S2 extends Shape>(
-    other: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    other: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   eq(other: AnyTensor | number): AnyTensor {
     return this.compare(other, "eq")
   }
@@ -662,7 +639,7 @@ export class Tensor<
     return rawBinary(this, coerce(other, this), op)
   }
 
-  pow(exponent: number): Tensor<S, P> {
+  pow(exponent: number): Tensor<S> {
     const out = rawUnary(this, "pow", exponent)
     return withGrad(out, "pow", [this], g => [
       rawBinary(
@@ -673,63 +650,63 @@ export class Tensor<
     ]) as any
   }
 
-  neg(): Tensor<S, P> {
+  neg(): Tensor<S> {
     const out = rawUnary(this, "neg")
     return withGrad(out, "neg", [this], g => [
       rawUnary(g, "neg"),
     ]) as any
   }
 
-  exp(): Tensor<S, P> {
+  exp(): Tensor<S> {
     const out = rawUnary(this, "exp")
     return withGrad(out, "exp", [this], g => [
       rawBinary(g, out, "mul"),
     ]) as any
   }
 
-  log(): Tensor<S, P> {
+  log(): Tensor<S> {
     const out = rawUnary(this, "log")
     return withGrad(out, "log", [this], g => [
       rawBinary(g, this, "div"),
     ]) as any
   }
 
-  sqrt(): Tensor<S, P> {
+  sqrt(): Tensor<S> {
     const out = rawUnary(this, "sqrt")
     return withGrad(out, "sqrt", [this], g => [
       rawBinary(g, out, "halfDiv"),
     ]) as any
   }
 
-  abs(): Tensor<S, P> {
+  abs(): Tensor<S> {
     const out = rawUnary(this, "abs")
     return withGrad(out, "abs", [this], g => [
       rawBinary(g, this, "mulSign"),
     ]) as any
   }
 
-  relu(): Tensor<S, P> {
+  relu(): Tensor<S> {
     const out = rawUnary(this, "relu")
     return withGrad(out, "relu", [this], g => [
       rawBinary(g, this, "reluGrad"),
     ]) as any
   }
 
-  leakyRelu(negativeSlope = 0.01): Tensor<S, P> {
+  leakyRelu(negativeSlope = 0.01): Tensor<S> {
     const out = rawUnary(this, "leakyRelu", negativeSlope)
     return withGrad(out, "leakyRelu", [this], g => [
       rawBinary(g, this, "leakyReluGrad", negativeSlope),
     ]) as any
   }
 
-  sigmoid(): Tensor<S, P> {
+  sigmoid(): Tensor<S> {
     const out = rawUnary(this, "sigmoid")
     return withGrad(out, "sigmoid", [this], g => [
       rawBinary(g, out, "sigmoidGrad"),
     ]) as any
   }
 
-  tanh(): Tensor<S, P> {
+  tanh(): Tensor<S> {
     const out = rawUnary(this, "tanh")
     return withGrad(out, "tanh", [this], g => [
       rawBinary(g, out, "tanhGrad"),
@@ -738,14 +715,14 @@ export class Tensor<
 
   softmax<D extends number>(
     dim: D & DimCheck<S, D>,
-  ): Tensor<S, P> {
+  ): Tensor<S> {
     const { e } = this.softmaxShift(dim as number)
     return e.div(e.sum(dim as any, true) as any) as any
   }
 
   logSoftmax<D extends number>(
     dim: D & DimCheck<S, D>,
-  ): Tensor<S, P> {
+  ): Tensor<S> {
     const { shifted, e } = this.softmaxShift(dim as number)
     return shifted.sub(
       e.sum(dim as any, true).log() as any,
@@ -762,8 +739,8 @@ export class Tensor<
   }
 
   matmul<S2 extends Shape>(
-    other: Tensor<S2, any> & MatMulCheck<S, S2>,
-  ): Tensor<MatMul<S, S2>, P> {
+    other: Tensor<S2> & MatMulCheck<S, S2>,
+  ): Tensor<MatMul<S, S2>> {
     const self = this as AnyTensor
     const b = other as AnyTensor
     if (self.rank === 0 || b.rank === 0) {
@@ -780,19 +757,19 @@ export class Tensor<
   }
 
   dot<S2 extends Shape>(
-    other: Tensor<S2, any> & MatMulCheck<S, S2>,
-  ): Tensor<MatMul<S, S2>, P> {
+    other: Tensor<S2> & MatMulCheck<S, S2>,
+  ): Tensor<MatMul<S, S2>> {
     return this.matmul(other)
   }
 
-  sum(): Tensor<[], P>
+  sum(): Tensor<[]>
   sum<D extends number>(
     dim: D & DimCheck<S, D>,
-  ): Tensor<ReduceDim<S, D>, P>
+  ): Tensor<ReduceDim<S, D>>
   sum<D extends number, const K extends boolean>(
     dim: D & DimCheck<S, D>,
     keepdim: K,
-  ): Tensor<ReduceDim<S, D, K>, P>
+  ): Tensor<ReduceDim<S, D, K>>
   sum(dim?: number, keepdim = false): AnyTensor {
     if (dim === undefined) {
       const out = rawReduceAll(this, "sum")
@@ -809,14 +786,14 @@ export class Tensor<
     })
   }
 
-  mean(): Tensor<[], P>
+  mean(): Tensor<[]>
   mean<D extends number>(
     dim: D & DimCheck<S, D>,
-  ): Tensor<ReduceDim<S, D>, P>
+  ): Tensor<ReduceDim<S, D>>
   mean<D extends number, const K extends boolean>(
     dim: D & DimCheck<S, D>,
     keepdim: K,
-  ): Tensor<ReduceDim<S, D, K>, P>
+  ): Tensor<ReduceDim<S, D, K>>
   mean(dim?: number, keepdim = false): AnyTensor {
     if (dim === undefined) {
       return (this.sum() as AnyTensor).div(this.numel)
@@ -827,14 +804,14 @@ export class Tensor<
       .div(this.shape[d]!)
   }
 
-  max(): Tensor<[], P>
+  max(): Tensor<[]>
   max<D extends number>(
     dim: D & DimCheck<S, D>,
-  ): Tensor<ReduceDim<S, D>, P>
+  ): Tensor<ReduceDim<S, D>>
   max<D extends number, const K extends boolean>(
     dim: D & DimCheck<S, D>,
     keepdim: K,
-  ): Tensor<ReduceDim<S, D, K>, P>
+  ): Tensor<ReduceDim<S, D, K>>
   max(dim?: number, keepdim = false): AnyTensor {
     if (dim === undefined) return rawReduceAll(this, "max")
     return rawReduce(this, dim, keepdim, "max")
@@ -842,12 +819,12 @@ export class Tensor<
 
   argmax<D extends number>(
     dim: D & DimCheck<S, D>,
-  ): Tensor<ReduceDim<S, D>, P> {
+  ): Tensor<ReduceDim<S, D>> {
     const d = normalizeDim(dim, this.shape.length)
     return rawReduce(this, d, false, "argmax") as any
   }
 
-  oneHot(classes: number): Tensor<[number, number], P> {
+  oneHot(classes: number): Tensor<[number, number]> {
     if (this.rank !== 1) {
       throw new Error("oneHot() requires a rank-1 tensor")
     }
@@ -863,12 +840,12 @@ export class Tensor<
     dim: 0,
     start: number,
     length: L,
-  ): Tensor<ResizeDim<S, 0, L>, P>
+  ): Tensor<ResizeDim<S, 0, L>>
   narrow<D extends number, L extends number>(
     dim: D & DimCheck<S, D>,
     start: number,
     length: L,
-  ): Tensor<ResizeDim<S, D, L>, P>
+  ): Tensor<ResizeDim<S, D, L>>
   narrow(
     dim: number,
     start: number,
@@ -904,12 +881,12 @@ export class Tensor<
    * Gradients flow to the gathered tensor, never to the index.
    */
   indexSelect<E extends number>(
-    index: Tensor<[E], any>,
-  ): Tensor<ResizeDim<S, 0, E>, P>
+    index: Tensor<[E]>,
+  ): Tensor<ResizeDim<S, 0, E>>
   indexSelect<E extends number, D extends number>(
-    index: Tensor<[E], any>,
+    index: Tensor<[E]>,
     dim: D & DimCheck<S, D>,
-  ): Tensor<ResizeDim<S, D, E>, P>
+  ): Tensor<ResizeDim<S, D, E>>
   indexSelect(index: AnyTensor, dim = 0): AnyTensor {
     if (index.rank !== 1) {
       throw new Error(
@@ -931,14 +908,14 @@ export class Tensor<
    * tensor, and the exact reverse of {@link indexSelect}.
    */
   scatterAdd<L extends number>(
-    index: Tensor<[Dim0<S>], any>,
+    index: Tensor<[Dim0<S>]>,
     length: L,
-  ): Tensor<ResizeDim<S, 0, L>, P>
+  ): Tensor<ResizeDim<S, 0, L>>
   scatterAdd<L extends number, D extends number>(
-    index: Tensor<[number], any>,
+    index: Tensor<[number]>,
     length: L,
     dim: D & DimCheck<S, D>,
-  ): Tensor<ResizeDim<S, D, L>, P>
+  ): Tensor<ResizeDim<S, D, L>>
   scatterAdd(
     index: AnyTensor,
     length: number,
@@ -968,7 +945,7 @@ export class Tensor<
 
   view<const V extends number[]>(
     shape: V & ViewCheck<S, V>,
-  ): Tensor<ResolveView<S, V>, P> {
+  ): Tensor<ResolveView<S, V>> {
     const resolved = resolveViewRuntime(
       [...this.shape],
       shape as number[],
@@ -981,11 +958,11 @@ export class Tensor<
 
   reshape<const V extends number[]>(
     shape: V & ViewCheck<S, V>,
-  ): Tensor<ResolveView<S, V>, P> {
+  ): Tensor<ResolveView<S, V>> {
     return this.view(shape as any) as any
   }
 
-  squeeze(): Tensor<Squeeze<S>, P> {
+  squeeze(): Tensor<Squeeze<S>> {
     const target = this.shape.filter(s => s !== 1)
     const out = reshapeRaw(this, target)
     return withGrad(out, "squeeze", [this], g => [
@@ -995,7 +972,7 @@ export class Tensor<
 
   squeezeDim<D extends number>(
     dim: D & SqueezeDimCheck<S, D>,
-  ): Tensor<SqueezeDim<S, D>, P> {
+  ): Tensor<SqueezeDim<S, D>> {
     const d = normalizeDim(dim as number, this.shape.length)
     if (this.shape[d] !== 1) {
       throw new Error(
@@ -1011,7 +988,7 @@ export class Tensor<
 
   unsqueeze<D extends number>(
     dim: D & UnsqueezeCheck<S, D>,
-  ): Tensor<Unsqueeze<S, D>, P> {
+  ): Tensor<Unsqueeze<S, D>> {
     const d = normalizeDim(
       dim as number,
       this.shape.length,
@@ -1028,7 +1005,7 @@ export class Tensor<
   transpose<D0 extends number, D1 extends number>(
     dim0: D0 & TransposeCheck<S, D0, D1>,
     dim1: D1,
-  ): Tensor<Transpose<S, D0, D1>, P> {
+  ): Tensor<Transpose<S, D0, D1>> {
     const rank = this.shape.length
     const a = normalizeDim(dim0 as number, rank)
     const b = normalizeDim(dim1, rank)
@@ -1037,7 +1014,7 @@ export class Tensor<
     return this.permuteRaw(order) as any
   }
 
-  get T(): S["length"] extends 2 ? Tensor<Transpose<S, 0, 1>, P> : ErrorMessage<".T is only defined for rank-2 tensors — use transpose(d0, d1)"> {
+  get T(): S["length"] extends 2 ? Tensor<Transpose<S, 0, 1>> : ErrorMessage<".T is only defined for rank-2 tensors — use transpose(d0, d1)"> {
     if (this.shape.length !== 2) {
       throw new Error(
         ".T is only defined for rank-2 tensors",
@@ -1048,7 +1025,7 @@ export class Tensor<
 
   permute<const O extends number[]>(
     ...order: O & PermuteCheck<S, O>
-  ): Tensor<Permute<S, O>, P> {
+  ): Tensor<Permute<S, O>> {
     const rank = this.shape.length
     const normalized = (order as number[]).map(d => normalizeDim(d, rank))
     if (
@@ -1078,8 +1055,7 @@ export class Tensor<
     tensors: T & StackCheck<T>,
     dim?: D,
   ): Tensor<
-    Stack<ShapeOf<T[0]>, T["length"], D>,
-    ParamsOf<T[0]>
+    Stack<ShapeOf<T[0]>, T["length"], D>
   > {
     const ts = tensors as readonly AnyTensor[]
     const first = ts[0]!
@@ -1105,13 +1081,12 @@ export class Tensor<
   static cat<
     A extends Shape,
     B extends Shape,
-    PA extends TensorParams,
     const D extends number = 0,
   >(
-    a: Tensor<A, PA>,
-    b: Tensor<B, any> & CatCheck<A, B, D>,
+    a: Tensor<A>,
+    b: Tensor<B> & CatCheck<A, B, D>,
     dim?: D,
-  ): Tensor<Cat<A, B, D>, PA> {
+  ): Tensor<Cat<A, B, D>> {
     const ta = a as AnyTensor
     const tb = b as AnyTensor
     const d = normalizeDim(dim ?? 0, ta.shape.length)
@@ -1137,105 +1112,105 @@ export class Tensor<
   }
 
   [Operator.plus](
-    lhs: Tensor<S, P>,
+    lhs: Tensor<S>,
     rhs: number,
-  ): Tensor<S, P>
+  ): Tensor<S>
   [Operator.plus](
     lhs: number,
-    rhs: Tensor<S, P>,
-  ): Tensor<S, P>
+    rhs: Tensor<S>,
+  ): Tensor<S>
   [Operator.plus](
-    lhs: Tensor<[Dim0<S>, 1], P>,
-    rhs: Tensor<[1, Dim0<S>], any>,
-  ): Tensor<[Dim0<S>, Dim0<S>], P>
+    lhs: Tensor<[Dim0<S>, 1]>,
+    rhs: Tensor<[1, Dim0<S>]>,
+  ): Tensor<[Dim0<S>, Dim0<S>]>
   [Operator.plus](
-    lhs: Tensor<[1, Dim1<S>], P>,
-    rhs: Tensor<[Dim1<S>, 1], any>,
-  ): Tensor<[Dim1<S>, Dim1<S>], P>
+    lhs: Tensor<[1, Dim1<S>]>,
+    rhs: Tensor<[Dim1<S>, 1]>,
+  ): Tensor<[Dim1<S>, Dim1<S>]>
   [Operator.plus]<S2 extends Shape>(
-    lhs: Tensor<S, P>,
-    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    lhs: Tensor<S>,
+    rhs: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   [Operator.plus](lhs: any, rhs: any): any {
     return coerceLhs(lhs, rhs).add(rhs)
   }
 
   [Operator.minus](
-    lhs: Tensor<S, P>,
+    lhs: Tensor<S>,
     rhs: number,
-  ): Tensor<S, P>
+  ): Tensor<S>
   [Operator.minus](
     lhs: number,
-    rhs: Tensor<S, P>,
-  ): Tensor<S, P>
+    rhs: Tensor<S>,
+  ): Tensor<S>
   [Operator.minus](
-    lhs: Tensor<[Dim0<S>, 1], P>,
-    rhs: Tensor<[1, Dim0<S>], any>,
-  ): Tensor<[Dim0<S>, Dim0<S>], P>
+    lhs: Tensor<[Dim0<S>, 1]>,
+    rhs: Tensor<[1, Dim0<S>]>,
+  ): Tensor<[Dim0<S>, Dim0<S>]>
   [Operator.minus](
-    lhs: Tensor<[1, Dim1<S>], P>,
-    rhs: Tensor<[Dim1<S>, 1], any>,
-  ): Tensor<[Dim1<S>, Dim1<S>], P>
+    lhs: Tensor<[1, Dim1<S>]>,
+    rhs: Tensor<[Dim1<S>, 1]>,
+  ): Tensor<[Dim1<S>, Dim1<S>]>
   [Operator.minus]<S2 extends Shape>(
-    lhs: Tensor<S, P>,
-    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    lhs: Tensor<S>,
+    rhs: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   [Operator.minus](lhs: any, rhs: any): any {
     return coerceLhs(lhs, rhs).sub(rhs)
   }
 
   [Operator.star](
-    lhs: Tensor<S, P>,
+    lhs: Tensor<S>,
     rhs: number,
-  ): Tensor<S, P>
+  ): Tensor<S>
   [Operator.star](
     lhs: number,
-    rhs: Tensor<S, P>,
-  ): Tensor<S, P>
+    rhs: Tensor<S>,
+  ): Tensor<S>
   [Operator.star](
-    lhs: Tensor<[Dim0<S>, 1], P>,
-    rhs: Tensor<[1, Dim0<S>], any>,
-  ): Tensor<[Dim0<S>, Dim0<S>], P>
+    lhs: Tensor<[Dim0<S>, 1]>,
+    rhs: Tensor<[1, Dim0<S>]>,
+  ): Tensor<[Dim0<S>, Dim0<S>]>
   [Operator.star](
-    lhs: Tensor<[1, Dim1<S>], P>,
-    rhs: Tensor<[Dim1<S>, 1], any>,
-  ): Tensor<[Dim1<S>, Dim1<S>], P>
+    lhs: Tensor<[1, Dim1<S>]>,
+    rhs: Tensor<[Dim1<S>, 1]>,
+  ): Tensor<[Dim1<S>, Dim1<S>]>
   [Operator.star]<S2 extends Shape>(
-    lhs: Tensor<S, P>,
-    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    lhs: Tensor<S>,
+    rhs: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   [Operator.star](lhs: any, rhs: any): any {
     return coerceLhs(lhs, rhs).mul(rhs)
   }
 
   [Operator.slash](
-    lhs: Tensor<S, P>,
+    lhs: Tensor<S>,
     rhs: number,
-  ): Tensor<S, P>
+  ): Tensor<S>
   [Operator.slash](
     lhs: number,
-    rhs: Tensor<S, P>,
-  ): Tensor<S, P>
+    rhs: Tensor<S>,
+  ): Tensor<S>
   [Operator.slash](
-    lhs: Tensor<[Dim0<S>, 1], P>,
-    rhs: Tensor<[1, Dim0<S>], any>,
-  ): Tensor<[Dim0<S>, Dim0<S>], P>
+    lhs: Tensor<[Dim0<S>, 1]>,
+    rhs: Tensor<[1, Dim0<S>]>,
+  ): Tensor<[Dim0<S>, Dim0<S>]>
   [Operator.slash](
-    lhs: Tensor<[1, Dim1<S>], P>,
-    rhs: Tensor<[Dim1<S>, 1], any>,
-  ): Tensor<[Dim1<S>, Dim1<S>], P>
+    lhs: Tensor<[1, Dim1<S>]>,
+    rhs: Tensor<[Dim1<S>, 1]>,
+  ): Tensor<[Dim1<S>, Dim1<S>]>
   [Operator.slash]<S2 extends Shape>(
-    lhs: Tensor<S, P>,
-    rhs: Tensor<S2, any> & BroadcastCheck<S, S2>,
-  ): Tensor<Broadcast<S, S2>, P>
+    lhs: Tensor<S>,
+    rhs: Tensor<S2> & BroadcastCheck<S, S2>,
+  ): Tensor<Broadcast<S, S2>>
   [Operator.slash](lhs: any, rhs: any): any {
     return coerceLhs(lhs, rhs).div(rhs)
   }
 
   [Operator.starStar](
-    lhs: Tensor<S, P>,
+    lhs: Tensor<S>,
     rhs: number,
-  ): Tensor<S, P>
+  ): Tensor<S>
   [Operator.starStar](lhs: any, rhs: any): any {
     if (typeof rhs !== "number") {
       throw new Error(

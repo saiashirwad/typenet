@@ -1,16 +1,11 @@
 "use tsover"
 
-import { Adam, crossEntropy, eye, Module, rand, randn, Tensor, type TensorParams } from "../index.ts"
-
-type GradParams = {
-  requires_grad: true
-  dtype: "float32"
-}
+import { Adam, crossEntropy, eye, Module, rand, randn, Tensor } from "../index.ts"
 
 class GATHead<FIn extends number, FOut extends number> extends Module {
-  readonly W: Tensor<[FIn, FOut], GradParams>
-  readonly attSrc: Tensor<[FOut, 1], GradParams>
-  readonly attDst: Tensor<[FOut, 1], GradParams>
+  readonly W: Tensor<[FIn, FOut]>
+  readonly attSrc: Tensor<[FOut, 1]>
+  readonly attDst: Tensor<[FOut, 1]>
 
   constructor(fin: FIn, fout: FOut) {
     super()
@@ -20,10 +15,10 @@ class GATHead<FIn extends number, FOut extends number> extends Module {
     this.attDst = (randn([fout, 1]) * 0.1).requires_grad()
   }
 
-  forward<N extends number, P extends TensorParams>(
-    h: Tensor<[N, FIn], P>,
-    adj: Tensor<[N, N], any>,
-  ): Tensor<[N, FOut], P> {
+  forward<N extends number>(
+    h: Tensor<[N, FIn]>,
+    adj: Tensor<[N, N]>,
+  ): Tensor<[N, FOut]> {
     const wh = h.matmul(this.W)
     const src = wh.matmul(this.attSrc)
     const dst = wh.matmul(this.attDst)
@@ -52,10 +47,10 @@ class GAT<Features extends number, Classes extends number> extends Module {
     this.out = new GATHead(16, classes)
   }
 
-  forward<N extends number, P extends TensorParams>(
-    x: Tensor<[N, Features], P>,
-    adj: Tensor<[N, N], any>,
-  ): Tensor<[N, Classes], P> {
+  forward<N extends number>(
+    x: Tensor<[N, Features]>,
+    adj: Tensor<[N, N]>,
+  ): Tensor<[N, Classes]> {
     const h1 = this.head1.forward(x, adj).leakyRelu(0.2)
     const h2 = this.head2.forward(x, adj).leakyRelu(0.2)
 

@@ -6,7 +6,7 @@ import { TARGETS } from "../examples/gnca/targets.ts"
 import { Adam, clipGradNorm, compile, configure, disableNative, isNativeAvailable, normal, Tensor, useNative } from "../index.ts"
 import { fromFlat } from "../src/tensor.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 const reference = JSON.parse(
   readFileSync(

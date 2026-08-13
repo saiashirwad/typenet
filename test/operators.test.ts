@@ -3,7 +3,6 @@
 import { describe, expect, it } from "vitest"
 import { mseLoss } from "../src/nn.ts"
 import { Tensor, tensor } from "../src/tensor.ts"
-import type { TensorParams } from "../src/tensor.ts"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
   <T>() => T extends B ? 1 : 2
@@ -128,12 +127,11 @@ describe("tsover operators", () => {
   it("operators resolve inside generic functions", () => {
     function maskedScores<
       N extends number,
-      P extends TensorParams,
     >(
-      src: Tensor<[N, 1], P>,
-      dst: Tensor<[N, 1], P>,
-      adj: Tensor<[N, N], any>,
-    ): Tensor<[N, N], P> {
+      src: Tensor<[N, 1]>,
+      dst: Tensor<[N, 1]>,
+      adj: Tensor<[N, N]>,
+    ): Tensor<[N, N]> {
       const scores = src + dst.T
       return scores * adj + (1 - adj) * -1e9
     }

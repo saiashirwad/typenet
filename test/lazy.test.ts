@@ -3,7 +3,7 @@ import { crossEntropy } from "../src/nn.ts"
 import { SGD } from "../src/optim.ts"
 import { configure, isLazy, Tensor, tensor } from "../src/tensor.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 function bothWays<T>(fn: () => T): {
   eager: T

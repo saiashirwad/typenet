@@ -1,13 +1,7 @@
 import type { DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts"
 import { fromFlat, Tensor } from "./tensor.ts"
-import type { TensorParams } from "./tensor.ts"
 
-type AnyTensor = Tensor<any, any>
-
-type GradParams = {
-  requires_grad: true
-  dtype: "float32"
-}
+type AnyTensor = Tensor<any>
 
 export abstract class Module {
   parameters(): AnyTensor[] {
@@ -34,8 +28,8 @@ export class Linear<
   In extends number,
   Out extends number,
 > extends Module {
-  readonly weight: Tensor<[In, Out], GradParams>
-  readonly bias: Tensor<[Out], GradParams> | null
+  readonly weight: Tensor<[In, Out]>
+  readonly bias: Tensor<[Out]> | null
   readonly inFeatures: In
   readonly outFeatures: Out
 
@@ -52,15 +46,15 @@ export class Linear<
       .mul(2 * k)
       .sub(k)
       .detach()
-      .requires_grad() as any
+      .requires_grad()
     this.bias = options.bias === false
       ? null
-      : (Tensor.zeros([outFeatures]).requires_grad() as any)
+      : Tensor.zeros([outFeatures]).requires_grad()
   }
 
-  forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P> & MatMulCheck<S, [In, Out]>,
-  ): Tensor<MatMul<S, [In, Out]>, P> {
+  forward<S extends Shape>(
+    x: Tensor<S> & MatMulCheck<S, [In, Out]>,
+  ): Tensor<MatMul<S, [In, Out]>> {
     const y = (x as AnyTensor).matmul(this.weight)
     return (this.bias ? y.add(this.bias) : y) as any
   }
@@ -73,9 +67,9 @@ export interface Layer<
   readonly inFeatures?: In
   readonly outFeatures?: Out
 
-  forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, NoInfer<In>], P>,
-  ): Tensor<[B, NoInfer<Out>], P>
+  forward<B extends number>(
+    x: Tensor<[B, NoInfer<In>]>,
+  ): Tensor<[B, NoInfer<Out>]>
 }
 
 class Activation extends Module {
@@ -85,9 +79,9 @@ class Activation extends Module {
     super()
   }
 
-  forward<S extends Shape, P extends TensorParams>(
-    x: Tensor<S, P>,
-  ): Tensor<S, P> {
+  forward<S extends Shape>(
+    x: Tensor<S>,
+  ): Tensor<S> {
     return this.apply(x) as any
   }
 }
@@ -133,9 +127,9 @@ export class Sequential<
     super()
   }
 
-  forward<B extends number, P extends TensorParams>(
-    x: Tensor<[B, In], P>,
-  ): Tensor<[B, Out], P> {
+  forward<B extends number>(
+    x: Tensor<[B, In]>,
+  ): Tensor<[B, Out]> {
     let h: AnyTensor = x
     for (const layer of this.layers) h = layer.forward(h)
     return h as any
@@ -215,11 +209,10 @@ export function sequential(
 
 export function mseLoss<
   S extends Shape,
-  P extends TensorParams,
 >(
-  prediction: Tensor<S, P>,
-  target: Tensor<NoInfer<S>, any>,
-): Tensor<[], P> {
+  prediction: Tensor<S>,
+  target: Tensor<NoInfer<S>>,
+): Tensor<[]> {
   return (prediction as AnyTensor)
     .sub(target as AnyTensor)
     .pow(2)
@@ -229,11 +222,10 @@ export function mseLoss<
 export function crossEntropy<
   B extends number,
   C extends number,
-  P extends TensorParams,
 >(
-  logits: Tensor<[B, C], P>,
-  targets: readonly number[] | Tensor<[NoInfer<B>], any>,
-): Tensor<[], P> {
+  logits: Tensor<[B, C]>,
+  targets: readonly number[] | Tensor<[NoInfer<B>]>,
+): Tensor<[]> {
   const l = logits as AnyTensor
   const [batch, classes] = l.shape as number[]
   let mask: AnyTensor

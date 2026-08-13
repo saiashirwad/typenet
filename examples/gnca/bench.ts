@@ -15,7 +15,7 @@ import {
 import { batchEdges, randomGeometricGraph } from "./graphs.ts"
 import { aliveMask, GraphNCA, graphTensors, seedState } from "./model.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 function time(label: string, runs: number, fn: () => void) {
   fn()

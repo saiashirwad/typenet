@@ -14,7 +14,7 @@ import { renderSvg, visible } from "./render.ts"
 import { rng } from "./rng.ts"
 import { type Target, TARGETS } from "./targets.ts"
 
-type AnyTensor = Tensor<any, any>
+type AnyTensor = Tensor<any>
 
 const flags = parseFlags(process.argv.slice(2))
 const options = {
