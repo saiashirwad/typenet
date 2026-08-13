@@ -3,8 +3,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { batchEdges, knnGraph, nearestNode, randomGeometricGraph } from "../examples/gnca/graphs.ts"
 import { aliveMask, GraphNCA, graphTensors, seedState } from "../examples/gnca/model.ts"
 import { TARGETS } from "../examples/gnca/targets.ts"
-import { Adam, clipGradNorm, compile, configure, disableNative, isNativeAvailable, normal, Tensor, useNative } from "../index.ts"
-import { fromFlat } from "../src/tensor.ts"
+import { Adam, clipGradNorm, compile, configure, disableNative, fromFlat, isNativeAvailable, normal, Tensor, useNative } from "../index.ts"
 
 type AnyTensor = Tensor<any>
 

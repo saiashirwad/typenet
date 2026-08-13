@@ -5,6 +5,7 @@ export {
   compile,
   configure,
   eye,
+  fromFlat,
   full,
   isLazy,
   noGrad,
@@ -28,6 +29,11 @@ export type { Layer } from "./src/nn.ts"
 export { Adam, clipGradNorm, Optimizer, SGD } from "./src/optim.ts"
 export type { AdamOptions, SGDOptions } from "./src/optim.ts"
 
+// DimAdd / DimMul are both a type and a value: the type does the
+// arithmetic on literal dims, the function returns it at runtime, so a
+// constructor width like `DimAdd(DimMul(3, channels), 1)` carries its
+// derived type with no cast.
+export { DimAdd, DimMul } from "./src/shape.ts"
 export type {
   Broadcast,
   BroadcastCheck,

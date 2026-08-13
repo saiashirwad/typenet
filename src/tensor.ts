@@ -99,14 +99,14 @@ export function makeRaw(
 }
 
 /** CPU tensor from a flat buffer, using the buffer as storage when it already matches `dtype`. */
-export function fromFlat(
+export function fromFlat<const Sh extends Shape>(
   data: ArrayLike<number>,
-  shape: readonly number[],
+  shape: Sh,
   dtype: DType = "float32",
-): AnyTensor {
+): Tensor<Sh> {
   const ctor = arrayCtor(dtype)
   const buf = data instanceof ctor ? data : ctor.from(data)
-  return makeRaw(buf, shape, dtype)
+  return makeRaw(buf, shape, dtype) as any
 }
 
 export function makeStorage(

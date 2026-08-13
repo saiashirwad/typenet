@@ -2,19 +2,14 @@
 
 // Ported from ~/code/graph-cellular-automata/src/gnca/model.py.
 
-import { cat, Linear, Module, Tensor, uniform } from "../../index.ts"
-import type { DimAdd, DimMul, Shape } from "../../src/shape.ts"
-import { fromFlat } from "../../src/tensor.ts"
+import { cat, DimAdd, DimMul, fromFlat, Linear, Module, Tensor, uniform } from "../../index.ts"
 import { type Edges, inDegrees } from "./graphs.ts"
 
 /**
  * Channels the rule perceives: its own state, the neighbour mean, the
  * gated difference mean, and one degree scalar.
  */
-export type Percept<C extends number> = DimAdd<
-  DimAdd<DimAdd<C, C>, C>,
-  1
->
+export type Percept<C extends number> = DimAdd<DimMul<3, C>, 1>
 
 export type GateIn<C extends number> = DimMul<3, C>
 
@@ -40,27 +35,16 @@ export function graphTensors<
     invDegree[i] = 1 / Math.max(degree[i]!, 1)
     logDegree[i] = Math.log1p(degree[i]!)
   }
+  // The shapes are inferred, not asserted: `edges.count` is typed `E`
+  // and `nodes` is typed `N`, so `fromFlat` reads the tuple types
+  // straight off the shape literals.
   return {
-    src: fromData<[E]>(edges.src, [edges.count]),
-    dst: fromData<[E]>(edges.dst, [edges.count]),
+    src: fromFlat(edges.src, [edges.count]),
+    dst: fromFlat(edges.dst, [edges.count]),
     nodes,
-    invDegree: fromData<[N, 1]>(invDegree, [nodes, 1]),
-    logDegree: fromData<[N, 1]>(logDegree, [nodes, 1]),
+    invDegree: fromFlat(invDegree, [nodes, 1]),
+    logDegree: fromFlat(logDegree, [nodes, 1]),
   }
-}
-
-/**
- * A tensor of the given shape holding `data`.
- *
- * The shape is asserted because it comes from runtime values — an edge
- * count, a node count — that the type system cannot read off a
- * `number[]`. Everything downstream of here is inferred.
- */
-function fromData<S extends Shape>(
-  data: Float32Array,
-  shape: number[],
-): Tensor<S> {
-  return fromFlat(data, shape) as unknown as Tensor<S>
 }
 
 export class GraphNCA<
@@ -77,22 +61,21 @@ export class GraphNCA<
     super()
     this.channels = channels
     this.hidden = hidden
-    // The widths are right by construction, but TypeScript cannot do
-    // arithmetic on a runtime expression, so the derived input dims are
-    // stated. Percept<C> and GateIn<C> are that same arithmetic in types.
+    // DimAdd / DimMul do the same arithmetic as types and as values, so
+    // the derived input widths carry Percept<C> / GateIn<C> with no cast.
     this.inner = new Linear(
-      3 * channels + 1,
+      DimAdd(DimMul(3, channels), 1),
       hidden,
-    ) as Linear<Percept<C>, H>
+    )
     this.outer = new Linear(hidden, channels, {
       bias: false,
     }) // Zero the last layer: the initial rule is the identity, so growth
      // starts from a standing seed rather than from noise.
     ;(this.outer.weight.data as Float32Array).fill(0)
     this.gate = new Linear(
-      3 * channels,
+      DimMul(3, channels),
       channels,
-    ) as Linear<GateIn<C>, C> // Zero the gate too. 2·sigmoid(0) = 1 exactly, so at init the gate is
+    ) // Zero the gate too. 2·sigmoid(0) = 1 exactly, so at init the gate is
      // plain identity diffusion and a warm start is exact.
     ;(this.gate.weight.data as Float32Array).fill(0)
     ;(this.gate.bias!.data as Float32Array).fill(0)

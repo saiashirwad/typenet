@@ -3,8 +3,19 @@
 // Ported from ~/code/graph-cellular-automata/scripts/train.py.
 
 import { writeFileSync } from "node:fs"
-import { Adam, clipGradNorm, compile, configure, isNativeAvailable, nativeDevice, nativeDeviceMode, normal, Tensor, useNative } from "../../index.ts"
-import { fromFlat } from "../../src/tensor.ts"
+import {
+  Adam,
+  clipGradNorm,
+  compile,
+  configure,
+  fromFlat,
+  isNativeAvailable,
+  nativeDevice,
+  nativeDeviceMode,
+  normal,
+  Tensor,
+  useNative,
+} from "../../index.ts"
 import { loadRule, readCheckpoint, saveCheckpoint } from "./checkpoint.ts"
 import * as damage from "./damage.ts"
 import { batchEdges, type Edges, knnGraph, nearestNode, type Points, randomGeometricGraph, wattsStrogatzGraph } from "./graphs.ts"

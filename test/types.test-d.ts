@@ -1,10 +1,9 @@
 import { Linear } from "../src/nn.ts"
+import { DimAdd, DimMul } from "../src/shape.ts"
 import type {
   Broadcast,
   CanBroadcast,
   Cat,
-  DimAdd,
-  DimMul,
   InferShape,
   MatMul,
   NormalizeDim,
@@ -16,7 +15,7 @@ import type {
   Transpose,
   Unsqueeze,
 } from "../src/shape.ts"
-import { ones, randn, Tensor, tensor, zeros } from "../src/tensor.ts"
+import { fromFlat, ones, randn, Tensor, tensor, zeros } from "../src/tensor.ts"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
   <T>() => T extends B ? 1 : 2
@@ -270,6 +269,20 @@ function _genericBias<
   const scalar = edges.add(Tensor.scalar(1))
   type _3 = Expect<Equal<typeof scalar.shape, [E, C]>>
   return chained
+}
+
+// fromFlat reads tuple types off shape literals built from typed
+// runtime values, and DimAdd/DimMul carry their arithmetic as types.
+function _fromFlat<E extends number, N extends number>(count: E, nodes: N) {
+  const edges = fromFlat(new Float32Array(count), [count])
+  type _1 = Expect<Equal<typeof edges.shape, [E]>>
+  const col = fromFlat(new Float32Array(nodes), [nodes, 1])
+  type _2 = Expect<Equal<typeof col.shape, [N, 1]>>
+  const lit = fromFlat([1, 2, 3, 4, 5, 6], [2, 3])
+  type _3 = Expect<Equal<typeof lit.shape, [2, 3]>>
+  const width = DimAdd(DimMul(3, 16), 1)
+  type _4 = Expect<Equal<typeof width, 49>>
+  return [edges, col, lit, width] as const
 }
 
 function _genericOuter<
