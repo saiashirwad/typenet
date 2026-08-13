@@ -182,3 +182,23 @@ describe.skipIf(!isNativeAvailable())(
     })
   },
 )
+
+describe("rand/randn are seeded", () => {
+  it("replay identically under the same seed", () => {
+    configure({ seed: 123 })
+    const a = Tensor.rand([2, 3]).toArray()
+    const b = Tensor.randn([4]).toArray()
+    configure({ seed: 123 })
+    expect(Tensor.rand([2, 3]).toArray()).toEqual(a)
+    expect(Tensor.randn([4]).toArray()).toEqual(b)
+    configure({ seed: 124 })
+    expect(Tensor.rand([2, 3]).toArray()).not.toEqual(a)
+  })
+
+  it("differ call to call under one seed", () => {
+    configure({ seed: 7 })
+    expect(Tensor.rand([8]).toArray()).not.toEqual(
+      Tensor.rand([8]).toArray(),
+    )
+  })
+})

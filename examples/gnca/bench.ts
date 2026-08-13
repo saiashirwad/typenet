@@ -63,12 +63,14 @@ function bench(
     return x
   }
   for (const steps of horizons) {
-    const forward = compile((input: AnyTensor) =>
-      rollout(input, steps)
-        .narrow(1, 0, 4)
-        .sub(target)
-        .pow(2)
-        .mean()
+    const forward = compile(
+      (input: AnyTensor) =>
+        rollout(input, steps)
+          .narrow(1, 0, 4)
+          .sub(target)
+          .pow(2)
+          .mean(),
+      [x0],
     )
     const full = compile((input: AnyTensor) => {
       const loss = rollout(input, steps)
@@ -81,7 +83,7 @@ function bench(
       clipGradNorm(params, 1)
       optimizer.step()
       return loss
-    })
+    }, [x0])
     const f = time(`forward only, ${steps} steps`, 3, () => forward(x0).item())
     const t = time(
       `forward + backward + Adam, ${steps} steps`,

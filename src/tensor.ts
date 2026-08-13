@@ -1,6 +1,7 @@
 import { Operator } from "tsover-runtime"
 import { type GradNode, noGrad, runBackward, withGrad } from "./autograd.ts"
 import { _activeUpdateTrace, tensorNames } from "./compile.ts"
+import { isTracing } from "./context.ts"
 import {
   rawBinary,
   rawBroadcastTo,
@@ -18,6 +19,7 @@ import {
   reshapeRaw,
   sumTo,
 } from "./ir.ts"
+import { nextSeed, nextStream, randomData } from "./kernels.ts"
 import { force } from "./lazy.ts"
 import { resolveView } from "./shape.ts"
 import type {
@@ -225,6 +227,13 @@ export class Tensor<S extends Shape> {
   }
 
   get data(): TypedArray {
+    if (isTracing()) {
+      const label = tensorNames.get(this as AnyTensor)
+      throw new Error(
+        "compile() cannot read tensor values during tracing"
+          + (label ? ` (reading "${label}")` : ""),
+      )
+    }
     if (this.#cpu === null) {
       force(this as AnyTensor)
     }
@@ -281,30 +290,42 @@ export class Tensor<S extends Shape> {
     return Tensor.full(shape, 1)
   }
 
+  /**
+   * Uniform values in [0, 1), drawn once through the seeded generator —
+   * a plain CPU leaf, unlike `uniform()`, whose graph node redraws per
+   * evaluation. `configure({ seed })` makes the fill reproducible.
+   */
   static rand<const Sh extends Shape>(
     shape: Sh,
   ): Tensor<Sh> {
-    const data = new Float32Array(prod(shape))
-    for (let i = 0; i < data.length; i++) {
-      data[i] = Math.random()
-    }
-    return makeRaw(data, shape, "float32") as any
+    return makeRaw(
+      randomData(
+        "uniform",
+        prod(shape),
+        nextStream(),
+        nextSeed(),
+        "float32",
+      ),
+      shape,
+      "float32",
+    ) as any
   }
 
+  /** Standard normal values, drawn once. See {@link rand}. */
   static randn<const Sh extends Shape>(
     shape: Sh,
   ): Tensor<Sh> {
-    const data = new Float32Array(prod(shape))
-    for (let i = 0; i < data.length; i += 2) {
-      const u = 1 - Math.random()
-      const v = Math.random()
-      const r = Math.sqrt(-2 * Math.log(u))
-      data[i] = r * Math.cos(2 * Math.PI * v)
-      if (i + 1 < data.length) {
-        data[i + 1] = r * Math.sin(2 * Math.PI * v)
-      }
-    }
-    return makeRaw(data, shape, "float32") as any
+    return makeRaw(
+      randomData(
+        "normal",
+        prod(shape),
+        nextStream(),
+        nextSeed(),
+        "float32",
+      ),
+      shape,
+      "float32",
+    ) as any
   }
 
   static eye<const N extends number>(

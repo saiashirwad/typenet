@@ -109,7 +109,7 @@ Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, 
 
 ## Compiled training steps
 
-`compile(fn)` traces a function once and replays the graph on every call. A whole training step fits inside one — forward, backward, gradient clipping and the optimizer update all evaluated in a single pass, with nothing read back to JavaScript in between:
+`compile(fn, exampleInputs)` traces `fn` against the examples up front and replays the graph on every call (omitting the examples still traces on the first call, deprecated). Reading a tensor's values inside `fn` (`.data`, `.item()`, ...) throws — the graph is recorded, not run. A whole training step fits inside one — forward, backward, gradient clipping and the optimizer update all evaluated in a single pass, with nothing read back to JavaScript in between:
 
 ```ts
 const step = compile(
@@ -121,6 +121,7 @@ const step = compile(
     optim.step()
     return loss
   },
+  [X, Y],
 )
 for (let i = 0; i < 1000; i++) step(X, Y)
 ```
@@ -192,7 +193,9 @@ Tensor.cat(a, b, 1)
 x.indexSelect(src) // each edge's source state
 messages.scatterAdd(dst, nodes) // each node's incoming messages
 
-// random values redrawn on every evaluation, unlike rand/randn
+// random values redrawn on every evaluation; rand/randn fill once.
+// Both draw from the seeded generator: configure({ seed }) makes a
+// run — including Linear's init — reproducible.
 uniform([n, 1])
 normal([n, c])
 configure({ seed: 0 })

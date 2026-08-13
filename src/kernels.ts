@@ -128,6 +128,22 @@ function reseed(seed: number): void {
   streamCounter = 0
 }
 
+type RngState = { seed: number; stream: number; active: number }
+
+function rngState(): RngState {
+  return {
+    seed: randomSeed,
+    stream: streamCounter,
+    active: activeSeed,
+  }
+}
+
+function setRngState(state: RngState): void {
+  randomSeed = state.seed
+  streamCounter = state.stream
+  activeSeed = state.active
+}
+
 function randomData(
   kind: RandomKind,
   n: number,
@@ -153,4 +169,4 @@ function randomData(
   return out
 }
 
-export { applyBinary, applyUnary, getActiveSeed, hash32, nextSeed, nextStream, randomData, reseed, setActiveSeed, unitFloat }
+export { applyBinary, applyUnary, getActiveSeed, hash32, nextSeed, nextStream, randomData, reseed, rngState, setActiveSeed, setRngState, unitFloat }

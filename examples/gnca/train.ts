@@ -281,7 +281,7 @@ function trainStep(
       clipGradNorm(params, options.clip)
       optimizer.step()
       return [loss, mse, x]
-    })
+    }, [tensorFrom(x0, [B * N, C])])
     rollouts.set(steps, step)
   }
   const [loss, mse, state] = step(

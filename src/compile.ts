@@ -1,7 +1,8 @@
 import * as nativeBackend from "./backends/native.ts"
+import { withContext } from "./context.ts"
 import { formatLazyOp, topoOrder } from "./ir.ts"
 import { nextSeed } from "./kernels.ts"
-import { force, forceMany, lazily, serializeLazyGraph } from "./lazy.ts"
+import { force, forceMany, serializeLazyGraph } from "./lazy.ts"
 import { prod, shapesEqual, showShape } from "./storage.ts"
 import { _internal, type AnyTensor, makeRaw, Tensor } from "./tensor.ts"
 
@@ -96,7 +97,16 @@ export type CompiledFn<
 export function compile<
   Args extends AnyTensor[],
   R extends AnyTensor | AnyTensor[],
->(fn: (...args: Args) => R): CompiledFn<Args, R> {
+>(
+  fn: (...args: Args) => R,
+  /**
+   * Example inputs to trace against up front. Omitting them falls back
+   * to tracing on the first call.
+   * @deprecated the no-examples overload traces on first call; pass the
+   * tensors you used to pass on the first call instead.
+   */
+  exampleInputs?: [...Args],
+): CompiledFn<Args, R> {
   type State = {
     placeholders: AnyTensor[]
     outputs: AnyTensor[]
@@ -146,7 +156,12 @@ export function compile<
     updateTrace = traced
     let result: unknown
     try {
-      result = lazily(() => fn(...(placeholders as Args)))
+      // Tracing forbids every value read: a `.data` / `.item()` inside
+      // fn would force mid-trace and bake a constant into the graph.
+      result = withContext(
+        { lazy: true, tracing: true },
+        () => fn(...(placeholders as Args)),
+      )
     } finally {
       updateTrace = prevTrace
     }
@@ -337,6 +352,8 @@ export function compile<
     }
     return state.outputs.map(out => makeRaw(out.data, out.shape, out.dtype))
   }
+
+  if (exampleInputs) state = trace(exampleInputs)
 
   const compiled = ((...inputs: readonly unknown[]) => {
     if (!state) state = trace(inputs)

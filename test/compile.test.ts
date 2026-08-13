@@ -232,3 +232,31 @@ describe.skipIf(!available)("compile (native)", () => {
     expect(preparedGraphCountNative()).toBe(before)
   })
 })
+
+describe("compile(fn, examples)", () => {
+  it("traces up front and replays", () => {
+    const w = tensor([[1], [2]])
+    const x = tensor([[3, 4]])
+    const compiled = compile(
+      (input: AnyTensor) => input.matmul(w).sum(),
+      [x],
+    )
+    expect(compiled(x).item()).toBeCloseTo(11, 5)
+    expect(
+      compiled(tensor([[1, 1]])).item(),
+    ).toBeCloseTo(3, 5)
+  })
+
+  it("throws on a value read during tracing", () => {
+    const x = tensor([1, 2, 3])
+    expect(() =>
+      compile(
+        (input: AnyTensor) => {
+          input.sum().item()
+          return input.sum()
+        },
+        [x],
+      )
+    ).toThrow(/cannot read tensor values during tracing/)
+  })
+})

@@ -73,6 +73,22 @@ export function isNativeEnabled(): boolean {
   return nativeEnabled && loadNative() !== null
 }
 
+/** Internal save/restore hooks for the context stack. */
+export function _nativeState(): {
+  enabled: boolean
+  device: "cpu" | "gpu"
+} {
+  return { enabled: nativeEnabled, device: deviceMode }
+}
+
+export function _setNativeState(state: {
+  enabled: boolean
+  device: "cpu" | "gpu"
+}): void {
+  nativeEnabled = state.enabled
+  deviceMode = state.device
+}
+
 const MISSING_ADDON = "@typenet/native is not built. Run `pnpm build:native`."
 
 function withNative<T>(fn: (mod: NativeModule) => T): T

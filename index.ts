@@ -1,6 +1,8 @@
 export { noGrad } from "./src/autograd.ts"
 export { compile, printGraph } from "./src/compile.ts"
 export type { CompiledFn } from "./src/compile.ts"
+export { context, withContext } from "./src/context.ts"
+export type { RuntimeContext } from "./src/context.ts"
 export { arange, cat, eye, full, ones, rand, randn, scalar, stack, tensor, zeros } from "./src/factories.ts"
 export { normal, uniform } from "./src/ir.ts"
 export { configure } from "./src/lazy.ts"

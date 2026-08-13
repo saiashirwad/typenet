@@ -100,6 +100,7 @@ function xorTrainCompiled(steps: number): number {
       optim.step()
       return loss
     },
+    [XOR_X, XOR_Y],
   )
   let loss = step(XOR_X, XOR_Y)
   for (let i = 1; i < steps; i++) loss = step(XOR_X, XOR_Y)
