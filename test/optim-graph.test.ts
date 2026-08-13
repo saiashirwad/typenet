@@ -72,6 +72,26 @@ describe("optimizer dtype validation", () => {
   })
 })
 
+describe("optimizer dispose and reuse", () => {
+  it("SGD and Adam keep working after dispose()", () => {
+    const sgdParam = tensor([1, 2, 3]).requiresGrad()
+    const sgd = new SGD([sgdParam], { lr: 0.1, momentum: 0.9 })
+    sgdParam.grad = tensor([0.5, -0.25, 0.1])
+    sgd.step()
+    sgd.dispose()
+    sgdParam.grad = tensor([0.5, -0.25, 0.1])
+    expect(() => sgd.step()).not.toThrow()
+
+    const adamParam = tensor([1, 2, 3]).requiresGrad()
+    const adam = new Adam([adamParam], { lr: 0.1 })
+    adamParam.grad = tensor([0.5, -0.25, 0.1])
+    adam.step()
+    adam.dispose()
+    adamParam.grad = tensor([0.5, -0.25, 0.1])
+    expect(() => adam.step()).not.toThrow()
+  })
+})
+
 describe("optimizer in the lazy graph", () => {
   it("lazy SGD (momentum + weight decay) tracks eager across steps", () => {
     const eager = makeNet()

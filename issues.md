@@ -18,7 +18,7 @@ Check the box when the fix lands (one commit per item, lowercase messages).
 - [x] **`Target::parse` silently falls back to CPU.** `native/src/lib.rs:188`
   — `_ => Target::Cpu` turns a typo like `TYPENET_EVALUATOR=metal`/`=cuda` into
   a silent CPU run. Fix: error on unknown non-empty hints.
-- [ ] **`Adam.dispose()` leaves the optimizer unusable.** `src/optim.ts:432-438`
+- [x] **`Adam.dispose()` leaves the optimizer unusable.** `src/optim.ts:432-438`
   empties `m`/`v` to `[]` and nulls graph state, so a later `step()` indexes
   `this.m[pi]!` → `undefined` and throws; `SGD.dispose()` (`293-295`) nulls only
   `velocities` and re-initializes gracefully. Fix: uniform null-and-re-init

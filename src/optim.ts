@@ -297,6 +297,7 @@ export class SGD extends Optimizer {
 
   dispose(): void {
     this.velocities = null
+    this.graphVelocities = null
   }
 }
 
@@ -314,8 +315,8 @@ export class Adam extends Optimizer {
   private readonly eps: number
   private readonly weightDecay: number
   private t = 0
-  private m: Float64Array[]
-  private v: Float64Array[]
+  private m: Float64Array[] | null
+  private v: Float64Array[] | null
   private graphM: AnyTensor[] | null = null
   private graphV: AnyTensor[] | null = null
   // Step count for the in-graph path. It has to be a graph leaf rather
@@ -343,6 +344,8 @@ export class Adam extends Optimizer {
 
   step(): void {
     this.t++
+    const ms = this.m ??= this.params.map(p => new Float64Array(p.numel))
+    const vs = this.v ??= this.params.map(p => new Float64Array(p.numel))
     const bc1 = 1 - this.beta1 ** this.t
     const bc2 = 1 - this.beta2 ** this.t
     const updates: GraphUpdate[] = []
@@ -406,8 +409,8 @@ export class Adam extends Optimizer {
         }
         const data = p.data
         const gd = g.data
-        const m = this.m[pi]!
-        const v = this.v[pi]!
+        const m = ms[pi]!
+        const v = vs[pi]!
         for (let i = 0; i < data.length; i++) {
           const next = adamUpdate(
             nums,
@@ -435,8 +438,9 @@ export class Adam extends Optimizer {
   }
 
   dispose(): void {
-    this.m = []
-    this.v = []
+    this.t = 0
+    this.m = null
+    this.v = null
     this.graphM = null
     this.graphV = null
     this.graphT = null
