@@ -1226,6 +1226,23 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
     let graph = &prep.graph;
     let n = graph.nodes.len();
     let mut buffers: Vec<Option<Vec<f32>>> = (0..n).map(|_| None).collect();
+    // Spike (issue #11): the same consumer countdown run_graph does, so a
+    // long rollout does not hold every activation it ever produced.
+    let mut remaining = prep.consumers.clone();
+    let mut members_of: Vec<Vec<usize>> = vec![Vec::new(); prep.groups.len()];
+    for i in 0..n {
+        if let Some(g) = prep.group_of[i] {
+            members_of[g].push(i);
+        }
+    }
+    let mut release = |remaining: &mut Vec<usize>,
+                       buffers: &mut Vec<Option<Vec<f32>>>,
+                       input: usize| {
+        remaining[input] -= 1;
+        if remaining[input] == 0 && !prep.is_root[input] {
+            buffers[input] = None;
+        }
+    };
     for (idx, node) in graph.nodes.iter().enumerate() {
         if !prep.live[idx] {
             continue;
@@ -1233,7 +1250,27 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
         if let Some(g) = prep.group_of[idx] {
             if prep.groups[g].leader == idx {
                 buffers[idx] = Some(exec_group(&prep.groups[g], &buffers));
+                for &m in &members_of[g] {
+                    for input in node_inputs(&graph.nodes[m]) {
+                        release(&mut remaining, &mut buffers, input);
+                    }
+                }
             }
+            continue;
+        }
+        // Spike: a view of a contiguous buffer is free when this is the
+        // last read — steal the allocation instead of copying it.
+        if let Node::View { input, .. } = node {
+            let out = if remaining[*input] == 1 && !prep.is_root[*input] {
+                buffers[*input].take()
+            } else {
+                buffers[*input].clone()
+            }
+            .ok_or_else(|| {
+                candle_core::Error::Msg(format!("node references future index {input}"))
+            })?;
+            buffers[idx] = Some(out);
+            release(&mut remaining, &mut buffers, *input);
             continue;
         }
         let started = if profiling() {
@@ -1326,6 +1363,9 @@ fn execute(prep: &PreparedGraph, leaves: &[f32], seed: u32) -> candle_core::Resu
             );
         }
         buffers[idx] = Some(out);
+        for input in node_inputs(node) {
+            release(&mut remaining, &mut buffers, input);
+        }
     }
     let mut out = Vec::new();
     for &r in &prep.roots {
