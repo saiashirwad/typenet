@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  tsover-generic-overloads@6.0.2-generic.0: bded90c45784bfca5775ba60b79bab9d5e742fbff76551e6e05c46cf9683d594
+
 importers:
 
   .:
@@ -26,10 +29,10 @@ importers:
         version: 0.55.2
       tsover:
         specifier: npm:tsover-generic-overloads@6.0.2-generic.0
-        version: tsover-generic-overloads@6.0.2-generic.0
+        version: tsover-generic-overloads@6.0.2-generic.0(patch_hash=bded90c45784bfca5775ba60b79bab9d5e742fbff76551e6e05c46cf9683d594)
       typescript:
         specifier: npm:tsover-generic-overloads@6.0.2-generic.0
-        version: tsover-generic-overloads@6.0.2-generic.0
+        version: tsover-generic-overloads@6.0.2-generic.0(patch_hash=bded90c45784bfca5775ba60b79bab9d5e742fbff76551e6e05c46cf9683d594)
       vite-node:
         specifier: ^6.0.0
         version: 6.0.0(@types/node@26.1.1)
@@ -2151,7 +2154,7 @@ snapshots:
   tslib@2.8.1:
     optional: true
 
-  tsover-generic-overloads@6.0.2-generic.0:
+  tsover-generic-overloads@6.0.2-generic.0(patch_hash=bded90c45784bfca5775ba60b79bab9d5e742fbff76551e6e05c46cf9683d594):
     dependencies:
       minimatch: 9.0.9
       unplugin: 2.3.11

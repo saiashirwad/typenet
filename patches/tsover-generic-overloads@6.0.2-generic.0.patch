@@ -1,0 +1,16 @@
+diff --git a/dist/transform-pZ8WBw5Y.cjs b/dist/transform-pZ8WBw5Y.cjs
+index 5ab84499ff06e1e64aa66dd66839f51f7302b4d6..b8dc994ae4b973411ebce160480e051acc6a506c 100644
+--- a/dist/transform-pZ8WBw5Y.cjs
++++ b/dist/transform-pZ8WBw5Y.cjs
+@@ -65,7 +65,10 @@ var ProgramManager = class {
+ 		const configFile = tsover.default.readConfigFile(this.configPath, tsover.default.sys.readFile);
+ 		const parsedConfig = tsover.default.parseJsonConfigFileContent(configFile.config, tsover.default.sys, path.dirname(this.configPath));
+ 		const program = tsover.default.createProgram(parsedConfig.fileNames, this.options, this.host);
+-		const errors = tsover.default.getPreEmitDiagnostics(program).filter((d) => d.category === tsover.default.DiagnosticCategory.Error);
++		// typenet patch: full-program diagnostics are only a warning print
++		// and cost seconds per transformed file; `pnpm typecheck` is the
++		// source of truth, so vite runs skip them unless asked.
++		const errors = process.env.TSOVER_SKIP_DIAGNOSTICS ? [] : tsover.default.getPreEmitDiagnostics(program).filter((d) => d.category === tsover.default.DiagnosticCategory.Error);
+ 		if (errors.length > 0) {
+ 			const errorMessages = errors.map((diagnostic) => {
+ 				const message = tsover.default.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
