@@ -4,6 +4,7 @@ import { compile, printGraph } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { Tensor } from "../src/tensor.ts"
+import { runOnSmallStack } from "./small-stack.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -75,3 +76,34 @@ describe.skipIf(!isNativeAvailable())(
     })
   },
 )
+
+// These re-run the deep chains above (and a new one mixing in views and
+// reductions) as child processes with a deliberately tiny (256 KB) V8
+// stack, so that graph construction, forcing and backward all have to stay
+// iterative rather than recursing one native call frame per graph node —
+// the same class of bug effect-torch hit rewriting Clone/PartialEq/Hash/Drop
+// as worklists. `runOnSmallStack` spawns each `test/scenarios/*.ts` file
+// under vite-node; a scenario asserts internally and exits non-zero on
+// failure (assertion or native stack overflow alike).
+describe("deep graphs, small stack", () => {
+  // Each scenario is a cold vite-node process (its own TS transform/typecheck
+  // pass), which dominates the wall time far more than the actual small-stack
+  // chain evaluation does — give it plenty of headroom above vitest's 5s
+  // default.
+  const SMALL_STACK_TIMEOUT = 60_000
+
+  it("forces, and differentiates, the depth-20000 chain on a small stack", async () => {
+    const { code, stdout, stderr } = await runOnSmallStack("deep-chain-20000")
+    expect(code, `stdout:\n${stdout}\nstderr:\n${stderr}`).toBe(0)
+  }, SMALL_STACK_TIMEOUT)
+
+  it("forces, and differentiates, a depth-4000 chain of views and reductions on a small stack", async () => {
+    const { code, stdout, stderr } = await runOnSmallStack("deep-chain-4000-mixed")
+    expect(code, `stdout:\n${stdout}\nstderr:\n${stderr}`).toBe(0)
+  }, SMALL_STACK_TIMEOUT)
+
+  it("genuinely fails a deliberately recursive scenario", async () => {
+    const { code } = await runOnSmallStack("recursive-overflow")
+    expect(code).not.toBe(0)
+  }, SMALL_STACK_TIMEOUT)
+})
