@@ -1,21 +1,40 @@
 import * as nativeBackend from "./backends/native.ts"
+import { noteFallback } from "./counters.ts"
 import {
   evalBinaryEager,
   evalBroadcastToEager,
   evalCatEager,
+  evalContiguousEager,
+  evalCrossEntropyEager,
+  evalDropoutEager,
+  evalGatherRowsEager,
+  evalGeluEager,
+  evalGeluGradEager,
   evalIndexSelectEager,
+  evalLayerNormEager,
+  evalLayerNormGradEager,
+  evalLogSumExpEager,
   evalMatmulEager,
   evalNarrowEager,
   evalOneHotEager,
   evalPermuteEager,
+  evalPickEager,
   evalRandomEager,
   evalReduceAllEager,
-  evalReduceEager,
+  evalReduceDimsEager,
+  evalRmsNormEager,
+  evalRmsNormGradEager,
   evalScatterAddEager,
+  evalScatterAddRowsEager,
+  evalSiluEager,
+  evalSiluGradEager,
+  evalSoftmaxEager,
+  evalSoftmaxGradEager,
   evalUnaryEager,
 } from "./eager.ts"
-import { isLazyMode, nodeInputs, OP_DESC, type SerializedNode, serializeNode, setLazyMode, topoOrder } from "./ir.ts"
-import { nextSeed, reseed, setActiveSeed } from "./kernels.ts"
+import { isLazyMode, nodeInputs, OP_DESC, type SerializedNode, setLazyMode, topoOrder } from "./ir.ts"
+import { getActiveSeed, nextSeed, reseed, setActiveSeed } from "./kernels.ts"
+import { encodeForWire, supportOf } from "./lower-native.ts"
 import { type CpuStorage, type LazyNode, type LazyStorage, prod, showShape } from "./storage.ts"
 import { _internal, type AnyTensor } from "./tensor.ts"
 
@@ -71,9 +90,9 @@ function evalNode(node: LazyNode): AnyTensor {
     case "matmul":
       return evalMatmulEager(force(node.a), force(node.b))
     case "reduce":
-      return evalReduceEager(
+      return evalReduceDimsEager(
         force(node.input),
-        node.dim,
+        node.dims,
         node.keepdim,
         node.kind,
       )
@@ -126,6 +145,102 @@ function evalNode(node: LazyNode): AnyTensor {
         node.stream,
         node.dtype,
       )
+
+    // --- W4.1 semantic ops ---------------------------------------------
+    case "gelu":
+      return evalGeluEager(force(node.input))
+    case "geluGrad":
+      return evalGeluGradEager(
+        force(node.grad),
+        force(node.input),
+      )
+    case "silu":
+      return evalSiluEager(force(node.input))
+    case "siluGrad":
+      return evalSiluGradEager(
+        force(node.grad),
+        force(node.input),
+      )
+    case "softmax":
+      return evalSoftmaxEager(
+        force(node.input),
+        node.dim,
+        node.causal,
+      )
+    case "softmaxGrad":
+      return evalSoftmaxGradEager(
+        force(node.grad),
+        force(node.input),
+        node.dim,
+      )
+    case "layerNorm":
+      return evalLayerNormEager(
+        force(node.input),
+        force(node.gamma),
+        force(node.beta),
+        node.eps,
+      )
+    case "layerNormGrad":
+      return evalLayerNormGradEager(
+        force(node.grad),
+        force(node.input),
+        force(node.gamma),
+        force(node.mean),
+        force(node.rstd),
+      )
+    case "rmsNorm":
+      return evalRmsNormEager(
+        force(node.input),
+        force(node.gamma),
+        node.eps,
+      )
+    case "rmsNormGrad":
+      return evalRmsNormGradEager(
+        force(node.grad),
+        force(node.input),
+        force(node.gamma),
+        force(node.rstd),
+      )
+    case "crossEntropy":
+      return evalCrossEntropyEager(
+        force(node.input),
+        force(node.target),
+      )
+    case "logSumExp":
+      return evalLogSumExpEager(
+        force(node.input),
+        node.dim,
+        node.keepdim,
+      )
+    case "gatherRows":
+      return evalGatherRowsEager(
+        force(node.input),
+        force(node.index),
+      )
+    case "scatterAddRows":
+      return evalScatterAddRowsEager(
+        force(node.input),
+        force(node.index),
+        node.rows,
+      )
+    // One seed per evaluation pass (set by `evalInterpreted` below), so a
+    // replay of the same graph redraws the mask and the forward and its
+    // backward — which run in the SAME pass — share it.
+    case "dropout":
+      return evalDropoutEager(
+        force(node.input),
+        node.p,
+        node.stream,
+        getActiveSeed(),
+      )
+    case "pick":
+      return evalPickEager(
+        force(node.input),
+        node.offset,
+        node.shape,
+      )
+    case "contiguous":
+      return evalContiguousEager(force(node.input))
   }
 }
 
@@ -204,7 +319,6 @@ function serializeLazyGraph(roots: AnyTensor[]): {
   let work = 0
 
   for (const t of order) {
-    index.set(t, nodes.length)
     const source = _internal.sourceOf(t)
     if (source.kind !== "lazy" || _internal.hasValue(t)) {
       if (t.dtype === "float64") {
@@ -223,6 +337,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
         data.byteOffset,
         data.byteLength,
       )
+      index.set(t, nodes.length)
       nodes.push({
         op: "leaf",
         leaf: leafTensors.length,
@@ -241,10 +356,32 @@ function serializeLazyGraph(roots: AnyTensor[]): {
       continue
     }
     const node = (source as LazyStorage).node
+    const support = supportOf(node)
+    if (support.kind === "unsupported") {
+      // Loudly, once per reason, and countably: the whole graph goes to
+      // the JS interpreter through the `null` route `compile()` and
+      // `forceMany` already take. This is a CAPABILITY gap, so it is a
+      // notice; the two errors below it are USER mistakes, and they stay
+      // errors.
+      noteFallback(node.op, support.reason)
+      return null
+    }
     work += prod(node.shape)
     // Every input precedes `t` in topological order, so its index is
-    // already assigned.
-    nodes.push(serializeNode(node, u => index.get(u)!))
+    // already assigned. `encodeForWire` may append more than one wire
+    // node (a multi-axis `reduce` is a chain the addon can parse); the
+    // index it returns is the one this tensor's consumers reference.
+    index.set(
+      t,
+      encodeForWire(
+        node,
+        u => index.get(u)!,
+        body => {
+          nodes.push(body)
+          return nodes.length - 1
+        },
+      ),
+    )
   }
 
   // Integer leaves are gather/scatter indices only. A compute op that

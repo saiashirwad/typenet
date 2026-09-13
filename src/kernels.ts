@@ -77,6 +77,49 @@ function applyUnary(
   }
 }
 
+// ---------------------------------------------------------------------------
+// W4.1 semantic scalar kernels. These are the *numeric specification* (D16):
+// `src/eager.ts` maps them over a buffer, `src/lazy.ts`'s interpreter replays
+// the same kernel per node, and a native kernel must reproduce them. Each is
+// written as the composition PLAN-V2 §5A.2a's lowering table names, in that
+// evaluation order, so when A-L1 lowers the node to primitives the two paths
+// are the same arithmetic rather than two arithmetics within a tolerance.
+// ---------------------------------------------------------------------------
+
+/** `sqrt(2/pi)` — the constant of the tanh GELU approximation. */
+const GELU_C = Math.sqrt(2 / Math.PI)
+/** The cubic coefficient of the same approximation (Hendrycks & Gimpel). */
+const GELU_A = 0.044715
+
+/** `0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3)))`. */
+function gelu(x: number): number {
+  return 0.5 * x * (1 + Math.tanh(GELU_C * (x + GELU_A * x * x * x)))
+}
+
+/**
+ * d/dx of {@link gelu}, times an upstream `g`. Written out rather than
+ * differentiated numerically because the tanh approximation is the thing
+ * being differentiated — the exact-erf GELU has a different derivative and
+ * mixing the two is the classic silent 1e-3 error in a transformer.
+ */
+function geluGrad(g: number, x: number): number {
+  const inner = GELU_C * (x + GELU_A * x * x * x)
+  const t = Math.tanh(inner)
+  const dInner = GELU_C * (1 + 3 * GELU_A * x * x)
+  return g * (0.5 * (1 + t) + 0.5 * x * (1 - t * t) * dInner)
+}
+
+/** `x * sigmoid(x)`. */
+function silu(x: number): number {
+  return x / (1 + Math.exp(-x))
+}
+
+/** `g * (s + x*s*(1-s))` with `s = sigmoid(x)`. */
+function siluGrad(g: number, x: number): number {
+  const s = 1 / (1 + Math.exp(-x))
+  return g * (s + x * s * (1 - s))
+}
+
 /** murmur3's 32-bit finalizer, in its stronger (Stafford 13) variant. */
 function hash32(x: number): number {
   x = (x ^ (x >>> 16)) >>> 0
@@ -169,4 +212,23 @@ function randomData(
   return out
 }
 
-export { applyBinary, applyUnary, getActiveSeed, hash32, nextSeed, nextStream, randomData, reseed, rngState, setActiveSeed, setRngState, unitFloat }
+export {
+  applyBinary,
+  applyUnary,
+  gelu,
+  GELU_A,
+  GELU_C,
+  geluGrad,
+  getActiveSeed,
+  hash32,
+  nextSeed,
+  nextStream,
+  randomData,
+  reseed,
+  rngState,
+  setActiveSeed,
+  setRngState,
+  silu,
+  siluGrad,
+  unitFloat,
+}

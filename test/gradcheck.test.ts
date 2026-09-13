@@ -13,7 +13,20 @@ import {
   useNative,
 } from "../src/backends/native.ts"
 import { configure, isLazy } from "../src/lazy.ts"
-import { Tensor } from "../src/tensor.ts"
+import {
+  contiguous,
+  crossEntropy,
+  dropout,
+  gatherRows,
+  gelu,
+  layerNorm,
+  logSumExp,
+  rmsNorm,
+  scatterAddRows,
+  silu,
+  softmax,
+  Tensor,
+} from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
@@ -43,6 +56,17 @@ interface Case {
   /** Per-case tolerance override, when f32 cancellation in the
       finite difference sits just above the global 1e-3 floor. */
   readonly tol?: number
+  /**
+   * The item that makes this case runnable on the NATIVE path (PLAN-V2
+   * §5A.0 rule 2). W4.1's semantic ops have no native kernel and no
+   * lowering yet, so a native run of them would land on the JS
+   * interpreter and the "the native graph was prepared" assertion in
+   * `checkCase` would fail for the wrong reason. The native
+   * `describe.each` block below FILTERS these out — it does not `.skip`
+   * them, and the eager and lazy blocks run every case. A-L1 removes the
+   * flags, and its own acceptance is that no `nativeFrom` survives.
+   */
+  readonly nativeFrom?: string
 }
 
 interface CheckOpts {
@@ -556,6 +580,134 @@ const CASES: Case[] = [
     build: ([a]) => a!.sub(a!.clamp(-1, 1)).abs().mean() as AnyTensor,
     sample: awayFromUnit,
   },
+
+  // --- W4.1 semantic ops ---------------------------------------------------
+  // Every one of these carries `nativeFrom: "A-L1"`: the op exists in the IR
+  // and runs eager and lazy today, but the addon cannot parse it, so the
+  // native block filters it until A-L1 lowers it.
+  {
+    name: "gelu",
+    shapes: [[6]],
+    build: ([a]) => gelu(a!).mul(2).sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "silu",
+    shapes: [[6]],
+    build: ([a]) => silu(a!).mul(2).sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "softmax node(1)",
+    shapes: [[2, 3]],
+    build: ([a]) => softmax(a!, 1).mul(2).sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "softmax node(-1) causal",
+    shapes: [[2, 3, 3]],
+    build: ([a]) => softmax(a!, -1, { causal: true }).mul(2).sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "logSumExp(1)",
+    shapes: [[2, 3]],
+    build: ([a]) => logSumExp(a!, 1).mul(2).sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "logSumExp(1, keepdim)",
+    shapes: [[2, 3]],
+    build: ([a]) => logSumExp(a!, 1, true).mul(2).sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "layerNorm",
+    shapes: [[3, 4], [4], [4]],
+    build: ([x, g, b]) =>
+      layerNorm(x as any, g as any, b as any)
+        .pow(3)
+        .sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "rmsNorm",
+    shapes: [[3, 4], [4]],
+    build: ([x, g]) =>
+      rmsNorm(x as any, g as any)
+        .pow(3)
+        .sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "crossEntropy [4,3]",
+    shapes: [[4, 3]],
+    build: ([a]) => crossEntropy(a as any, index([2, 0, 1, 2]) as any) as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "gatherRows, rank-1 index",
+    shapes: [[4, 3]],
+    build: ([a]) =>
+      gatherRows(a as any, index([2, 0, 0, 3, 1]) as any)
+        .pow(3)
+        .sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "gatherRows, rank-2 index",
+    shapes: [[4, 3]],
+    build: ([a]) =>
+      gatherRows(
+        a as any,
+        Tensor.of([[1, 0, 0], [3, 3, 2]]) as any,
+      )
+        .pow(3)
+        .sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "scatterAddRows, colliding indices",
+    shapes: [[3, 2]],
+    build: ([a]) =>
+      scatterAddRows(a as any, index([2, 0, 0]) as any, 4)
+        .pow(3)
+        .sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    // p = 0 is the only deterministic dropout, and determinism is what a
+    // finite difference needs: with p > 0 the perturbed evaluations would
+    // each draw their own mask. That the mask is shared between forward
+    // and backward at p > 0 is asserted directly in
+    // `test/semantic-ops.test.ts`, against the mask itself.
+    name: "dropout(p=0)",
+    shapes: [[6]],
+    build: ([a]) => dropout(a!, 0).pow(3).sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    name: "contiguous",
+    shapes: [[2, 3]],
+    build: ([a]) => contiguous(a!).pow(3).sum() as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    // The multi-axis `reduce{dims}` W4.1 step 6 introduced: a `[2,3,4] +
+    // [4]` bias backward reduces axes 0 and 1 in ONE node. Native-clean —
+    // `reduce` is a wire op at every arity (`encodeForWire`).
+    name: "broadcast add [2,3,4]+[4] (multi-axis sumTo)",
+    shapes: [[2, 3, 4], [4]],
+    // `tanh` rather than `pow(3)`: a 24-term f32 sum of cubes puts the
+    // central difference's own cancellation above the global floor, which
+    // would be a statement about the test and not about `sumTo`.
+    build: ([a, b]) => a!.add(b!).tanh().sum(),
+  },
+  {
+    name: "broadcast mul [2,3,4]*[1,1,4] (keepdim sumTo)",
+    shapes: [[2, 3, 4], [1, 1, 4]],
+    build: ([a, b]) => a!.mul(b!).tanh().sum(),
+  },
 ]
 
 describe.each([
@@ -568,7 +720,14 @@ describe.each([
     disableNative()
   })
 
-  it.each(CASES.map(c => [c.name, c] as const))(
+  // Filtered, not skipped (PLAN-V2 §5A.0 rule 2): a case whose op the
+  // addon cannot run is not a native case yet, and pretending otherwise by
+  // `.skip`ing it would leave a permanently red-ish suite that nobody reads.
+  const cases = native
+    ? CASES.filter(c => c.nativeFrom === undefined)
+    : CASES
+
+  it.each(cases.map(c => [c.name, c] as const))(
     "%s",
     (_name, c) => {
       if (native) useNative()

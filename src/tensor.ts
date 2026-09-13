@@ -6,14 +6,30 @@ import {
   rawBinary,
   rawBroadcastTo,
   rawCat,
+  rawContiguous,
+  rawCrossEntropy,
+  rawDropout,
+  rawGatherRows,
+  rawGelu,
+  rawGeluGrad,
   rawIndexSelect,
+  rawLayerNorm,
+  rawLayerNormGrad,
+  rawLogSumExp,
   rawMatmul,
   rawNarrow,
   rawOneHot,
   rawPermute,
   rawReduce,
   rawReduceAll,
+  rawRmsNorm,
+  rawRmsNormGrad,
   rawScatterAdd,
+  rawScatterAddRows,
+  rawSilu,
+  rawSiluGrad,
+  rawSoftmax,
+  rawSoftmaxGrad,
   rawSum,
   rawUnary,
   reshapeRaw,
@@ -32,6 +48,7 @@ import {
   type CatNCheck,
   type DimAt,
   type DimCheck,
+  type Drop,
   type ErrorMessage,
   type FlattenCheck,
   type FlattenShape,
@@ -39,6 +56,7 @@ import {
   type IndexTensor,
   type InferShape,
   type IsDynamic,
+  type Last,
   type MatMul,
   type MatMulCheck,
   type NestedArray,
@@ -1617,4 +1635,237 @@ function cat2(
     rawNarrow(g, d, 0, lenA),
     rawNarrow(g, d, lenA, lenB),
   ])
+}
+
+// ---------------------------------------------------------------------------
+// W4.1 semantic ops: the typed entry points, each with its backward rule.
+//
+// Module-level functions rather than `Tensor` methods on purpose. They are
+// the primitives the Wave-5 layer catalog is built out of (`nn.functional.*`
+// re-exports them), and the class already carries every overload set the
+// typecheck budget can pay for — a `Tensor` method costs instantiations at
+// every call site in the library, a free function costs them only at its own.
+//
+// The composed spellings that already exist (`Tensor.softmax`,
+// `nn.crossEntropy`) are deliberately left alone: they are what today's
+// native path runs, and replacing them with a node the addon cannot parse
+// would take every existing model off the native path. W5.1-A/W5.3-A move
+// the layers over, op by op, once A-L1 can lower them.
+// ---------------------------------------------------------------------------
+
+/**
+ * GELU, tanh approximation (`src/kernels.ts`'s `gelu` is the numeric spec).
+ * One node, not the six a hand-composed `0.5x(1+tanh(...))` costs.
+ */
+export function gelu<S extends Shape>(x: Tensor<S>): Tensor<S> {
+  const a = x as AnyTensor
+  const out = rawGelu(a)
+  return withGrad(out, "gelu", [a], g => [
+    rawGeluGrad(g, a),
+  ]) as Tensor<S>
+}
+
+/** SiLU / swish: `x * sigmoid(x)`. */
+export function silu<S extends Shape>(x: Tensor<S>): Tensor<S> {
+  const a = x as AnyTensor
+  const out = rawSilu(a)
+  return withGrad(out, "silu", [a], g => [
+    rawSiluGrad(g, a),
+  ]) as Tensor<S>
+}
+
+/**
+ * Softmax as a single node, with the backward in closed form over the
+ * output (`dx = y*(g - sum(g*y))`) rather than through the four nodes the
+ * composed spelling differentiates.
+ *
+ * `causal: true` folds a decoder's additive mask into the same node —
+ * masking is a property of the OP, not a materialised `[T, T]` buffer, which
+ * is the thing a generic fuser can never find for itself. It requires the
+ * last axis of a rank>=2 score matrix.
+ */
+export function softmax<
+  S extends Shape,
+  const D extends number,
+>(
+  x: Tensor<S>,
+  dim: D & DimCheck<S, D>,
+  options: { causal?: boolean } = {},
+): Tensor<S> {
+  const a = x as AnyTensor
+  const d = normalizeDim(dim as number, a.shape.length)
+  const out = rawSoftmax(a, d, options.causal ?? false)
+  return withGrad(out, "softmax", [a], g => [
+    rawSoftmaxGrad(g, out, d),
+  ]) as Tensor<S>
+}
+
+/**
+ * LayerNorm over the last axis. The node produces `(y, mean, rstd)`; the
+ * saved statistics are what makes the backward a closed form instead of a
+ * re-derivation, and they never leave the graph.
+ */
+export function layerNorm<S extends Shape>(
+  x: Tensor<S>,
+  gamma: Tensor<[Last<S>]>,
+  beta: Tensor<[Last<S>]>,
+  options: { eps?: number } = {},
+): Tensor<S> {
+  const a = x as AnyTensor
+  const w = gamma as AnyTensor
+  const b = beta as AnyTensor
+  const [y, mean, rstd] = rawLayerNorm(
+    a,
+    w,
+    b,
+    options.eps ?? 1e-5,
+  ) as [AnyTensor, AnyTensor, AnyTensor]
+  return withGrad(y, "layerNorm", [a, w, b], g => rawLayerNormGrad(g, a, w, mean, rstd)) as Tensor<S>
+}
+
+/** RMSNorm: LayerNorm without the mean subtraction, `(y, rstd)`. */
+export function rmsNorm<S extends Shape>(
+  x: Tensor<S>,
+  gamma: Tensor<[Last<S>]>,
+  options: { eps?: number } = {},
+): Tensor<S> {
+  const a = x as AnyTensor
+  const w = gamma as AnyTensor
+  const [y, rstd] = rawRmsNorm(a, w, options.eps ?? 1e-5) as [
+    AnyTensor,
+    AnyTensor,
+  ]
+  return withGrad(y, "rmsNorm", [a, w], g => rawRmsNormGrad(g, a, w, rstd)) as Tensor<S>
+}
+
+/**
+ * Mean cross-entropy of `[N, C]` logits against `[N]` class indices, fused:
+ * the node computes the loss and `dlogits` in one pass, so the `[N, C]`
+ * one-hot the composed spelling builds never exists and the backward is a
+ * multiply rather than a second softmax.
+ */
+export function crossEntropy<
+  N extends number,
+  C extends number,
+>(
+  logits: Tensor<[N, C]>,
+  targets: Tensor<[NoInfer<N>]>,
+): Tensor<[]> {
+  const l = logits as AnyTensor
+  const [loss, dlogits] = rawCrossEntropy(
+    l,
+    targets as AnyTensor,
+  ) as [AnyTensor, AnyTensor]
+  return withGrad(loss, "crossEntropy", [l], g => [
+    rawBinary(dlogits, g, "mul"),
+  ]) as Tensor<[]>
+}
+
+/** `log(sum(exp(x), dim))`, shifted by the row maximum so it never overflows. */
+export function logSumExp<
+  S extends Shape,
+  const D extends number,
+>(
+  x: Tensor<S>,
+  dim: D & DimCheck<S, D>,
+): Tensor<ReduceDim<S, D>>
+export function logSumExp<
+  S extends Shape,
+  const D extends number,
+  const K extends boolean,
+>(
+  x: Tensor<S>,
+  dim: D & DimCheck<S, D>,
+  keepdim: K,
+): Tensor<ReduceDim<S, D, K>>
+export function logSumExp(
+  x: AnyTensor,
+  dim: number,
+  keepdim = false,
+): AnyTensor {
+  const d = normalizeDim(dim, x.shape.length)
+  const out = rawLogSumExp(x, d, keepdim)
+  const keepShape = x.shape.map(
+    (s: number, i: number) => (i === d ? 1 : s),
+  )
+  return withGrad(out, "logSumExp", [x], g => {
+    const gk = keepdim ? g : reshapeRaw(g, keepShape)
+    // d/dx log-sum-exp is the softmax of the same axis, so the rule
+    // reuses the node rather than a second composed expression.
+    return [rawBinary(rawSoftmax(x, d, false), gk, "mul")]
+  })
+}
+
+/**
+ * Rows of `table` addressed by an index of ANY rank — `Embedding` on a
+ * `[B, T]` batch of token ids without the flatten/unflatten dance
+ * `indexSelect` forces at run time.
+ */
+export function gatherRows<
+  S extends Shape,
+  I extends Shape,
+>(
+  table: Tensor<S>,
+  index: Tensor<I>,
+): Tensor<[...I, ...Drop<S, 1>]> {
+  const t = table as AnyTensor
+  const idx = index as AnyTensor
+  const rows = t.shape[0]!
+  const out = rawGatherRows(t, idx)
+  return withGrad(out, "gatherRows", [t], g => [
+    rawScatterAddRows(g, idx, rows),
+  ]) as Tensor<[...I, ...Drop<S, 1>]>
+}
+
+/** The transpose of {@link gatherRows}: accumulate into `rows` rows. */
+export function scatterAddRows<
+  S extends Shape,
+  I extends Shape,
+  const R extends number,
+>(
+  src: Tensor<S>,
+  index: Tensor<I>,
+  rows: R,
+): Tensor<[R, ...Drop<S, I["length"] & number>]> {
+  const s = src as AnyTensor
+  const idx = index as AnyTensor
+  const out = rawScatterAddRows(s, idx, rows)
+  return withGrad(out, "scatterAddRows", [s], g => [
+    rawGatherRows(g, idx),
+  ]) as Tensor<[R, ...Drop<S, I["length"] & number>]>
+}
+
+/**
+ * Inverted dropout: keep with probability `1-p` and scale the survivors by
+ * `1/(1-p)`, so the expectation is the identity and inference needs no
+ * rescaling. The node draws its mask once and the backward multiplies by
+ * that same mask (see `storage.ts`'s `dropout` for why the mask is a second
+ * output on today's runtime).
+ *
+ * `p` is a trace-time literal in Phase A: training and evaluation are two
+ * compiled programs, which is already what D28's train/eval mismatch check
+ * requires. W3.4 makes it a runtime scalar and collapses them into one.
+ */
+export function dropout<S extends Shape>(
+  x: Tensor<S>,
+  p: number,
+): Tensor<S> {
+  const a = x as AnyTensor
+  const [y, mask] = rawDropout(a, p) as [AnyTensor, AnyTensor]
+  return withGrad(y, "dropout", [a], g => [
+    rawBinary(g, mask, "mul"),
+  ]) as Tensor<S>
+}
+
+/**
+ * Explicit materialisation. A no-op on a runtime that materialises every
+ * node anyway; it exists so Phase B's layout pass has a node to insert and
+ * so a kernel that demands contiguity can say so in the IR today.
+ */
+export function contiguous<S extends Shape>(
+  x: Tensor<S>,
+): Tensor<S> {
+  const a = x as AnyTensor
+  const out = rawContiguous(a)
+  return withGrad(out, "contiguous", [a], g => [g]) as Tensor<S>
 }

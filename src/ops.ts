@@ -70,4 +70,31 @@ export const NODE_OPS = [
   "indexSelect",
   "scatterAdd",
   "random",
+
+  // --- W4.1 semantic ops (PLAN-V2 §2.3) ------------------------------------
+  // Every one of these is a NODE kind, never a new `unary` kind: each has
+  // attributes, more than one output, or both. The fifteen kinds above are
+  // exactly what the addon parses today (`WIRE_OPS` in `lower-native.ts`);
+  // everything below is Phase A's growth area and falls back to the JS
+  // interpreter until A-L1 lands a lowering and W4.2-W4.5 land kernels.
+  "gelu",
+  "geluGrad",
+  "silu",
+  "siluGrad",
+  "softmax",
+  "softmaxGrad",
+  "layerNorm",
+  "layerNormGrad",
+  "rmsNorm",
+  "rmsNormGrad",
+  "crossEntropy",
+  "logSumExp",
+  "gatherRows",
+  "scatterAddRows",
+  "dropout",
+  "pick",
+  "contiguous",
 ] as const
+
+/** Every structural node kind; the domain of `OP_DESC` and of `SUPPORT`. */
+export type NodeOp = (typeof NODE_OPS)[number]

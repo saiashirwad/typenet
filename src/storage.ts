@@ -39,7 +39,14 @@ type LazyNodeBody =
   | {
     op: "reduce"
     kind: ReduceOp
-    dim: number
+    /**
+     * Axes to reduce, ascending, normalised against `input`'s rank
+     * (W4.1 step 6). `sumTo` emits ONE of these instead of one node per
+     * axis; the accumulation order is "ascending axis, one axis at a
+     * time", which is exactly the chain the old `sumTo` emitted, so the
+     * rewrite moves no f32 bits (gate C3).
+     */
+    dims: number[]
     keepdim: boolean
     input: AnyTensor
   }
@@ -81,6 +88,112 @@ type LazyNodeBody =
     // built, which keeps a compiled graph's structure stable.
     stream: number
   }
+  // --- W4.1 semantic ops (PLAN-V2 §2.3) ------------------------------------
+  //
+  // Tensor operands keep using the generic slot names `OP_DESC` knows
+  // (`input`/`a`/`b`/`index`/`grad`/`gamma`/`beta`/`mean`/`rstd`/`target`),
+  // so `nodeInputs`, `formatLazyOp` and `serializeNode` stay table-driven —
+  // W4.1 step 5's "no three fifteen-arm switches".
+  //
+  // MULTI-OUTPUT IS A LOWERING CONCEPT, NOT AN IR CONCEPT (step 2). A node
+  // with several outputs produces ONE tensor whose shape is `[total]` — the
+  // outputs' elements concatenated in declaration order — and each real
+  // output is a `pick` node that slices it. Nothing in this file grows
+  // multi-output machinery.
+  | { op: "gelu"; input: AnyTensor }
+  | { op: "geluGrad"; grad: AnyTensor; input: AnyTensor }
+  | { op: "silu"; input: AnyTensor }
+  | { op: "siluGrad"; grad: AnyTensor; input: AnyTensor }
+  | {
+    op: "softmax"
+    dim: number
+    /** Additive causal mask over the last two axes, folded into the kernel. */
+    causal: boolean
+    input: AnyTensor
+  }
+  | {
+    op: "softmaxGrad"
+    dim: number
+    grad: AnyTensor
+    /** The softmax OUTPUT, not its input: the rule is closed over `y`. */
+    input: AnyTensor
+  }
+  /** `(y, mean, rstd)` over the last axis. */
+  | {
+    op: "layerNorm"
+    eps: number
+    input: AnyTensor
+    gamma: AnyTensor
+    beta: AnyTensor
+  }
+  /** `(dx, dgamma, dbeta)`. */
+  | {
+    op: "layerNormGrad"
+    grad: AnyTensor
+    input: AnyTensor
+    gamma: AnyTensor
+    mean: AnyTensor
+    rstd: AnyTensor
+  }
+  /** `(y, rstd)` over the last axis. */
+  | {
+    op: "rmsNorm"
+    eps: number
+    input: AnyTensor
+    gamma: AnyTensor
+  }
+  /** `(dx, dgamma)`. */
+  | {
+    op: "rmsNormGrad"
+    grad: AnyTensor
+    input: AnyTensor
+    gamma: AnyTensor
+    rstd: AnyTensor
+  }
+  /** `(loss, dlogits)` over `[N, C]` logits and `[N]` class indices. */
+  | {
+    op: "crossEntropy"
+    input: AnyTensor
+    target: AnyTensor
+  }
+  | {
+    op: "logSumExp"
+    dim: number
+    keepdim: boolean
+    input: AnyTensor
+  }
+  /** Row gather on axis 0 with an index of any rank (`Embedding`). */
+  | { op: "gatherRows"; input: AnyTensor; index: AnyTensor }
+  /** The transpose of `gatherRows`: accumulate into `rows` rows. */
+  | {
+    op: "scatterAddRows"
+    rows: number
+    input: AnyTensor
+    index: AnyTensor
+  }
+  /**
+   * `(y, mask)`. Two outputs, deliberately, and this is a Phase A
+   * deviation from §2.3's `outs: 1` with a named reason: §2.3 assumes a
+   * kernel that can REDRAW the same mask in backward from `(seed, stream)`
+   * inside one program. Today's runtime has no in-program RNG replay — the
+   * eager path has no per-evaluation seed at all — so the only way to
+   * guarantee the backward multiplies by the SAME mask the forward did is
+   * to make the mask an output. W3.4/W4.2 restore `outs: 1`.
+   */
+  | { op: "dropout"; p: number; stream: number; input: AnyTensor }
+  /**
+   * Projection of a multi-output producer. `out` is which output;
+   * `offset` is where it starts in the producer's flat buffer, computed
+   * once at graph-build time so the kernel needs nothing but its operand.
+   */
+  | {
+    op: "pick"
+    out: number
+    offset: number
+    input: AnyTensor
+  }
+  /** Explicit materialisation; an identity on a runtime that copies anyway. */
+  | { op: "contiguous"; input: AnyTensor }
 
 type LazyNode = LazyNodeBody & {
   shape: number[]

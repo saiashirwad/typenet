@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { printGraph } from "../src/compile.ts"
+import { sumTo } from "../src/ir.ts"
 import { configure } from "../src/lazy.ts"
 import { Tensor } from "../src/tensor.ts"
 
@@ -40,6 +41,10 @@ describe("named + printGraph", () => {
     expect(printGraph(b)).toBe(out.join("\n"))
   })
 
+  // W4.1 step 6: `reduce` carries `dims`, an array, so `sumTo` can emit
+  // one node for a multi-axis reduction. This block pins the printed text
+  // verbatim, so the rename is asserted here rather than discovered in the
+  // next item.
   it("shows reduce attributes", () => {
     configure({ lazy: true })
     const m = Tensor.rand([2, 3])
@@ -47,7 +52,20 @@ describe("named + printGraph", () => {
     expect(printGraph(s)).toBe(
       [
         "%0 = leaf [2, 3] float32",
-        "%1 = reduce.sum(%0) {dim=1, keepdim=true} [2, 1] float32 ; root",
+        "%1 = reduce.sum(%0) {dims=[1], keepdim=true} [2, 1] float32 ; root",
+      ].join("\n"),
+    )
+  })
+
+  // The `[2,3,4] + [4]` bias backward, which before W4.1 step 6 was two
+  // `reduce` nodes and is now one.
+  it("prints a multi-axis reduce as one node", () => {
+    configure({ lazy: true })
+    const g = Tensor.rand([2, 3, 4])
+    expect(printGraph(sumTo(g as any, [4]))).toBe(
+      [
+        "%0 = leaf [2, 3, 4] float32",
+        "%1 = reduce.sum(%0) {dims=[0, 1]} [4] float32 ; root",
       ].join("\n"),
     )
   })
