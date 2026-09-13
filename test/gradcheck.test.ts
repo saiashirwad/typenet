@@ -3,7 +3,17 @@
 
 import { afterEach, describe, expect, it } from "vitest"
 import { noGrad } from "../src/autograd.ts"
-import { configure } from "../src/lazy.ts"
+import {
+  _nativeState,
+  _setNativeState,
+  disableNative,
+  isNativeAvailable,
+  isNativeEnabled,
+  nativeCounters,
+  useNative,
+} from "../src/backends/native.ts"
+import { configure, isLazy } from "../src/lazy.ts"
+import { testing } from "../src/testing.ts"
 import { Tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any>
@@ -88,37 +98,86 @@ function checkCase(c: Case, seed: number, opts: CheckOpts = {}): void {
     loss.shape,
     `${c.name}: loss must be scalar, got [${loss.shape}]`,
   ).toEqual([])
+
+  // Under native mode, the analytic gradient must actually run through
+  // the native path — record the prepare count before backward() so we
+  // can confirm it advanced, rather than silently falling back to JS.
+  const nativeUnderTest = isNativeEnabled()
+  const preparesBefore = nativeUnderTest
+    ? (nativeCounters().prepares as number)
+    : 0
+
   loss.backward()
+
+  if (nativeUnderTest) {
+    const preparesAfter = nativeCounters().prepares as number
+    expect(
+      preparesAfter,
+      `${c.name}: expected the native graph to be prepared for the analytic gradient`,
+    ).toBeGreaterThan(preparesBefore)
+  }
 
   inputs.forEach((x, i) => {
     expect(
       x.grad,
       `${c.name}: grad for input ${i}`,
     ).not.toBeNull()
-    const analytic = x.grad!.data as Float32Array | Float64Array
-    const base = values[i]!
-    for (let j = 0; j < base.length; j++) {
-      const original = base[j]!
-
-      base[j] = original + eps
-      const up = noGrad(() => c.build(make(false)).item())
-      base[j] = original - eps
-      const down = noGrad(() => c.build(make(false)).item())
-      base[j] = original
-
-      const numeric = (up - down) / (2 * eps)
-      const diff = Math.abs(numeric - analytic[j]!)
-      const scale = Math.max(
-        1,
-        Math.abs(numeric),
-        Math.abs(analytic[j]!),
-      )
+    if (nativeUnderTest) {
       expect(
-        diff / scale,
-        `${c.name}: input ${i} elem ${j}: numeric ${numeric} vs autograd ${analytic[j]}`,
-      ).toBeLessThan(c.tol ?? tol)
+        testing.storageOf(x.grad!),
+        `${c.name}: grad for input ${i} should be a materialized native result`,
+      ).toBe("materialized")
     }
   })
+
+  // The finite-difference reference is always taken with the eager
+  // evaluator, even when the analytic gradient above ran natively: f32
+  // accumulation on the native (candle/Accelerate) path is noisier than
+  // eager's f64-arithmetic-on-f32-storage kernels, and central
+  // differences amplify that noise by 1/eps. Comparing native noise
+  // against native noise (or lazy against itself) would hide real
+  // regressions; comparing the analytic gradient against the eager
+  // numeric spec is the stronger, and only meaningful, check. Eager and
+  // lazy modes are unaffected: native is already disabled for them, so
+  // this is a no-op save/restore around the same computation as before.
+  const savedNativeState = _nativeState()
+  const savedLazy = isLazy()
+  if (nativeUnderTest) {
+    disableNative()
+    configure({ lazy: false })
+  }
+  try {
+    inputs.forEach((x, i) => {
+      const analytic = x.grad!.data as Float32Array | Float64Array
+      const base = values[i]!
+      for (let j = 0; j < base.length; j++) {
+        const original = base[j]!
+
+        base[j] = original + eps
+        const up = noGrad(() => c.build(make(false)).item())
+        base[j] = original - eps
+        const down = noGrad(() => c.build(make(false)).item())
+        base[j] = original
+
+        const numeric = (up - down) / (2 * eps)
+        const diff = Math.abs(numeric - analytic[j]!)
+        const scale = Math.max(
+          1,
+          Math.abs(numeric),
+          Math.abs(analytic[j]!),
+        )
+        expect(
+          diff / scale,
+          `${c.name}: input ${i} elem ${j}: numeric ${numeric} vs autograd ${analytic[j]}`,
+        ).toBeLessThan(c.tol ?? tol)
+      }
+    })
+  } finally {
+    if (nativeUnderTest) {
+      _setNativeState(savedNativeState)
+      configure({ lazy: savedLazy })
+    }
+  }
 }
 
 const CASES: Case[] = [
@@ -500,16 +559,19 @@ const CASES: Case[] = [
 ]
 
 describe.each([
-  { lazy: false, label: "eager" },
-  { lazy: true, label: "lazy" },
-])("gradcheck ($label mode)", ({ lazy }) => {
+  { lazy: false, native: false, label: "eager" },
+  { lazy: true, native: false, label: "lazy" },
+  ...(isNativeAvailable() ? [{ lazy: true, native: true, label: "native" }] : []),
+])("gradcheck ($label mode)", ({ lazy, native }) => {
   afterEach(() => {
     configure({ lazy: false })
+    disableNative()
   })
 
   it.each(CASES.map(c => [c.name, c] as const))(
     "%s",
     (_name, c) => {
+      if (native) useNative()
       configure({ lazy })
       checkCase(c, 1234)
     },
