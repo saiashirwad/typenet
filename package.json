@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit",
     "build:native": "pnpm -C native build",
     "format": "dprint fmt",
+    "example:shapes": "vite-node examples/shapes.ts",
+    "example:mlp": "vite-node examples/mlp.ts",
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
     "example:gat": "vite-node examples/gat.ts",
@@ -16,6 +18,7 @@
     "bench:micro": "vite-node bench/lib/cli.ts micro",
     "bench:macro": "vite-node bench/lib/cli.ts macro",
     "typecheck:budget": "node scripts/typecheck-budget.mjs",
+    "check:readme": "node scripts/check-readme.mjs",
     "test:ci": "pnpm test && pnpm typecheck && pnpm typecheck:budget && cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings"
   },
   "dependencies": {
