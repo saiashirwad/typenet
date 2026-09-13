@@ -21,10 +21,10 @@ export {
   nativeProfile,
   useNative,
 } from "./src/backends/native.ts"
-export { crossEntropy, isParameter, LeakyReLU, Linear, Module, mseLoss, parameter, ReLU, sequential, Sigmoid, Softmax, Tanh, tie } from "./src/nn.ts"
-// The Sequential *type* is public for annotations; construction goes
-// through sequential(...) only.
-export type { LoadReport, Parameter, Sequential, StateDict } from "./src/nn.ts"
+// The whole nn surface: layers, losses, Module/Parameter, sequential,
+// and the `init` / `functional` namespaces.
+export { jsCounters, resetJsCounters } from "./src/counters.ts"
+export * from "./src/nn/index.ts"
 export { Adam, AdamW, clipGradNorm, Optimizer, SGD } from "./src/optim.ts"
 export type { AdamOptions, AdamWOptions, OptimizerSource, OptimizerStateDict, OptimizerStateEntry, SGDOptions } from "./src/optim.ts"
 // Plain `(step: number) => number` learning-rate schedules (W1.10) — no

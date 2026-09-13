@@ -1166,3 +1166,52 @@ const _stack = ModuleList.of(6, () => new TransformerBlock(128, 4))
 type _stackItem = Expect<Equal<ReturnType<typeof _stack.at>, TransformerBlock<128, 4>>>
 // @ts-expect-error sequential: every layer needs a forward method; this one has none
 sequential(new Linear(4, 128), _stack).forward(zeros([2, 4]))
+
+// ---------------------------------------------------------------------------
+// W5.10-A — weight tying and the transposed LM head.
+// ---------------------------------------------------------------------------
+
+// `TiedLinear` is real here (unlike above, where it is a `declare`d
+// stand-in for the shape-effect protocol); aliased for the same reason
+// `Embedding`/`LayerNorm` are — the name is already taken by the stand-in.
+import { tie, TiedLinear as NNTiedLinear } from "../src/nn.ts"
+
+// Accept #2, part 1: the bug this item exists to fix (verified during
+// review, `scratchpad/review/gpt-block.ts`). `Linear<D, V>`'s weight is
+// `[D, V]`; `Embedding<V, D>`'s is `[V, D]`. `tie<S>(a: Parameter<S>, b:
+// Parameter<NoInfer<S>>)` can only relate two parameters of the SAME
+// shape, so tying an untied head to its embedding this way is, and must
+// stay, a type error — it is exactly the case `TiedLinear` exists to
+// make unnecessary.
+function _tieCannotExpressTheTransposedTying<D extends number, V extends number>(
+  head: Linear<D, V>,
+  wte: NNEmbedding<V, D>,
+) {
+  // @ts-expect-error [D, V] is not [V, D]: tie() cannot relate a Linear's
+  // weight to the Embedding it should be tied to
+  tie(head.weight, wte.weight)
+}
+
+// Accept #2, part 2: §3.7's GPT class, with the actual fix — no `tie()`
+// call at all, because `TiedLinear.of` stores the embedding's own
+// `Parameter` object rather than a second one that would need tying.
+class GPT<V extends number, D extends number> extends NNModule {
+  readonly wte: NNEmbedding<V, D>
+  readonly ln: NNLayerNorm<D>
+  readonly head: NNTiedLinear<D, V>
+
+  constructor(v: V, d: D) {
+    super()
+    this.wte = new NNEmbedding(v, d)
+    this.ln = new NNLayerNorm(d)
+    this.head = NNTiedLinear.of(this.wte)
+  }
+
+  forward<B extends number, T extends number>(tok: IndexTensor<[B, T]>): Tensor<[B, T, V]> {
+    return this.head.forward(this.ln.forward(this.wte.forward(tok)))
+  }
+}
+
+declare const _tok: IndexTensor<[4, 16]>
+const _gptOut = new GPT(50257, 128).forward(_tok)
+type _gptOutShape = Expect<Equal<typeof _gptOut.shape, [4, 16, 50257]>>

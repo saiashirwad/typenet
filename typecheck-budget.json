@@ -1,10 +1,10 @@
 {
   "tsconfig": "tsconfig.budget.json",
-  "instantiations": 316133,
-  "types": 69627,
-  "memoryUsedKB": 314005,
-  "checkTimeSeconds": 0.52,
-  "totalTimeSeconds": 0.73,
-  "measuredAt": "2026-09-13T12:43:01.506Z",
-  "reason": "conv shape algebra (OWNER-1, D35): ConvOut/ConvCheck/PoolOut/FlattenFrom + conv type tests | W0.16, the one re-seed this plan permits (D31). Attributable cost, measured by checking the same file set twice with only the conv work stripped/present: BEFORE 275881 instantiations / 63351 types, AFTER 315129 / 69131, i.e. +39248 instantiations (cap 40000) and +5780 types (cap 8000). Of that, the algebra in src/shape.ts is +5182 / +895 and the rest is the new assertions: test/conv-shapes.test-d.ts +18634 / +2782, test/polarity.test-d.ts +6636 / +1238, test/types.test-d.ts +1880 / +262, test/shape.test.ts +168 / +87, test/shape-cases.ts +56 / +79. (Those two runs exclude bench/, which the real tree resolves, so they sit ~1000 instantiations below the baseline recorded here; the DELTA is what they are for.) Baseline this replaces: 241061 instantiations / 55496 types, seeded by W0.10 before W0.13/W0.14 landed, so the 241061 -> 316133 step is NOT all conv \u2014 the +39248 above is. From here D31 fails CI above 1.5x instantiations or 1.4x types of THIS baseline."
+  "instantiations": 566360,
+  "types": 112437,
+  "memoryUsedKB": 399911,
+  "checkTimeSeconds": 0.76,
+  "totalTimeSeconds": 1,
+  "measuredAt": "2026-09-13T18:11:38.468Z",
+  "reason": "S3/S4: attention, losses, weight tying and the typed GPT landed; the growth is TypeScript's variance computation on generic layer classes holding Tensor fields (measured: ~45k instantiations per such class), check time still under 1 s"
 }

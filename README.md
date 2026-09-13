@@ -190,11 +190,113 @@ for (let epoch = 0; epoch < 1500; epoch++) {
 }
 ```
 
+## A GPT that typechecks
+
+An MLP's shapes are a chain of two numbers, and a chain of two numbers proves very little. A transformer is where a shape-typed library either earns its keep or does not: the head split (`D -> H * (D/H)`), the position-embedding broadcast (`[B, T, D] + [T, D]`), the weight tie between a `[V, D]` token table and a `D -> V` output head, and a loss that reads its target shape off the logits. `examples/gpt.ts` is that model — generic in the batch size, with no casts anywhere in the file:
+
+```ts
+"use tsover"
+import {
+  type DimDivCheck,
+  Embedding,
+  functional,
+  type IndexTensor,
+  LayerNorm,
+  Module,
+  ModuleList,
+  Tensor,
+  TiedLinear,
+  TransformerBlock,
+} from "typenet"
+
+class GPT<
+  V extends number,
+  T extends number,
+  D extends number,
+  H extends number,
+> extends Module {
+  readonly wte: Embedding<V, D>
+  readonly wpe: Embedding<T, D>
+  readonly blocks: ModuleList<TransformerBlock<D, H>>
+  readonly lnf: LayerNorm<D>
+  readonly head: TiedLinear<D, V>
+  readonly pos: IndexTensor<[T]>
+
+  constructor(cfg: {
+    vocab: V
+    block: T
+    dModel: D
+    heads: H & DimDivCheck<D, H>
+    layers: number
+    dropout?: number
+  }) {
+    super()
+    const { vocab, block, dModel: d, heads: h, layers } = cfg
+    const p = cfg.dropout ?? 0
+    this.wte = new Embedding(vocab, d)
+    this.wpe = new Embedding(block, d)
+    this.blocks = ModuleList.of(
+      layers,
+      () => new TransformerBlock<D, H>(d, h, { causal: true, dropout: p }),
+    )
+    this.lnf = new LayerNorm(d)
+    this.head = TiedLinear.of(this.wte)
+    this.pos = this.registerBuffer("pos", functional.arangeIndex(block))
+  }
+
+  forward<B extends number>(idx: IndexTensor<[B, T]>): Tensor<[B, T, V]> {
+    let h: Tensor<[B, T, D]> = this.wte.forward(idx)
+      + this.wpe.forward(this.pos)
+    for (const block of this.blocks) h = block.forward(h)
+    return this.head.forward(this.lnf.forward(h))
+  }
+}
+```
+
+Four things there are checked by the compiler and by nothing else:
+
+- **The head width is derived, and divisibility is a precondition.** `H` carries `DimDivCheck<D, H>` on the constructor's own parameter, so `heads: 5` against a width of 64 is rejected at the construction site rather than inside an `unflatten` at run time. The check is forwarded to `TransformerBlock` with _explicit_ type arguments — let inference re-derive `H` from the intersection and it discharges the check against itself, one level above where the widths are actually known.
+- **The position embedding broadcasts, and the algebra says so.** `[B, T, D] + [T, D]` needs no `unsqueeze(0)` and no `expand`; a `wpe` built at the wrong width does not broadcast at all, and that is a compile error on the `+`.
+- **The tie is object identity, not a runtime alias table.** `TiedLinear.of(this.wte)` stores the embedding's own `Parameter<[V, D]>` and emits `matmul(x, transpose(w))`. `new Linear(d, vocab)` plus `tie(head.weight, wte.weight)` does not typecheck at all — `[D, V]` is not `[V, D]` — which is exactly why `TiedLinear` exists. `parameters()` reports the shared table once, accumulates one `.grad`, and writes one `stateDict` entry.
+- **The loss reads its target shape off the logits.** `crossEntropy` takes `IndexTensor<Init<S>>`: `[B, T, V]` logits want `[B, T]` ids, and flattening either side by hand is not just unnecessary but a compile error.
+
+`forward` is generic in `B`, so the model is written once and typechecks for every batch size; `T`, `D`, `V` and `H` are type parameters rather than fields of type `number`, so the shapes inside `forward` are the shapes the constructor was given.
+
+### The mistakes, as the compiler prints them
+
+The bottom of `examples/gpt.ts` is a function that is never called, holding four wrong lines. `@ts-expect-error` fails the build if any of them stops being an error, and `test/examples-gpt.test.ts` strips the directives, recompiles the file, and checks these quotes against the real diagnostics:
+
+| The mistake                                  | What `tsc` says                                                                                                |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `heads: 5` against `dModel: 64`              | `Type 'number' is not assignable to type 'never'.`                                                             |
+| a float tensor where token ids belong        | `Property '[INDEX]' is missing in type 'Tensor<[16, 32]>' but required in type '{ readonly [INDEX]: true; }'.` |
+| a 64-long window into a 32-long context      | `Type '64' is not assignable to type '32'.`                                                                    |
+| `[16]` targets against `[16, 32, 32]` logits | `Type '[16]' is not assignable to type '[16, 32]'.`                                                            |
+
+The first one is the honest exception, and it is worth naming: `DimDivCheck<64, 5>` _is_ the sentence `"attention: 64 is not divisible by 5"`, but a parameter typed `H & DimDivCheck<D, H>` intersects a numeric literal with a string literal, and that intersection is `never`. The rejection lands on the right line and the sentence shows on hover; unlike the shape checks above — which intersect a message with a `Tensor<...>` object type and so carry it straight into the diagnostic — it cannot reach the error text.
+
+### Running it
+
+```sh
+pnpm example:gpt                              # 20 steps
+TYPENET_EXAMPLE_STEPS=200 pnpm example:gpt    # the full run quoted below
+```
+
+The example trains a 104,192-parameter GPT (vocab 32, context 32, width 64, 4 heads, 2 layers, tied LM head) on a short passage encoded in the file itself, so it runs offline and a fixed seed replays the curve exactly. Character-level next-token prediction, batch 16, `AdamW` at a warmup-cosine learning rate with gradient clipping.
+
+- **20 steps** (the default): loss **3.4623 -> 2.8026 in 3.6 s** on an Apple M5, eager. `3.4623` is `ln(32)` to three decimals, which is what an untrained model over a 32-symbol alphabet should cost.
+- **200 steps**: loss **3.4623 -> 0.5082 in 35.3 s**, held-out **0.3049**. The passage repeats, so this is memorisation rather than generalisation — which is the point of a 35-second example, and worth saying rather than dressing up.
+
+Both runs print `native fallbacks: 0` from `jsCounters()`. Eager mode never serialises a graph, so nothing _can_ have fallen off the native path there — the line is printed rather than assumed because "it is still native" is exactly the claim a silent interpreter fallback would make a lie of.
+
+Like `example:mlp`, it trains with the plain `zeroGrad` / `backward` / `step` loop rather than `compile()`, for the same reason: a compiled step bakes the optimizer's `lr` into the traced graph as a constant, and the schedule has to move.
+
 ## Examples
 
 ```sh
 pnpm example:shapes   # the type gallery above, plus eight compile-time errors
 pnpm example:mlp      # 784 -> 256 -> 10 classifier, AdamW + warmup-cosine
+pnpm example:gpt      # the typed GPT above, 20 steps of char-level training
 pnpm example:xor      # MLP learns XOR, MSE + SGD
 pnpm example:spiral   # 3-class spiral, crossEntropy + Adam
 pnpm example:gat      # graph attention network

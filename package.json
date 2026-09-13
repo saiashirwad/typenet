@@ -11,6 +11,7 @@
     "format": "dprint fmt",
     "example:shapes": "vite-node examples/shapes.ts",
     "example:mlp": "vite-node examples/mlp.ts",
+    "example:gpt": "vite-node examples/gpt.ts",
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
     "example:gat": "vite-node examples/gat.ts",
