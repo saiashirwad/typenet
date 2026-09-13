@@ -1,0 +1,10 @@
+{
+  "tsconfig": "tsconfig.budget.json",
+  "instantiations": 241061,
+  "types": 55496,
+  "memoryUsedKB": 269657,
+  "checkTimeSeconds": 0.43,
+  "totalTimeSeconds": 0.66,
+  "measuredAt": "2026-09-13T09:36:36.505Z",
+  "reason": "W0.10: seed baseline on current tree (index.ts + src/** + test/**, bench/examples excluded)"
+}

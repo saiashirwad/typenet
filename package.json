@@ -11,7 +11,12 @@
     "format": "dprint fmt",
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
-    "example:gat": "vite-node examples/gat.ts"
+    "example:gat": "vite-node examples/gat.ts",
+    "bench": "pnpm run bench:micro && pnpm run bench:macro",
+    "bench:micro": "vite-node bench/lib/cli.ts micro",
+    "bench:macro": "vite-node bench/lib/cli.ts macro",
+    "typecheck:budget": "node scripts/typecheck-budget.mjs",
+    "test:ci": "pnpm test && pnpm typecheck && pnpm typecheck:budget && cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings"
   },
   "dependencies": {
     "hotscript": "^1.0.13",
