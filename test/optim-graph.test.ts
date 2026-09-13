@@ -431,3 +431,48 @@ describe.skipIf(!available)(
     })
   },
 )
+
+describe("scalar optimizer options inside a compiled step", () => {
+  // Expected red: SGD.lr and Adam.lr (optim.ts:217, optim.ts:307) are a
+  // `private readonly` plain JS number, not a graph leaf. A compiled step
+  // captures that number by closure and bakes it into the traced graph at
+  // first call, so writing `opt.lr` afterward changes nothing about later
+  // calls to the same compiled function — a live correctness bug today,
+  // untested only because every other case in this file uses a fixed lr.
+  // W3.4 turns this green by making `lr` a graph leaf like Adam's step
+  // count already is.
+  it.fails("lr is live: opt.lr takes effect on the next compiled step", () => {
+    const net = makeXorNet()
+    const opt = new SGD(net.params, { lr: 1e-3 })
+    const step = compile((x: AnyTensor, y: AnyTensor) => {
+      const hidden = x
+        .matmul(net.params[0]!)
+        .add(net.params[1]!)
+        .tanh()
+      const out = hidden
+        .matmul(net.params[2]!)
+        .add(net.params[3]!)
+        .sigmoid()
+      const loss = out.sub(y).pow(2).mean()
+      opt.zeroGrad()
+      loss.backward()
+      opt.step()
+      return loss
+    })
+
+    const before1 = net.params[0]!.data[0]!
+    step(net.x, net.y)
+    const delta1 = Math.abs(net.params[0]!.data[0]! - before1)
+
+    // Bypass the `private readonly` guard the same way a real user's
+    // mistake (or a scheduler) would: assign straight to the field.
+    ;(opt as unknown as { lr: number }).lr = 1e-1
+
+    const before2 = net.params[0]!.data[0]!
+    step(net.x, net.y)
+    const delta2 = Math.abs(net.params[0]!.data[0]! - before2)
+
+    // lr grew 100x (1e-3 -> 1e-1); the parameter delta should follow.
+    expect(delta2 / delta1).toBeCloseTo(100, 0)
+  })
+})
