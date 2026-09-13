@@ -1,7 +1,7 @@
 "use tsover"
 
 import { SGD } from "../index.ts"
-import { XorNet, XOR_X, XOR_Y } from "./xor-net.ts"
+import { XOR_X, XOR_Y, XorNet } from "./xor-net.ts"
 
 const net = new XorNet()
 const optim = new SGD(net.parameters(), {

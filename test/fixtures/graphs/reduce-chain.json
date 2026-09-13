@@ -1,1 +1,18 @@
-{"nodes":[{"op":"leaf","leaf":0,"offset":0,"shape":[32,128],"dtype":"float32"},{"op":"reduce","kind":"sum","dim":0,"keepdim":false,"input":0,"shape":[128]},{"op":"reduceAll","kind":"sum","input":1,"shape":[]},{"op":"reduce","kind":"sum","dim":1,"keepdim":false,"input":0,"shape":[32]},{"op":"leaf","leaf":1,"offset":16384,"shape":[],"dtype":"float32"},{"op":"binary","kind":"div","parameter":0,"a":3,"b":4,"shape":[32]},{"op":"reduceAll","kind":"sum","input":5,"shape":[]},{"op":"leaf","leaf":2,"offset":16388,"shape":[],"dtype":"float32"},{"op":"binary","kind":"div","parameter":0,"a":6,"b":7,"shape":[]},{"op":"binary","kind":"add","parameter":0,"a":2,"b":8,"shape":[]},{"op":"reduceAll","kind":"max","input":0,"shape":[]},{"op":"binary","kind":"add","parameter":0,"a":9,"b":10,"shape":[]}],"roots":[11,1,5],"device":"loops"}
+{
+  "nodes": [
+    { "op": "leaf", "leaf": 0, "offset": 0, "shape": [32, 128], "dtype": "float32" },
+    { "op": "reduce", "kind": "sum", "dim": 0, "keepdim": false, "input": 0, "shape": [128] },
+    { "op": "reduceAll", "kind": "sum", "input": 1, "shape": [] },
+    { "op": "reduce", "kind": "sum", "dim": 1, "keepdim": false, "input": 0, "shape": [32] },
+    { "op": "leaf", "leaf": 1, "offset": 16384, "shape": [], "dtype": "float32" },
+    { "op": "binary", "kind": "div", "parameter": 0, "a": 3, "b": 4, "shape": [32] },
+    { "op": "reduceAll", "kind": "sum", "input": 5, "shape": [] },
+    { "op": "leaf", "leaf": 2, "offset": 16388, "shape": [], "dtype": "float32" },
+    { "op": "binary", "kind": "div", "parameter": 0, "a": 6, "b": 7, "shape": [] },
+    { "op": "binary", "kind": "add", "parameter": 0, "a": 2, "b": 8, "shape": [] },
+    { "op": "reduceAll", "kind": "max", "input": 0, "shape": [] },
+    { "op": "binary", "kind": "add", "parameter": 0, "a": 9, "b": 10, "shape": [] }
+  ],
+  "roots": [11, 1, 5],
+  "device": "loops"
+}

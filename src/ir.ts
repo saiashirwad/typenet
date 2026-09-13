@@ -16,7 +16,17 @@ import {
 import { nextStream } from "./kernels.ts"
 import type { BinaryOp, ReduceOp, UnaryOp } from "./ops.ts"
 import { broadcastShapes, broadcastToShape, catShape, matmulShape, permuteShape, reduceShape, resizeDim, type Shape } from "./shape.ts"
-import { type DType, type LazyNode, type LazyNodeBody, normalizeDim, prod, promoteBinaryDtype, type RandomKind, shapesEqual, showShape } from "./storage.ts"
+import {
+  type DType,
+  type LazyNode,
+  type LazyNodeBody,
+  normalizeDim,
+  prod,
+  promoteBinaryDtype,
+  type RandomKind,
+  shapesEqual,
+  showShape,
+} from "./storage.ts"
 import { _internal, type AnyTensor, makeStorage, type Tensor } from "./tensor.ts"
 
 // ---------------------------------------------------------------------------

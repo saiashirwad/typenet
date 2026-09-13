@@ -63,11 +63,11 @@ validation remains a pushed run on GitHub's actual `macos-14` runners.
 
 Baseline, current tree, `pnpm test` (`vitest run`), three consecutive runs:
 
-| run | test files | tests | wall duration |
-|---|---|---|---|
-| 1 | 15 | 333 (+1 expected fail) | 20.07 s |
-| 2 | 15 | 333 (+1 expected fail) | 19.68 s |
-| 3 | 15 | 333 (+1 expected fail) | 18.87 s |
+| run | test files | tests                  | wall duration |
+| --- | ---------- | ---------------------- | ------------- |
+| 1   | 15         | 333 (+1 expected fail) | 20.07 s       |
+| 2   | 15         | 333 (+1 expected fail) | 19.68 s       |
+| 3   | 15         | 333 (+1 expected fail) | 18.87 s       |
 
 (matches the plan's own re-taken measurement of "333 tests, 15 files, 18.6 s
 wall" within run-to-run noise.)
@@ -93,7 +93,7 @@ Neither change is adopted; `pnpm test` still runs the vitest default
 --sequence.shuffle` intermittently fails `test/random.test.ts > uniform >
 fills the unit interval` (a statistical tolerance check, e.g. "expected
 0.2836 to be close to 0.2887 ... difference is 0.0051, but expected 0.005") —
-this reproduces on the *unmodified* baseline config too, so it is a flaky
+this reproduces on the _unmodified_ baseline config too, so it is a flaky
 statistical assertion in that file, not a shuffle-induced ordering/isolation
 bug and not something this item's `vite.config.ts`/CI change causes or fixes.
 `test/random.test.ts` is outside this item's file ownership.

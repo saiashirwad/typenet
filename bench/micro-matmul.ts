@@ -8,7 +8,7 @@ import { sgemmNative } from "../src/backends/native.ts"
 import { rand } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import type { AnyTensor } from "../src/tensor.ts"
-import { bench, type BenchCaseSpec, isSmokeRun, type Counters, type Mode } from "./lib/harness.ts"
+import { bench, type BenchCaseSpec, type Counters, isSmokeRun, type Mode } from "./lib/harness.ts"
 import { MATMUL_FULL, MATMUL_SMOKE, NANOGPT_SIZES, NANOGPT_SMOKE } from "./lib/sizes.ts"
 
 type F32Case = { kind: "f32"; m: number; k: number; n: number; batch?: number; permuted?: boolean }

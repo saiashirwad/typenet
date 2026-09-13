@@ -2,7 +2,7 @@ import { noGrad } from "./autograd.ts"
 import { _activeUpdateTrace, type GraphUpdate } from "./compile.ts"
 import { rawBinary, rawUnary } from "./ir.ts"
 import { forceMany, isLazy } from "./lazy.ts"
-import { Tensor, type AnyTensor } from "./tensor.ts"
+import { type AnyTensor, Tensor } from "./tensor.ts"
 
 function finishGraphUpdates(
   updates: GraphUpdate[],

@@ -1,5 +1,5 @@
 import type { DimCheck, DimEq, ErrorMessage, MatMul, MatMulCheck, Shape } from "./shape.ts"
-import { fromFlat, Tensor, type AnyTensor } from "./tensor.ts"
+import { type AnyTensor, fromFlat, Tensor } from "./tensor.ts"
 
 export abstract class Module {
   parameters(): AnyTensor[] {

@@ -1,1 +1,9 @@
-{"nodes":[{"op":"leaf","leaf":0,"offset":0,"shape":[2,3,4,8],"dtype":"float32"},{"op":"leaf","leaf":1,"offset":768,"shape":[2,3,8,5],"dtype":"float32"},{"op":"matmul","a":0,"b":1,"shape":[2,3,4,5]}],"roots":[2],"device":"loops"}
+{
+  "nodes": [
+    { "op": "leaf", "leaf": 0, "offset": 0, "shape": [2, 3, 4, 8], "dtype": "float32" },
+    { "op": "leaf", "leaf": 1, "offset": 768, "shape": [2, 3, 8, 5], "dtype": "float32" },
+    { "op": "matmul", "a": 0, "b": 1, "shape": [2, 3, 4, 5] }
+  ],
+  "roots": [2],
+  "device": "loops"
+}

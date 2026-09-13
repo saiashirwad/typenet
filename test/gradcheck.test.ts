@@ -13,8 +13,8 @@ import {
   useNative,
 } from "../src/backends/native.ts"
 import { configure, isLazy } from "../src/lazy.ts"
-import { testing } from "../src/testing.ts"
 import { Tensor } from "../src/tensor.ts"
+import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -597,8 +597,7 @@ describe("gradcheck (float64 precision)", () => {
           [2, 8],
           [8, 1],
         ],
-        build: ([x, w1, w2]) =>
-          x!.matmul(w1!).tanh().matmul(w2!).sigmoid().sum(),
+        build: ([x, w1, w2]) => x!.matmul(w1!).tanh().matmul(w2!).sigmoid().sum(),
       },
       5678,
       { dtype: "float64", eps: 1e-4, tol: 1e-4 },

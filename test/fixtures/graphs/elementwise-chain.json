@@ -1,1 +1,21 @@
-{"nodes":[{"op":"leaf","leaf":0,"offset":0,"shape":[4096],"dtype":"float32"},{"op":"leaf","leaf":1,"offset":16384,"shape":[4096],"dtype":"float32"},{"op":"binary","kind":"mul","parameter":0,"a":0,"b":1,"shape":[4096]},{"op":"leaf","leaf":2,"offset":32768,"shape":[4096],"dtype":"float32"},{"op":"binary","kind":"add","parameter":0,"a":2,"b":3,"shape":[4096]},{"op":"unary","kind":"tanh","parameter":0,"input":4,"shape":[4096]},{"op":"unary","kind":"relu","parameter":0,"input":5,"shape":[4096]},{"op":"binary","kind":"sub","parameter":0,"a":6,"b":0,"shape":[4096]},{"op":"leaf","leaf":3,"offset":49152,"shape":[],"dtype":"float32"},{"op":"binary","kind":"mul","parameter":0,"a":7,"b":8,"shape":[4096]},{"op":"unary","kind":"sigmoid","parameter":0,"input":9,"shape":[4096]},{"op":"binary","kind":"add","parameter":0,"a":10,"b":1,"shape":[4096]},{"op":"binary","kind":"mul","parameter":0,"a":11,"b":3,"shape":[4096]},{"op":"unary","kind":"pow","parameter":2,"input":12,"shape":[4096]},{"op":"unary","kind":"sqrt","parameter":0,"input":13,"shape":[4096]}],"roots":[14],"device":"loops"}
+{
+  "nodes": [
+    { "op": "leaf", "leaf": 0, "offset": 0, "shape": [4096], "dtype": "float32" },
+    { "op": "leaf", "leaf": 1, "offset": 16384, "shape": [4096], "dtype": "float32" },
+    { "op": "binary", "kind": "mul", "parameter": 0, "a": 0, "b": 1, "shape": [4096] },
+    { "op": "leaf", "leaf": 2, "offset": 32768, "shape": [4096], "dtype": "float32" },
+    { "op": "binary", "kind": "add", "parameter": 0, "a": 2, "b": 3, "shape": [4096] },
+    { "op": "unary", "kind": "tanh", "parameter": 0, "input": 4, "shape": [4096] },
+    { "op": "unary", "kind": "relu", "parameter": 0, "input": 5, "shape": [4096] },
+    { "op": "binary", "kind": "sub", "parameter": 0, "a": 6, "b": 0, "shape": [4096] },
+    { "op": "leaf", "leaf": 3, "offset": 49152, "shape": [], "dtype": "float32" },
+    { "op": "binary", "kind": "mul", "parameter": 0, "a": 7, "b": 8, "shape": [4096] },
+    { "op": "unary", "kind": "sigmoid", "parameter": 0, "input": 9, "shape": [4096] },
+    { "op": "binary", "kind": "add", "parameter": 0, "a": 10, "b": 1, "shape": [4096] },
+    { "op": "binary", "kind": "mul", "parameter": 0, "a": 11, "b": 3, "shape": [4096] },
+    { "op": "unary", "kind": "pow", "parameter": 2, "input": 12, "shape": [4096] },
+    { "op": "unary", "kind": "sqrt", "parameter": 0, "input": 13, "shape": [4096] }
+  ],
+  "roots": [14],
+  "device": "loops"
+}
