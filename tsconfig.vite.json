@@ -1,0 +1,8 @@
+{
+  // The tsover vite plugin builds a full TypeScript program and runs
+  // complete diagnostics on every vite-node / vitest launch. The
+  // type-level test files (*.test-d.ts) are the bulk of that cost and
+  // are never executed, so they are checked by `pnpm typecheck` only.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "native", "bench/results", "test/**/*.test-d.ts"]
+}
