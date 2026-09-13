@@ -433,14 +433,18 @@ describe.skipIf(!available)(
 )
 
 describe("scalar optimizer options inside a compiled step", () => {
-  // Expected red: SGD.lr and Adam.lr (optim.ts:217, optim.ts:307) are a
-  // `private readonly` plain JS number, not a graph leaf. A compiled step
-  // captures that number by closure and bakes it into the traced graph at
-  // first call, so writing `opt.lr` afterward changes nothing about later
-  // calls to the same compiled function — a live correctness bug today,
-  // untested only because every other case in this file uses a fixed lr.
-  // W3.4 turns this green by making `lr` a graph leaf like Adam's step
-  // count already is.
+  // Expected red, still: W1.10 makes `SGD.lr`/`Adam.lr` a public mutable
+  // field (no more `private readonly`, no more cast needed to reach it —
+  // see the plain `opt.lr = ...` below), but that alone does not make it
+  // *live* under `compile()`. The graph path reads `this.lr` once, at
+  // trace time, and bakes it into a constant leaf; a compiled step is
+  // traced only on its first call, so reassigning `opt.lr` afterward
+  // changes nothing about later calls to the same compiled function — a
+  // live correctness bug today, untested only because every other case
+  // in this file uses a fixed lr. That is A-S1's job (PLAN-V2 §5A.2b: a
+  // rebindable scalar carried as an always-dirty leaf), parked by the
+  // showcase cut (§5A.9) alongside the rest of A-S1; W3.4 turns this
+  // green for good once A-S1 is unparked.
   it.fails("lr is live: opt.lr takes effect on the next compiled step", () => {
     const net = makeXorNet()
     const opt = new SGD(net.params, { lr: 1e-3 })
@@ -462,9 +466,8 @@ describe("scalar optimizer options inside a compiled step", () => {
 
     const before1 = net.params[0]!.data[0]!
     step(net.x, net.y)
-    const delta1 = Math.abs(net.params[0]!.data[0]! - before1) // Bypass the `private readonly` guard the same way a real user's
-     // mistake (or a scheduler) would: assign straight to the field.
-    ;(opt as unknown as { lr: number }).lr = 1e-1
+    const delta1 = Math.abs(net.params[0]!.data[0]! - before1)
+    opt.lr = 1e-1
 
     const before2 = net.params[0]!.data[0]!
     step(net.x, net.y)

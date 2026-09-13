@@ -25,8 +25,12 @@ export { crossEntropy, isParameter, LeakyReLU, Linear, Module, mseLoss, paramete
 // The Sequential *type* is public for annotations; construction goes
 // through sequential(...) only.
 export type { LoadReport, Parameter, Sequential, StateDict } from "./src/nn.ts"
-export { Adam, clipGradNorm, Optimizer, SGD } from "./src/optim.ts"
-export type { AdamOptions, SGDOptions } from "./src/optim.ts"
+export { Adam, AdamW, clipGradNorm, Optimizer, SGD } from "./src/optim.ts"
+export type { AdamOptions, AdamWOptions, OptimizerSource, OptimizerStateDict, OptimizerStateEntry, SGDOptions } from "./src/optim.ts"
+// Plain `(step: number) => number` learning-rate schedules (W1.10) — no
+// coupling to `Optimizer`; assign `opt.lr = schedule(step)` yourself.
+export { constant, cosine, linearDecay, oneCycle, stepDecay, warmup, warmupCosine } from "./src/optim/schedule.ts"
+export type { Schedule } from "./src/optim/schedule.ts"
 
 // DimAdd / DimMul are both a type and a value: the type does the
 // arithmetic on literal dims, the function returns it at runtime, so a
