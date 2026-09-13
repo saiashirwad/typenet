@@ -4,6 +4,7 @@ import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { fromFlat, Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
+import { allPaths, expectAgree } from "./helpers.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -11,52 +12,6 @@ afterEach(() => {
   configure({ lazy: false })
   disableNative()
 })
-
-function allPaths(fn: () => AnyTensor): {
-  eager: AnyTensor
-  lazy: AnyTensor
-  native: AnyTensor | null
-} {
-  configure({ lazy: false })
-  const eager = fn()
-  configure({ lazy: true })
-  const lazy = fn()
-  let native: AnyTensor | null = null
-  if (isNativeAvailable()) {
-    useNative()
-    native = fn()
-    native.data // force before disabling
-    disableNative()
-  }
-  configure({ lazy: false })
-  return { eager, lazy, native }
-}
-
-function expectAgree(
-  fn: () => AnyTensor,
-  tolerance = 1e-5,
-): void {
-  const { eager, lazy, native } = allPaths(fn)
-  for (
-    const [label, other] of [
-      ["lazy", lazy],
-      ["native", native],
-    ] as const
-  ) {
-    if (!other) continue
-    expect(other.shape, `${label} shape`).toEqual(
-      eager.shape,
-    )
-    const a = eager.data
-    const b = other.data
-    for (let i = 0; i < a.length; i++) {
-      expect(
-        Math.abs(a[i]! - b[i]!),
-        `${label} element ${i}: ${b[i]} vs eager ${a[i]}`,
-      ).toBeLessThan(tolerance)
-    }
-  }
-}
 
 const rows = () =>
   tensor([

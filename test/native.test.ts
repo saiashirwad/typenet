@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { disableNative, isNativeAvailable, nativeDevice, useNative } from "../src/backends/native.ts"
+import {
+  disableNative,
+  isNativeAvailable,
+  nativeDevice,
+  preparedGraphCountNative,
+  useNative,
+} from "../src/backends/native.ts"
+import { compile } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { crossEntropy } from "../src/nn.ts"
 import { SGD } from "../src/optim.ts"
 import { Tensor } from "../src/tensor.ts"
-import { bothWays, expectClose } from "./helpers.ts"
+import { bothWays, expectAgree, expectClose } from "./helpers.ts"
 import { makeXorNet } from "./xor-net.ts"
 
 type AnyTensor = Tensor<any>
@@ -19,8 +26,7 @@ afterEach(() => {
 
 describe.skipIf(!available)("native backend", () => {
   it("matches eager for binary broadcast", () => {
-    useNative()
-    const { eager, lazy: native } = bothWays(() => {
+    expectAgree(() => {
       const a = tensor([
         [1, 2, 3],
         [4, 5, 6],
@@ -30,8 +36,7 @@ describe.skipIf(!available)("native backend", () => {
         .add(tensor([1, 2, 3]))
         .sub(1)
         .div(2)
-    })
-    expectClose(eager, native)
+    }, 1e-4)
   })
 
   it("matches eager for matmul (plain and batched)", () => {
@@ -95,8 +100,7 @@ describe.skipIf(!available)("native backend", () => {
   })
 
   it("matches eager for a unary chain", () => {
-    useNative()
-    const { eager, lazy: native } = bothWays(() =>
+    expectAgree(() =>
       tensor([-1, 0.5, 2])
         .tanh()
         .exp()
@@ -106,9 +110,7 @@ describe.skipIf(!available)("native backend", () => {
         .abs()
         .pow(2)
         .neg()
-        .relu()
-    )
-    expectClose(eager, native)
+        .relu(), 1e-4)
   })
 
   it("matches eager for view / permute / transpose+view", () => {
@@ -131,8 +133,7 @@ describe.skipIf(!available)("native backend", () => {
   })
 
   it("matches eager for cat", () => {
-    useNative()
-    const { eager, lazy: native } = bothWays(() =>
+    expectAgree(() =>
       Tensor.cat(
         tensor([
           [1, 2],
@@ -140,15 +141,11 @@ describe.skipIf(!available)("native backend", () => {
         ]),
         tensor([[5, 6]]),
         0,
-      )
-    )
-    expectClose(eager, native)
+      ), 1e-4)
   })
 
   it("matches eager for oneHot", () => {
-    useNative()
-    const { eager, lazy: native } = bothWays(() => tensor([0, 2, 1]).oneHot(3))
-    expectClose(eager, native)
+    expectAgree(() => tensor([0, 2, 1]).oneHot(3), 1e-4)
   })
 
   it("matches eager for an XOR training step", () => {
@@ -307,5 +304,42 @@ describe("native backend availability", () => {
     } else {
       expect(() => useNative()).toThrow(/build:native/)
     }
+  })
+})
+
+// Leak baselines: neither the eager-native GEMM assist nor the
+// compile/dispose cycle should grow the native prepared-graph table.
+// These don't move any gradient math, but a leak here would eventually
+// exhaust native handles in any long-running process (e.g. a training
+// loop), so they're asserted directly rather than left to intuition.
+describe.skipIf(!available)("native backend leak baselines", () => {
+  it("10,000 eager-native matmuls leave preparedGraphCount at baseline", () => {
+    configure({ lazy: false })
+    useNative()
+    const before = preparedGraphCountNative()
+    const a = Tensor.rand([8, 8]) as AnyTensor
+    const b = Tensor.rand([8, 8]) as AnyTensor
+    for (let i = 0; i < 10_000; i++) {
+      // eager native GEMM assist path (src/eager.ts), never touches
+      // prepareGraph/releaseGraph — this pins that invariant down.
+      a.matmul(b).data
+    }
+    expect(preparedGraphCountNative()).toBe(before)
+  })
+
+  it("200 compile/dispose cycles return preparedGraphCount to baseline", () => {
+    useNative()
+    const before = preparedGraphCountNative()
+    for (let i = 0; i < 200; i++) {
+      // Distinct scale per cycle so each prepare allocates its own
+      // handle rather than reusing one from a previous iteration.
+      const scale = i + 1
+      const fn = compile((x: AnyTensor) => x.mul(scale).sum())
+      fn(tensor([1, 2, 3, 4]))
+      expect(preparedGraphCountNative()).toBe(before + 1)
+      fn.dispose()
+      expect(preparedGraphCountNative()).toBe(before)
+    }
+    expect(preparedGraphCountNative()).toBe(before)
   })
 })
