@@ -72,13 +72,13 @@ describe("losses", () => {
       [Math.log(1), Math.log(3)],
       [Math.log(4), Math.log(4)],
     ])
-    const loss = crossEntropy(logits, [1, 0])
+    const loss = crossEntropy(logits, Tensor.indices([1, 0], [2]))
     const expected = -(Math.log(3 / 4) + Math.log(0.5)) / 2
     expect(loss.item()).toBeCloseTo(expected, 5)
   })
 
   it("crossEntropy validates targets", () => {
-    expect(() => crossEntropy(tensor([[1, 2]]), [5])).toThrow(/out of range/)
+    expect(() => crossEntropy(tensor([[1, 2]]), Tensor.indices([5], [1]))).toThrow(/out of range/)
   })
 })
 
@@ -120,7 +120,7 @@ describe("training", () => {
     let loss = 0
     for (let epoch = 0; epoch < 200; epoch++) {
       const out = layer.forward(X)
-      const l = crossEntropy(out, ys)
+      const l = crossEntropy(out, Tensor.indices(ys, [20]))
       opt.zeroGrad()
       l.backward()
       opt.step()

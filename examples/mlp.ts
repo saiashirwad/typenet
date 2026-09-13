@@ -19,7 +19,7 @@
  * eager loop today. Everything else here is unchanged by that choice.
  */
 
-import { AdamW, clipGradNorm, configure, crossEntropy, Linear, randn, ReLU, sequential, type Tensor, tensor, warmupCosine } from "../index.ts"
+import { AdamW, clipGradNorm, configure, crossEntropy, Linear, randn, ReLU, sequential, Tensor, tensor, warmupCosine } from "../index.ts"
 import { accuracy } from "./util.ts"
 
 const FEATURES = 784
@@ -86,7 +86,10 @@ for (let step = 0; step < STEPS; step++) {
   // `narrow` carries the literal length: a [64, 784] window of the
   // [2048, 784] training set, typed as such.
   const x = train.x.narrow(0, start, BATCH)
-  const y = train.labels.slice(start, start + BATCH)
+  // Class ids, not a plain array: `crossEntropy` takes a branded
+  // `IndexTensor` whose shape is the logits' shape minus the class axis,
+  // so [64] here against the [64, 10] logits below.
+  const y = Tensor.indices(train.labels.slice(start, start + BATCH), [BATCH])
 
   const logits = model.forward(x) // Tensor<[64, 10]>
   const loss = crossEntropy(logits, y)

@@ -12,6 +12,7 @@
 import { Linear, Module } from "../index.ts"
 import { rand, randn } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
+import type { IndexTensor } from "../src/shape.ts"
 import { type AnyTensor, fromFlat } from "../src/tensor.ts"
 import { bench, type BenchCaseSpec, isSmokeRun } from "./lib/harness.ts"
 import { MLP_LEGACY, MLP_SMOKE, NANOGPT_SIZES, NANOGPT_SMOKE } from "./lib/sizes.ts"
@@ -74,17 +75,19 @@ class TraceGpt extends Module {
   }
 
   /** Builds the forward graph only — caller must never force the result. */
-  forward(ids: AnyTensor): AnyTensor {
+  forward(ids: IndexTensor<[number]>): AnyTensor {
     let x = this.tokEmb.indexSelect(ids, 0).reshape([this.batch, this.seqLen, this.tokEmb.shape[1]!])
     for (const block of this.blocks) x = block.forward(x)
     return this.head.forward(x as never) as AnyTensor
   }
 }
 
-function randomIds(count: number, vocabSize: number): AnyTensor {
+/** Branded via `.toIndex()` (OWNER-5, D25) — done here, eagerly, so that
+ * nothing inside the traced forward ever has to read `.data`. */
+function randomIds(count: number, vocabSize: number): IndexTensor<[number]> {
   const data = new Float32Array(count)
   for (let i = 0; i < count; i++) data[i] = Math.floor(Math.random() * vocabSize)
-  return fromFlat(data, [count])
+  return fromFlat(data, [count]).toIndex()
 }
 
 interface TraceCase extends BenchCaseSpec {
@@ -105,7 +108,7 @@ async function main(): Promise<void> {
   const mlpLayer2 = new Linear(mlpCfg.hiddenDim, mlpCfg.outputDim)
   const mlpInput = randn([mlpCfg.batch, mlpCfg.inputDim]) as AnyTensor
 
-  const gpts = new Map<string, { model: TraceGpt; ids: AnyTensor }>()
+  const gpts = new Map<string, { model: TraceGpt; ids: IndexTensor<[number]> }>()
   for (const size of gptSizes) {
     const model = new TraceGpt(size.batch, size.blockSize, size.nEmbd, size.nHead, size.nLayer, size.vocabSize)
     const ids = randomIds(size.batch * size.blockSize, size.vocabSize)

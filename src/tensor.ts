@@ -1158,16 +1158,19 @@ export class Tensor<S extends Shape> {
   }
 
   /**
-   * `index` is a rank-1 tensor of integral values (int32/int64,
-   * or a float32 index for compatibility); its length becomes the
-   * size of `dim`. Gradients flow to the gathered tensor, never to
-   * the index.
+   * `index` is a rank-1 {@link IndexTensor} of integral values (int32/int64,
+   * or a float32 index for compatibility); its length becomes the size of
+   * `dim`. Gradients flow to the gathered tensor, never to the index.
+   *
+   * The parameter is branded, not a bare `Tensor<[E]>` (OWNER-5, D25): a
+   * plain tensor is a compile-time error here, not a silently-accepted
+   * spelling — call `.toIndex()` or build one with `Tensor.indices()`.
    */
   indexSelect<E extends number>(
-    index: Tensor<[E]>,
+    index: IndexTensor<[E]>,
   ): Tensor<ResizeDim<S, 0, E>>
   indexSelect<E extends number, D extends number>(
-    index: Tensor<[E]>,
+    index: IndexTensor<[E]>,
     dim: D & DimCheck<S, D>,
   ): Tensor<ResizeDim<S, D, E>>
   indexSelect(index: AnyTensor, dim = 0): AnyTensor {
@@ -1189,13 +1192,16 @@ export class Tensor<S extends Shape> {
    * `j` of this tensor is *added into* row `index[j]` of the result.
    * Rows no index points at stay zero. This is `index_add_` on a zero
    * tensor, and the exact reverse of {@link indexSelect}.
+   *
+   * `index` is branded (OWNER-5, D25) for the same reason as
+   * {@link indexSelect}'s: a bare `Tensor<[E]>` is a compile-time error.
    */
   scatterAdd<L extends number>(
-    index: Tensor<[Dim0<S>]>,
+    index: IndexTensor<[Dim0<S>]>,
     length: L,
   ): Tensor<ResizeDim<S, 0, L>>
   scatterAdd<L extends number, D extends number>(
-    index: Tensor<[DimAt<S, D>]>,
+    index: IndexTensor<[DimAt<S, D>]>,
     length: L,
     dim: D & DimCheck<S, D>,
   ): Tensor<ResizeDim<S, D, L>>

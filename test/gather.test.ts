@@ -25,7 +25,7 @@ describe("indexSelect", () => {
   it("gathers rows, repeats included", () => {
     expect(
       rows()
-        .indexSelect(tensor([2, 0, 2]))
+        .indexSelect(Tensor.indices([2, 0, 2], [3]))
         .toArray(),
     ).toEqual([
       [5, 6],
@@ -37,7 +37,7 @@ describe("indexSelect", () => {
   it("gathers along an inner dim", () => {
     expect(
       rows()
-        .indexSelect(tensor([1, 0]), 1)
+        .indexSelect(Tensor.indices([1, 0], [2]), 1)
         .toArray(),
     ).toEqual([
       [2, 1],
@@ -48,23 +48,23 @@ describe("indexSelect", () => {
   })
 
   it("accepts an empty index", () => {
-    const out = rows().indexSelect(tensor([]) as any)
+    const out = rows().indexSelect(Tensor.indices([], [0]))
     expect(out.shape).toEqual([0, 2])
   })
 
   it("agrees across eager, lazy and native", () => {
     expectAgree(() =>
       rows()
-        .indexSelect(tensor([3, 1, 1, 0]))
+        .indexSelect(Tensor.indices([3, 1, 1, 0], [4]))
         .mul(2)
-        .indexSelect(tensor([0, 2]))
+        .indexSelect(Tensor.indices([0, 2], [2]))
     )
   })
 
   it("rejects an out-of-range index", () => {
     expect(() =>
       rows()
-        .indexSelect(tensor([0, 9]))
+        .indexSelect(Tensor.indices([0, 9], [2]))
         .toArray()
     ).toThrow(/index 9 out of range for 4 rows/)
   })
@@ -72,13 +72,21 @@ describe("indexSelect", () => {
   it("rejects a fractional index", () => {
     expect(() =>
       rows()
+        // @ts-expect-error indexSelect requires a branded IndexTensor
+        // (OWNER-5, D25); a plain `Tensor<[E]>` — even one that only
+        // LOOKS integral at the type level — is a compile error. The
+        // runtime check this test is actually about (not `toIndex()`'s)
+        // is the one inside `indexSelect` itself, so the code still runs
+        // and the message is unchanged.
         .indexSelect(tensor([0.5]))
         .toArray()
     ).toThrow(/out of range/)
   })
 
   it("rejects a non-rank-1 index", () => {
-    expect(() => rows().indexSelect(tensor([[0], [1]]) as any)).toThrow(/requires a rank-1 index/)
+    expect(() => rows().indexSelect(Tensor.indices([0, 1], [2, 1]) as any)).toThrow(
+      /requires a rank-1 index/,
+    )
   })
 })
 
@@ -86,7 +94,7 @@ describe("scatterAdd", () => {
   it("sums colliding rows and zero-fills the rest", () => {
     expect(
       rows()
-        .scatterAdd(tensor([1, 1, 0, 3]), 4)
+        .scatterAdd(Tensor.indices([1, 1, 0, 3], [4]), 4)
         .toArray(),
     ).toEqual([
       [5, 6],
@@ -99,7 +107,7 @@ describe("scatterAdd", () => {
   it("scatters along an inner dim", () => {
     expect(
       tensor([[1, 2, 3]])
-        .scatterAdd(tensor([0, 0, 1]), 2, 1)
+        .scatterAdd(Tensor.indices([0, 0, 1], [3]), 2, 1)
         .toArray(),
     ).toEqual([[3, 3]])
   })
@@ -107,14 +115,14 @@ describe("scatterAdd", () => {
   it("agrees across eager, lazy and native", () => {
     expectAgree(() =>
       rows()
-        .scatterAdd(tensor([2, 0, 2, 1]), 3)
+        .scatterAdd(Tensor.indices([2, 0, 2, 1], [4]), 3)
         .add(1)
-        .scatterAdd(tensor([0, 0, 0]), 1)
+        .scatterAdd(Tensor.indices([0, 0, 0], [3]), 1)
     )
   })
 
   it("is the exact reverse of indexSelect", () => {
-    const index = tensor([0, 2, 2, 3])
+    const index = Tensor.indices([0, 2, 2, 3], [4])
     const gathered = rows().indexSelect(index)
     const back = gathered.scatterAdd(index, 4)
     expect(back.toArray()).toEqual([
@@ -128,20 +136,22 @@ describe("scatterAdd", () => {
   it("rejects an index length that does not match the source", () => {
     expect(() =>
       // @ts-expect-error index must have one entry per source row
-      rows().scatterAdd(tensor([0, 1]), 4)
+      rows().scatterAdd(Tensor.indices([0, 1], [2]), 4)
     ).toThrow(/2 indices for 4 rows along dim 0/)
   })
 
   it("rejects an out-of-range index", () => {
     expect(() =>
       rows()
-        .scatterAdd(tensor([0, 1, 2, 9]), 4)
+        .scatterAdd(Tensor.indices([0, 1, 2, 9], [4]), 4)
         .toArray()
     ).toThrow(/index 9 out of range for 4 rows/)
   })
 
   it("rejects a negative length", () => {
-    expect(() => rows().scatterAdd(tensor([0, 1, 2, 3]), -1)).toThrow(/non-negative integer length/)
+    expect(() => rows().scatterAdd(Tensor.indices([0, 1, 2, 3], [4]), -1)).toThrow(
+      /non-negative integer length/,
+    )
   })
 })
 
@@ -259,7 +269,7 @@ describe("integer index tensors", () => {
       new Int32Array([2, 0, 2]),
       [3],
       "int32",
-    )
+    ).toIndex()
     expect(rows().indexSelect(idx).toArray()).toEqual([
       [5, 6],
       [1, 2],
@@ -268,7 +278,7 @@ describe("integer index tensors", () => {
   })
 
   it("gathers with an int64 index", () => {
-    const idx = fromFlat([2n, 0n, 2n], [3], "int64")
+    const idx = fromFlat([2n, 0n, 2n], [3], "int64").toIndex()
     expect(rows().indexSelect(idx).toArray()).toEqual([
       [5, 6],
       [1, 2],
@@ -281,7 +291,7 @@ describe("integer index tensors", () => {
       new Int32Array([1, 1, 0, 3]),
       [4],
       "int32",
-    )
+    ).toIndex()
     expect(rows().scatterAdd(idx, 4).toArray()).toEqual([
       [5, 6],
       [4, 6],
@@ -296,12 +306,12 @@ describe("integer index tensors", () => {
         new Int32Array([3, 1, 1, 0]),
         [4],
         "int32",
-      )
+      ).toIndex()
       const dst = fromFlat(
         new Int32Array([2, 0, 2, 1]),
         [4],
         "int32",
-      )
+      ).toIndex()
       return rows()
         .indexSelect(src)
         .mul(2)
@@ -310,14 +320,14 @@ describe("integer index tensors", () => {
   })
 
   it("rejects an out-of-range int32 index", () => {
-    const idx = fromFlat(new Int32Array([0, 9]), [2], "int32")
+    const idx = fromFlat(new Int32Array([0, 9]), [2], "int32").toIndex()
     expect(() => rows().indexSelect(idx).toArray()).toThrow(
       /index 9 out of range for 4 rows/,
     )
   })
 
   it("rejects an out-of-range int64 index", () => {
-    const idx = fromFlat([0n, 9n], [2], "int64")
+    const idx = fromFlat([0n, 9n], [2], "int64").toIndex()
     expect(() => rows().indexSelect(idx).toArray()).toThrow(
       /index 9 out of range for 4 rows/,
     )
@@ -413,15 +423,20 @@ describe.skipIf(!isNativeAvailable())(
         const c = 40
         const e = 2048
         const x = Tensor.rand([n, c]) as AnyTensor
+        // Both `x` and the built chain are erased to `AnyTensor` on
+        // purpose — this test is about eager/native numeric agreement at
+        // a candle-sized shape, not about the type-level brand, so the
+        // index is cast at each use exactly like every other shape check
+        // this file already erases with `as any`.
         const index = Tensor.zeros([e]) as AnyTensor
         for (let i = 0; i < e; i++) {
           ;(index.data as Float32Array)[i] = (i * 7) % n
         }
         const build = () =>
           x
-            .indexSelect(index)
+            .indexSelect(index as any)
             .clamp(-0.5, 0.5)
-            .scatterAdd(index, n)
+            .scatterAdd(index as any, n)
             .gt(0.1)
         configure({ lazy: false })
         const eager = build()
@@ -456,10 +471,10 @@ describe.skipIf(!isNativeAvailable())(
       }
       const build = () =>
         x
-          .indexSelect(src)
-          .sub(x.indexSelect(dst))
+          .indexSelect(src as any)
+          .sub(x.indexSelect(dst as any))
           .tanh()
-          .scatterAdd(dst, n)
+          .scatterAdd(dst as any, n)
       configure({ lazy: false })
       const eager = build()
       useNative()

@@ -13,6 +13,7 @@ import {
   useNative,
 } from "../src/backends/native.ts"
 import { configure, isLazy } from "../src/lazy.ts"
+import { sdpa } from "../src/nn/functional.ts"
 import {
   contiguous,
   crossEntropy,
@@ -86,8 +87,16 @@ const awayFromUnit = (rand: () => number): number =>
   * (rand() > 0.5 ? 0.2 + rand() * 0.5 : 1.5 + rand())
 
 // Index tensors are exact integers, not sampled inputs, so they are
-// built inside `build` rather than coming from `shapes`.
-const index = (values: number[]): AnyTensor => Tensor.of(values) as AnyTensor
+// built inside `build` rather than coming from `shapes`. `.toIndex()`
+// brands them (OWNER-5, D25): `indexSelect`/`scatterAdd` take an
+// `IndexTensor`, never a bare `Tensor<[E]>`.
+//
+// The static return is widened to `any` because `IndexTensor` is
+// invariant in its shape — the cases below feed the same helper into
+// parameters spelled `[number]`, `[any]` and `[never]`, and no single
+// concrete spelling fits all three. The *value* is a real branded index
+// tensor; only the type is loosened, and only inside this test.
+const index = (values: number[]): any => Tensor.of(values).toIndex()
 
 function checkCase(c: Case, seed: number, opts: CheckOpts = {}): void {
   const dtype = opts.dtype ?? "float32"
@@ -643,6 +652,38 @@ const CASES: Case[] = [
     name: "crossEntropy [4,3]",
     shapes: [[4, 3]],
     build: ([a]) => crossEntropy(a as any, index([2, 0, 1, 2]) as any) as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    // The [B,T,V] shape a transformer's LM head actually produces.
+    // `crossEntropy` now collapses the leading axes itself (W5.3), so
+    // this case keeps the *explicit* `flatten(0, 1)` on purpose: it puts
+    // `flatten`'s own backward (an unflatten-shaped reshape) under the
+    // same finite-difference check as the loss. The no-reshape spelling
+    // is covered by `test/losses.test.ts`.
+    name: "crossEntropy over [B,T,V]",
+    shapes: [[2, 3, 4]],
+    build: ([a]) =>
+      crossEntropy(
+        a!.flatten(0, 1) as any,
+        index([3, 0, 1, 2, 3, 0]) as any,
+      ) as AnyTensor,
+    nativeFrom: "A-L1",
+  },
+  {
+    // `sdpa` (W5.2) is not an IR node itself — it is `matmul`/`mul`
+    // (native) around a `softmax{causal}` node (not yet native, PLAN-V2
+    // §5A.9) — so it carries the same flag the softmax node above does.
+    name: "sdpa (causal)",
+    shapes: [
+      [1, 2, 3, 2], // q [B,H,T,K]
+      [1, 2, 2, 3], // k [B,H,K,T], already transposed (sdpa's own contract)
+      [1, 2, 3, 2], // v [B,H,T,K]
+    ],
+    build: ([q, k, v]) =>
+      sdpa(q as any, k as any, v as any, { causal: true })
+        .pow(2)
+        .sum() as AnyTensor,
     nativeFrom: "A-L1",
   },
   {

@@ -10,7 +10,8 @@
 import { crossEntropy, disableNative, useNative } from "../index.ts"
 import { rand, randn } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { type AnyTensor, fromFlat } from "../src/tensor.ts"
+import type { IndexTensor } from "../src/shape.ts"
+import { type AnyTensor, fromFlat, Tensor } from "../src/tensor.ts"
 import { bench, type BenchCaseSpec, isSmokeRun, type Mode } from "./lib/harness.ts"
 import { SOFTMAX_LN_FULL, SOFTMAX_LN_SMOKE } from "./lib/sizes.ts"
 
@@ -76,7 +77,7 @@ async function main(): Promise<void> {
   const inputs = new Map<string, AnyTensor>()
   const masks = new Map<number, AnyTensor>()
   const affine = new Map<number, { gamma: AnyTensor; beta: AnyTensor }>()
-  const targets = new Map<number, number[]>()
+  const targets = new Map<number, IndexTensor<[number]>>()
 
   await bench("micro-softmax-ln", CASES, (kase, mode) => {
     setMode(mode)
@@ -117,11 +118,17 @@ async function main(): Promise<void> {
       case "cross-entropy": {
         let t = targets.get(kase.rows)
         if (!t) {
-          t = Array.from({ length: kase.rows }, () => Math.floor(Math.random() * kase.cols))
+          // `crossEntropy` takes a branded `IndexTensor` (OWNER-5, D26);
+          // built once per size, outside the timed op, like the masks and
+          // affine params above.
+          t = Tensor.indices(
+            Array.from({ length: kase.rows }, () => Math.floor(Math.random() * kase.cols)),
+            [kase.rows],
+          )
           targets.set(kase.rows, t)
         }
         x.zeroGrad()
-        const loss = crossEntropy(x as never, t)
+        const loss = crossEntropy(x as never, t as never)
         ;(loss as unknown as AnyTensor).backward()
         return
       }

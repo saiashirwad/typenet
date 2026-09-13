@@ -660,7 +660,7 @@ function _genericNegative<
   return h
 }
 
-import { crossEntropy, mseLoss } from "../src/nn.ts"
+import { accuracy, crossEntropy, mseLoss } from "../src/nn.ts"
 
 // NoInfer pins each repeated inference site to its first occurrence, so a
 // mismatched later argument is checked instead of re-inferring.
@@ -668,7 +668,10 @@ import { crossEntropy, mseLoss } from "../src/nn.ts"
 function _noInfer(
   pred: Tensor<[2, 3]>,
   logits: Tensor<[4, 3]>,
-  badTargets: Tensor<[5]>,
+  // Branded (OWNER-5, D25) so the @ts-expect-error below is caught for
+  // its ORIGINAL reason — a batch-size mismatch — and not incidentally
+  // satisfied by the missing-brand check instead.
+  badTargets: IndexTensor<[5]>,
 ) {
   const ok = mseLoss(
     pred,
@@ -685,13 +688,41 @@ function _noInfer(
   // @ts-expect-error one target per row: batch is 4, not 5
   crossEntropy(logits, badTargets)
 
+  // @ts-expect-error crossEntropy requires a branded IndexTensor target
+  // (OWNER-5, D26) — no overload, no window: an ordinary tensor, even one
+  // holding integral-looking float values at the right shape, needs
+  // `.toIndex()` or `Tensor.indices()` first
+  crossEntropy(logits, zeros([4]))
+
   return ok
+}
+
+// `Init<S>` (everything but the class axis) is the target shape at ANY
+// rank: a `[B,T,V]` LM head takes a `[B,T]` target with no manual
+// flatten, and a `[B]` target against it is the SAME "wrong batch shape"
+// mistake `_noInfer` above catches at rank 2 — not a new error, and the
+// same accuracy typing rides along for free.
+function _crossEntropyHigherRank(
+  logits3: Tensor<[2, 3, 5]>,
+  target2: IndexTensor<[2, 3]>,
+  target1: IndexTensor<[2]>,
+) {
+  const loss = crossEntropy(logits3, target2)
+  type _1 = Expect<Equal<typeof loss.shape, []>>
+
+  const acc = accuracy(logits3, target2)
+  type _2 = Expect<Equal<typeof acc, number>>
+
+  // @ts-expect-error target must be Init<S> = [2, 3], not [2]
+  crossEntropy(logits3, target1)
+
+  return { loss, acc }
 }
 
 function _gatherScatter<
   N extends number,
 >(x: Tensor<[N, 16]>, nodes: Tensor<[1024, 16]>) {
-  const src = zeros([4096])
+  const src = zeros([4096]).toIndex()
   const gathered = nodes.indexSelect(src)
   type _1 = Expect<Equal<typeof gathered.shape, [4096, 16]>>
 
@@ -700,7 +731,7 @@ function _gatherScatter<
     Equal<typeof aggregated.shape, [1024, 16]>
   >
 
-  const channels = nodes.indexSelect(zeros([3]), 1)
+  const channels = nodes.indexSelect(zeros([3]).toIndex(), 1)
   type _3 = Expect<Equal<typeof channels.shape, [1024, 3]>>
 
   const generic = x.indexSelect(src)
@@ -710,12 +741,17 @@ function _gatherScatter<
   nodes.indexSelect(src, 2)
 
   // @ts-expect-error one index per source row: 4096 rows, not 8
-  gathered.scatterAdd(zeros([8]), 1024)
+  gathered.scatterAdd(zeros([8]).toIndex(), 1024)
 
   // @ts-expect-error dim overload: same length rule, now on the dim form
-  gathered.scatterAdd(zeros([8]), 1024, 0)
+  gathered.scatterAdd(zeros([8]).toIndex(), 1024, 0)
 
-  const alongDim = channels.scatterAdd(zeros([3]), 7, 1)
+  // @ts-expect-error indexSelect requires a branded IndexTensor (OWNER-5,
+  // D25) — a plain Tensor<[8]>, unbranded, is a compile error regardless
+  // of its length
+  nodes.indexSelect(zeros([8]))
+
+  const alongDim = channels.scatterAdd(zeros([3]).toIndex(), 7, 1)
   type _5 = Expect<Equal<typeof alongDim.shape, [1024, 7]>>
 
   return { gathered, aggregated }
@@ -954,3 +990,179 @@ function _w013GenericDims<B extends number, T extends number, H extends number, 
   const d = sliceT(x, [null, [0, 4], null])
   return { a, b, c, d }
 }
+
+// ---------------------------------------------------------------------------
+// W5.2-A — MultiHeadAttention / TransformerBlock / Residual, at the type level.
+// ---------------------------------------------------------------------------
+
+import { assertChecked } from "../src/cast.ts"
+// `LayerNorm` and `Embedding` are already taken in this file by the
+// `declare class` stand-ins above (written before the real layers existed),
+// so the real ones come in under a prefix rather than displacing them.
+import {
+  Embedding as NNEmbedding,
+  functional,
+  LayerNorm as NNLayerNorm,
+  Module as NNModule,
+  ModuleList,
+  MultiHeadAttention,
+  Residual,
+  TransformerBlock,
+} from "../src/nn.ts"
+
+// Accept #2: the divisibility precondition is enforced AT THE CONSTRUCTION
+// SITE, where the two widths are literals — not inside `unflatten`, and not
+// at run time.
+const _mhaOk = new MultiHeadAttention(128, 4)
+// @ts-expect-error attention: 130 is not divisible by 4
+const _mhaBad = new MultiHeadAttention(130, 4)
+
+// The Notes' law, stated as a type: the `h` property is the BARE `H`. If
+// the constructor let its parameter type flow into the field, this would be
+// `4 & DimDivCheck<128, 4>` — not identical to `4`, and every downstream use
+// of `this.h` would inherit a check it cannot discharge.
+type _mhaBareH = Expect<Equal<typeof _mhaOk.h, 4>>
+type _mhaHeadDim = Expect<Equal<typeof _mhaOk.headDim, 32>>
+// ...and generically, which is where an intersection would actually show:
+// `H & DimDivCheck<D, H>` does not reduce to `H` while `D` and `H` are
+// type parameters, so `Equal<..., H>` is the discriminating test.
+function _mhaBareHGeneric<D extends number, H extends number>(m: MultiHeadAttention<D, H>) {
+  type _1 = Expect<Equal<typeof m.h, H>>
+  type _2 = Expect<Equal<typeof m.d, D>>
+  type _3 = Expect<Equal<typeof m.headDim, DimDiv<D, H>>>
+  return m
+}
+
+// `forward` is generic in the batch and sequence axes, and keeps the shape.
+declare const _acts: Tensor<[2, 16, 128]>
+const _attnOut = _mhaOk.forward(_acts)
+type _attnShape = Expect<Equal<typeof _attnOut.shape, [2, 16, 128]>>
+// @ts-expect-error a MultiHeadAttention(128, 4) does not take 64 features
+_mhaOk.forward(zeros([2, 16, 64]))
+
+// `sdpa` at rank 4, with `k` already transposed to [B, H, K, T].
+declare const _q4: Tensor<[2, 4, 16, 32]>
+declare const _k4: Tensor<[2, 4, 32, 16]>
+declare const _v4: Tensor<[2, 4, 16, 32]>
+declare const _kWrongHeads: Tensor<[2, 8, 32, 16]>
+const _ctx4 = functional.sdpa(_q4, _k4, _v4, { causal: true })
+type _sdpaShape = Expect<Equal<typeof _ctx4.shape, [2, 4, 16, 32]>>
+// @ts-expect-error q and k disagree about the head count (8 vs 4)
+functional.sdpa(_q4, _kWrongHeads, _v4)
+// @ts-expect-error k must arrive TRANSPOSED — [B, H, K, T], not [B, H, T, K]
+functional.sdpa(_q4, _v4, _v4)
+// @ts-expect-error sdpa is rank 4 only; a [B, T, D] activation is not a score operand
+functional.sdpa(_acts, _k4, _v4)
+
+// Accept #2: the generic `class Block<D, H>` of §3.7 compiles — D20's
+// forwarding discipline, which is what makes the check survive one level of
+// wrapping: the parameter keeps `& DimDivCheck<D, H>`, and the inner
+// construction passes EXPLICIT type arguments.
+class Block<D extends number, H extends number> extends NNModule {
+  readonly ln: NNLayerNorm<D>
+  readonly attn: MultiHeadAttention<D, H>
+
+  constructor(d: D, h: H & DimDivCheck<D, H>) {
+    super()
+    this.ln = new NNLayerNorm(d)
+    this.attn = new MultiHeadAttention<D, H>(d, h)
+  }
+
+  forward<B extends number, T extends number>(x: Tensor<[B, T, D]>): Tensor<[B, T, D]> {
+    return this.attn.forward(this.ln.forward(x))
+  }
+}
+
+const _block = new Block(384, 6)
+// @ts-expect-error attention: 384 is not divisible by 5
+const _blockBad = new Block(384, 5)
+
+// ...and the companion: an intermediate constructor that DROPS the check
+// from its own parameter (D20's first failure mode) cannot forward at all.
+// The error moves from the user's construction site, where the widths are
+// literals and the message is readable, down into the library.
+class _BlockNoDiscipline<D extends number, H extends number> extends NNModule {
+  readonly attn: MultiHeadAttention<D, H>
+
+  constructor(d: D, h: H) {
+    super()
+    // @ts-expect-error `h: H` carries no proof of divisibility, so it is not
+    // assignable to `H & DimDivCheck<D, H>`
+    this.attn = new MultiHeadAttention<D, H>(d, h)
+  }
+}
+
+// The real block composes the same way, generically.
+function _blockGeneric<B extends number, T extends number, D extends number, H extends number>(
+  blk: TransformerBlock<D, H>,
+  x: Tensor<[B, T, D]>,
+) {
+  const y = blk.forward(x)
+  type _1 = Expect<Equal<typeof y.shape, [B, T, D]>>
+  return y
+}
+
+const _tb = new TransformerBlock(128, 4)
+type _tbFc = Expect<Equal<typeof _tb.fc, Linear<128, 512>>>
+// @ts-expect-error attention: 130 is not divisible by 4
+const _tbBad = new TransformerBlock(130, 4)
+
+// Accept #3: a DELIBERATELY WRONG internal cast on the merged context must
+// be caught by the block's own shapes. `assertChecked` is a documented
+// assertion, not a silencer — asserting the merge back to `2*D` makes the
+// output projection's own `MatMulCheck` reject it, one line later.
+//
+// Stated at a CONCRETE `D` on purpose: with a generic `D`, `DimMul<2, D>`
+// is a deferred multiplication whose constraint is the bare `number`, and
+// law 1 says a check that cannot decide must let the call through. The
+// wrong cast is caught exactly where the widths are known, which is where
+// a real model writes them.
+function _wrongMergeCast<B extends number, T extends number>(
+  ctx: Tensor<[B, 4, T, 32]>,
+  proj: Linear<128, 128>,
+) {
+  const merged = assertChecked<[B, T, DimMul<2, 128>]>(ctx.permute(0, 2, 1, 3).flatten(2, 3))
+  // @ts-expect-error matmul: inner dimensions do not match — the merged
+  // context is [B, T, 128], and claiming [B, T, 256] is caught here
+  return proj.forward(merged)
+}
+
+// The same site, asserted correctly, is fine.
+function _rightMergeCast<B extends number, T extends number>(
+  ctx: Tensor<[B, 4, T, 32]>,
+  proj: Linear<128, 128>,
+) {
+  const merged = assertChecked<[B, T, 128]>(ctx.permute(0, 2, 1, 3).flatten(2, 3))
+  const y = proj.forward(merged)
+  type _1 = Expect<Equal<typeof y.shape, [B, T, 128]>>
+  return y
+}
+
+// Containers. `Residual` reports the wrapped layer's own shape effect, so a
+// chain around it width-checks exactly as it would without the wrapper.
+const _resChain = sequential(new Linear(4, 8), new Residual(new NNLayerNorm(8)))
+const _resOut = _resChain.forward(zeros([2, 4]))
+type _resShape = Expect<Equal<typeof _resOut.shape, [2, 8]>>
+// @ts-expect-error sequential: layer expects 16 input features but the previous layer outputs 8
+sequential(new Linear(4, 8), new Residual(new NNLayerNorm(16)))
+
+declare const _feat8: Tensor<[2, 8]>
+const _resDirect = new Residual(new NNLayerNorm(8)).forward(_feat8)
+type _resDirectShape = Expect<Equal<typeof _resDirect.shape, [2, 8]>>
+// @ts-expect-error expects 8 features on the last axis, got [2, 4]
+new Residual(new NNLayerNorm(8)).forward(zeros([2, 4]))
+// @ts-expect-error Residual: the wrapped layer adds an axis
+new Residual(new NNEmbedding(10, 8)).forward(_feat8)
+
+// Law 1 once more: a naked generic shape decides nothing, even through
+// `Residual`'s own check.
+function _residualFailOpen<S extends Shape>(x: Tensor<S>, r: Residual<NNLayerNorm<16>>) {
+  return r.forward(x)
+}
+
+// `ModuleList` is a container, not a layer: it has no `forward`, so the
+// chain it is dropped into collapses to `never` and says why at the call.
+const _stack = ModuleList.of(6, () => new TransformerBlock(128, 4))
+type _stackItem = Expect<Equal<ReturnType<typeof _stack.at>, TransformerBlock<128, 4>>>
+// @ts-expect-error sequential: every layer needs a forward method; this one has none
+sequential(new Linear(4, 128), _stack).forward(zeros([2, 4]))

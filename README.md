@@ -397,6 +397,7 @@ import {
   rand,
   randn,
   SGD,
+  Tensor,
 } from "typenet"
 
 // rand/randn: { resample: "once" } (the default) fills a plain leaf
@@ -413,7 +414,12 @@ const params = net.parameters()
 
 const pred = net.forward(randn([16, 784]))
 mseLoss(pred, randn([16, 128]))
-crossEntropy(net.forward(randn([16, 784])), Array(16).fill(0))
+// crossEntropy takes class ids as an IndexTensor, one rank below the
+// logits: [16] ids against [16, 128] logits.
+crossEntropy(
+  net.forward(randn([16, 784])),
+  Tensor.indices(Array(16).fill(0), [16]),
+)
 
 new SGD(params, { lr: 0.1, momentum: 0.9, weightDecay: 0 })
 new Adam(params, { lr: 3e-4, betas: [0.9, 0.999], eps: 1e-8, weightDecay: 0 })
@@ -438,8 +444,8 @@ import { fromFlat, ones, randn } from "typenet"
 
 const nodes = 5
 const x = randn([nodes, 3])
-const src = fromFlat(new Int32Array([0, 1, 2, 3]), [4], "int32")
-const dst = fromFlat(new Int32Array([1, 2, 3, 4]), [4], "int32")
+const src = fromFlat(new Int32Array([0, 1, 2, 3]), [4], "int32").toIndex()
+const dst = fromFlat(new Int32Array([1, 2, 3, 4]), [4], "int32").toIndex()
 const invDegree = ones([nodes, 1])
 
 const messages = x
@@ -451,10 +457,15 @@ const aggregated = messages
   .mul(invDegree)
 ```
 
-Index tensors hold integral values — use `int32` / `int64` tensors
-(`fromFlat(new Int32Array(...), [n], "int32")` or `.to("int32")`), which
-are exact across the full integer range. `float32` indices remain legal
-for compatibility; an f32 mantissa addresses 16.7M rows exactly.
+Index tensors hold integral values, and `indexSelect` / `scatterAdd`
+demand that in the _type_: their index parameter is an `IndexTensor`, not
+a plain `Tensor<[n]>`, so an ordinary tensor in that position is a
+compile error rather than a runtime surprise. There are two ways to make
+one — `Tensor.indices(data, shape)` builds an int32 leaf directly, and
+`.toIndex()` brands an existing tensor; both check integrality once, at
+the call. Prefer `int32` / `int64` storage, which is exact across the
+full integer range; `float32` indices remain legal for compatibility, and
+an f32 mantissa addresses 16.7M rows exactly.
 
 ## Native backend
 

@@ -1,6 +1,6 @@
 "use tsover"
 
-import { Adam, crossEntropy, Linear, ReLU, sequential, zeros } from "../index.ts"
+import { Adam, crossEntropy, Linear, ReLU, sequential, Tensor, zeros } from "../index.ts"
 import { accuracy } from "./util.ts"
 
 const CLASSES = 3
@@ -34,7 +34,7 @@ const optim = new Adam(net.parameters(), { lr: 0.02 })
 
 for (let epoch = 1; epoch <= 400; epoch++) {
   const logits = net.forward(X)
-  const loss = crossEntropy(logits, targets)
+  const loss = crossEntropy(logits, Tensor.indices(targets, [N]))
 
   optim.zeroGrad()
   loss.backward()

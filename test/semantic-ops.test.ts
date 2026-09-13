@@ -133,13 +133,16 @@ describe("semantic ops match the composition they replace", () => {
 
   it("crossEntropy == the logSoftmax/one-hot composition", () => {
     const logits = sample(12, [4, 3])
-    const targets = [2, 0, 1, 2]
+    // `nn.crossEntropy` takes a branded `IndexTensor` (OWNER-5, D26), so
+    // the target ids are built once and shared with the tensor-level
+    // `crossEntropy` below rather than passed as a plain array.
+    const targets = Tensor.indices([2, 0, 1, 2], [4])
     expectClose(
       crossEntropy(
         logits as any,
-        Tensor.of(targets) as any,
+        targets as any,
       ) as AnyTensor,
-      composedCrossEntropy(logits as any, targets) as AnyTensor,
+      composedCrossEntropy(logits as any, targets as any) as AnyTensor,
       1e-6,
     )
   })

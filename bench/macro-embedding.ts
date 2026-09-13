@@ -54,7 +54,7 @@ async function main(): Promise<void> {
     setMode(mode)
     const model = modelFor(kase.vocabSize)
     model.zeroGrad()
-    const ids = randomIds(kase.vocabSize, IDS_PER_STEP) as AnyTensor
+    const ids = randomIds(kase.vocabSize, IDS_PER_STEP)
     const out = model.forward(ids)
     if (kase.backward) {
       out.sum().backward()

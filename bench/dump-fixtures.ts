@@ -123,8 +123,10 @@ function buildReduceChain(): AnyTensor[] {
 // exact-reverse scatterAdd.
 function buildGatherScatterPair(): AnyTensor[] {
   const table = rand([65, 384]) as AnyTensor
-  const ids = tensor([1, 4, 4, 7, 12, 30, 30, 63]).to("int32") as AnyTensor
-  const gathered = table.indexSelect(ids)
+  // `.toIndex()` brands it for `indexSelect`/`scatterAdd` (OWNER-5, D25);
+  // int32 storage makes the brand check free.
+  const ids = tensor([1, 4, 4, 7, 12, 30, 30, 63]).to("int32").toIndex()
+  const gathered = table.indexSelect(ids) as AnyTensor
   const scattered = gathered.scatterAdd(ids, 65)
   return [gathered, scattered]
 }

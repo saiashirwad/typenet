@@ -6,6 +6,7 @@
 import { disableNative, useNative } from "../index.ts"
 import { rand } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
+import type { IndexTensor } from "../src/shape.ts"
 import { type AnyTensor, fromFlat } from "../src/tensor.ts"
 import { bench, type BenchCaseSpec, isSmokeRun, type Mode } from "./lib/harness.ts"
 import { EMBEDDING_FULL, EMBEDDING_SMOKE } from "./lib/sizes.ts"
@@ -26,10 +27,13 @@ const CASES: readonly GatherScatterCase[] = SIZE_CONFIG.vocabs.flatMap(vocabSize
   { id: `scatterAdd-v${vocabSize}`, kind: "scatterAdd" as const, vocabSize },
 ])
 
-function randomIds(vocabSize: number, count: number): AnyTensor {
+/** Branded via `.toIndex()` (OWNER-5, D25): `indexSelect`/`scatterAdd`
+ * take an `IndexTensor`, never a bare tensor. The brand check is a
+ * one-time integrality scan here, outside every timed region. */
+function randomIds(vocabSize: number, count: number): IndexTensor<[number]> {
   const data = new Float32Array(count)
   for (let i = 0; i < count; i++) data[i] = Math.floor(Math.random() * vocabSize)
-  return fromFlat(data, [count])
+  return fromFlat(data, [count]).toIndex()
 }
 
 function setMode(mode: Mode): void {
@@ -47,7 +51,7 @@ function setMode(mode: Mode): void {
 
 async function main(): Promise<void> {
   const weights = new Map<number, AnyTensor>()
-  const ids = new Map<number, AnyTensor>()
+  const ids = new Map<number, IndexTensor<[number]>>()
   const grads = new Map<number, AnyTensor>()
 
   await bench("micro-gather-scatter", CASES, (kase, mode) => {

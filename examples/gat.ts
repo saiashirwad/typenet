@@ -88,7 +88,7 @@ const optim = new Adam(net.parameters(), { lr: 0.01 })
 
 for (let epoch = 1; epoch <= 300; epoch++) {
   const logits = net.forward(X, adj)
-  const loss = crossEntropy(logits, labels)
+  const loss = crossEntropy(logits, Tensor.indices(labels, [N]))
 
   optim.zeroGrad()
   loss.backward()

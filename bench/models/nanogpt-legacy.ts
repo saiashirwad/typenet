@@ -13,6 +13,7 @@
 // the exact seed / data / hyperparameters the reproduction depends on).
 
 import { crossEntropy, fromFlat, Linear, Module, ones, rand, Tensor, zeros } from "../../index.ts"
+import type { IndexTensor } from "../../src/shape.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -173,7 +174,7 @@ export class NanoGptLegacy extends Module {
   readonly lnF: LayerNorm
   readonly head: Linear<number, number>
   private readonly cfg: NanoGptConfig
-  private readonly posIndex: AnyTensor
+  private readonly posIndex: IndexTensor<[number]>
 
   constructor(cfg: NanoGptConfig) {
     super()
@@ -185,16 +186,25 @@ export class NanoGptLegacy extends Module {
     this.blocks = Array.from({ length: cfg.nLayer }, () => new Block(cfg))
     this.lnF = new LayerNorm(cfg.nEmbd)
     this.head = new Linear(cfg.nEmbd, cfg.vocabSize)
+    // `.toIndex()` brands it for `indexSelect` (OWNER-5, D25). Done in
+    // the constructor, eagerly: the brand check reads `.data`, which
+    // would force the graph if it happened inside `forward` under
+    // `compile()`.
     this.posIndex = fromFlat(
       Float32Array.from({ length: cfg.blockSize }, (_, i) => i),
       [cfg.blockSize],
-    )
+    ).toIndex()
   }
 
   /** `idx`: `[B, T]` float32 token ids (T must equal `cfg.blockSize`). Returns `[B, T, vocabSize]` logits. */
   forward(idx: AnyTensor): AnyTensor {
     const [B, T] = idx.shape as number[]
-    const flatIdx = idx.view([B! * T!])
+    // `view` does not carry the index brand forward, and re-branding with
+    // `.toIndex()` would read `.data` — fatal here, because `forward` runs
+    // inside `compile()`'s trace where `idx` is a placeholder. The ids
+    // `generateBatch` produced are integral by construction, so the brand
+    // is asserted rather than re-checked.
+    const flatIdx = idx.view([B! * T!]) as unknown as IndexTensor<[number]>
     const tok = this.wte.indexSelect(flatIdx).view([B!, T!, this.cfg.nEmbd])
     const pos = this.wpe.indexSelect(this.posIndex) // [T, C], broadcasts over batch
     let x: AnyTensor = tok.add(pos)
@@ -204,10 +214,26 @@ export class NanoGptLegacy extends Module {
   }
 }
 
-/** `logits`: `[B, T, V]`; `targets`: `B * T` next-token ids, row-major. */
+/** `logits`: `[B, T, V]`; `targets`: `B * T` next-token ids, row-major.
+ *
+ * `crossEntropy` takes a branded `IndexTensor` (OWNER-5, D26), so the
+ * plain array is wrapped here. It is deliberately a **float32** leaf
+ * (`fromFlat` + `.toIndex()`, not `Tensor.indices`, which builds int32):
+ * the loss reaches the ids through `oneHot`, and `serializeLazyGraph`
+ * only lets an integer leaf feed a gather/scatter index — an int32 leaf
+ * into `oneHot` is rejected when this model is traced by `compile()`.
+ * float32 is also the dtype the pre-D26 array path used, so the loss
+ * curve this baseline pins is bit-for-bit what it was. */
 export function nanoGptCrossEntropy(logits: AnyTensor, targets: readonly number[]): AnyTensor {
   const [B, T, V] = logits.shape as number[]
-  return crossEntropy(logits.view([B! * T!, V!]), targets)
+  // The brand is asserted, not checked: `.toIndex()` reads `.data`, and
+  // this runs inside `compile()`'s trace, where reading a tensor's values
+  // is an error. `generateBatch` floors every target into `[0, vocabSize)`,
+  // so integrality holds by construction.
+  const ids = fromFlat(Float32Array.from(targets), [targets.length]) as unknown as IndexTensor<
+    [number]
+  >
+  return crossEntropy(logits.view([B! * T!, V!]), ids as never)
 }
 
 /**

@@ -271,7 +271,7 @@ describe("lazy mode", () => {
         [2, 1, 0.1],
         [0.5, 1.5, -1],
       ]).requiresGrad()
-      crossEntropy(logits as any, [0, 2]).backward()
+      crossEntropy(logits, Tensor.indices([0, 2], [2])).backward()
       return [logits] as AnyTensor[]
     }
     const both = bothWays(withArrayTargets)
