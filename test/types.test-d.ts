@@ -5,10 +5,14 @@ import type {
   Broadcast,
   CanBroadcast,
   Cat,
+  ConvCheck,
+  ConvOut,
+  FlattenFrom,
   InferShape,
   MatMul,
   NormalizeDim,
   Permute,
+  PoolOut,
   ReduceDim,
   ResizeDim,
   ResolveView,
@@ -19,7 +23,19 @@ import type {
   Unsqueeze,
 } from "../src/shape.ts"
 import { fromFlat, Tensor } from "../src/tensor.ts"
-import { BROADCAST_CASES, CAT_CASES, MATMUL_CASES, PERMUTE_CASES, REDUCE_CASES, RESIZE_CASES, SLICE_CASES, VIEW_CASES } from "./shape-cases.ts"
+import {
+  BROADCAST_CASES,
+  CAT_CASES,
+  CONV_CASES,
+  FLATTEN_FROM_CASES,
+  MATMUL_CASES,
+  PERMUTE_CASES,
+  POOL_CASES,
+  REDUCE_CASES,
+  RESIZE_CASES,
+  SLICE_CASES,
+  VIEW_CASES,
+} from "./shape-cases.ts"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
   <T>() => T extends B ? 1 : 2
@@ -143,6 +159,67 @@ type _td1 = Expect<
     DCase[1]["out"]
   >
 >
+
+// Conv / pool spatial arithmetic (W0.16, D35). Same dual-table discipline:
+// every row below is run through the value twins in `shape.test.ts`'s
+// "conv shapes" block. The traps, the wildcards and the layer-shaped
+// assertions live in `conv-shapes.test-d.ts`.
+type CvCase = typeof CONV_CASES
+type _tcv0 = Expect<
+  Equal<ConvOut<CvCase[0]["h"], CvCase[0]["k"], CvCase[0]["s"], CvCase[0]["p"]>, CvCase[0]["out"]>
+>
+type _tcv1 = Expect<
+  Equal<ConvOut<CvCase[1]["h"], CvCase[1]["k"], CvCase[1]["s"], CvCase[1]["p"]>, CvCase[1]["out"]>
+>
+type _tcv2 = Expect<
+  Equal<ConvOut<CvCase[2]["h"], CvCase[2]["k"], CvCase[2]["s"], CvCase[2]["p"]>, CvCase[2]["out"]>
+>
+type _tcv3 = Expect<
+  Equal<ConvOut<CvCase[3]["h"], CvCase[3]["k"], CvCase[3]["s"], CvCase[3]["p"]>, CvCase[3]["out"]>
+>
+type _tcv4 = Expect<
+  Equal<ConvOut<CvCase[4]["h"], CvCase[4]["k"], CvCase[4]["s"], CvCase[4]["p"]>, CvCase[4]["out"]>
+>
+// every positive row is a kernel that fits, so every row's check is open —
+// including row 4, where the kernel exactly fills the input and the output
+// is 1 (an off-by-one in the span test would reject it)
+type _tcc0 = Expect<
+  Equal<ConvCheck<CvCase[0]["h"], CvCase[0]["k"], CvCase[0]["s"], CvCase[0]["p"]>, unknown>
+>
+type _tcc4 = Expect<
+  Equal<ConvCheck<CvCase[4]["h"], CvCase[4]["k"], CvCase[4]["s"], CvCase[4]["p"]>, unknown>
+>
+type PoCase = typeof POOL_CASES
+type _tpo0 = Expect<Equal<PoolOut<PoCase[0]["h"], PoCase[0]["k"], PoCase[0]["s"]>, PoCase[0]["out"]>>
+type _tpo1 = Expect<Equal<PoolOut<PoCase[1]["h"], PoCase[1]["k"], PoCase[1]["s"]>, PoCase[1]["out"]>>
+type _tpo2 = Expect<Equal<PoolOut<PoCase[2]["h"], PoCase[2]["k"], PoCase[2]["s"]>, PoCase[2]["out"]>>
+type FfCase = typeof FLATTEN_FROM_CASES
+type _tff0 = Expect<Equal<FlattenFrom<FfCase[0]["s"]>, FfCase[0]["out"]>>
+type _tff1 = Expect<Equal<FlattenFrom<FfCase[1]["s"]>, FfCase[1]["out"]>>
+type _tff2 = Expect<Equal<FlattenFrom<FfCase[2]["s"]>, FfCase[2]["out"]>>
+type _tff3 = Expect<Equal<FlattenFrom<FfCase[3]["s"]>, FfCase[3]["out"]>>
+
+// D22, and conv is its first dependent caller: `FlattenFrom` folds with the
+// reseeded `Prod`, so inside a generic body it is the SAME type as the
+// `DimMul` chain a caller writes by hand — mutually assignable, not merely
+// equal-looking. Seed the fold with `1` instead and both assignments below
+// stop compiling, which is the whole reason the seed is `S[0]`.
+type _ByHand<B extends number, C extends number, H extends number, W extends number> = [B, DimMul<DimMul<C, H>, W>]
+function _flattenFromIsTheHandWrittenProduct<
+  B extends number,
+  C extends number,
+  H extends number,
+  W extends number,
+>(derived: FlattenFrom<[B, C, H, W]>, byHand: _ByHand<B, C, H, W>) {
+  // Assignability in both directions is the claim, and it is the strongest
+  // one available here: `Equal` is a conditional, and under generic dims
+  // BOTH of these types are still residual `DimMul`s, so `Equal<...>` itself
+  // defers to `boolean` and asserting on it would prove nothing. The two
+  // annotations below are checked by the compiler now.
+  const a: _ByHand<B, C, H, W> = derived
+  const b: FlattenFrom<[B, C, H, W]> = byHand
+  return { a, b }
+}
 
 function _tensors() {
   const a = tensor([
@@ -591,4 +668,180 @@ function _scGeneric<N extends number, C extends number>() {
   const d: [N, C] = null as any as Broadcast<[N, C], [N, C]>
   const e: [C] = null as any as Broadcast<[C], [1]>
   return [a, b, c, d, e]
+}
+
+// ---------------------------------------------------------------------------
+// W0.13 foundations: the tuple surgery, the division algebra, and the
+// checks that ride on them. The probes these came from are checked in as
+// test/{dimdiv,lastdim,flatten,gpt-adopted}.test-d.ts; what is here is the
+// case-table half (run again through the value twins by shape.test.ts) and
+// the negative cases.
+// ---------------------------------------------------------------------------
+
+import { DimDiv } from "../src/shape.ts"
+import type {
+  BatchPrefix,
+  DimDivCheck,
+  Drop,
+  FlattenCheck,
+  FlattenShape,
+  IndexCheck,
+  IndexTensor,
+  Init,
+  Last,
+  LastDimCheck,
+  Prod,
+  ReduceDims,
+  Shape,
+  Slice,
+  SliceCheck,
+  Take,
+  UnflattenCheck,
+  UnflattenShape,
+} from "../src/shape.ts"
+import { DIM_DIV_CASES, FLATTEN_CASES, UNFLATTEN_CASES } from "./shape-cases.ts"
+
+type _init1 = Expect<Equal<Init<[2, 3, 4]>, [2, 3]>>
+type _init2 = Expect<Equal<BatchPrefix<[8, 256, 65]>, [8, 256]>>
+type _last1 = Expect<Equal<Last<[2, 3, 4]>, 4>>
+type _take1 = Expect<Equal<Take<[2, 3, 4], 2>, [2, 3]>>
+type _take2 = Expect<Equal<Take<[2, 3, 4], 0>, []>>
+type _drop1 = Expect<Equal<Drop<[2, 3, 4], 1>, [3, 4]>>
+type _drop2 = Expect<Equal<Drop<[2, 3, 4], 3>, []>>
+
+type _prod1 = Expect<Equal<Prod<[2, 3, 4]>, 24>>
+type _prod2 = Expect<Equal<Prod<[]>, 1>>
+type _prod3 = Expect<Equal<Prod<[7]>, 7>>
+type _prod4 = Expect<Equal<Prod<number[]>, number>>
+
+// D22: the fold is seeded with S[0], so the product of a generic shape is
+// the same type the caller writes by hand — in both directions.
+function _prodReseed<B extends number, T extends number>() {
+  const fromAlgebra: DimMul<B, T> = null as any as Prod<[B, T]>
+  const byHand: Prod<[B, T]> = null as any as DimMul<B, T>
+  return [fromAlgebra, byHand]
+}
+
+type _dd1 = Expect<Equal<DimDiv<384, 6>, 64>>
+type _dd2 = Expect<Equal<DimDiv<number, 6>, number>>
+// the quotient truncates; divisibility is DimDivCheck's job
+type _dd3 = Expect<Equal<DimDiv<7, 2>, 3>>
+
+type DDCase = typeof DIM_DIV_CASES
+type _tdd0 = Expect<Equal<DimDiv<DDCase[0]["a"], DDCase[0]["b"]>, DDCase[0]["out"]>>
+type _tdd1 = Expect<Equal<DimDiv<DDCase[1]["a"], DDCase[1]["b"]>, DDCase[1]["out"]>>
+type _tdd2 = Expect<Equal<DimDiv<DDCase[2]["a"], DDCase[2]["b"]>, DDCase[2]["out"]>>
+type _tdd3 = Expect<Equal<DimDiv<DDCase[3]["a"], DDCase[3]["b"]>, DDCase[3]["out"]>>
+
+type FCase = typeof FLATTEN_CASES
+type _tfl0 = Expect<Equal<FlattenShape<FCase[0]["s"], FCase[0]["from"], FCase[0]["to"]>, FCase[0]["out"]>>
+type _tfl1 = Expect<Equal<FlattenShape<FCase[1]["s"], FCase[1]["from"], FCase[1]["to"]>, FCase[1]["out"]>>
+type _tfl2 = Expect<Equal<FlattenShape<FCase[2]["s"], FCase[2]["from"], FCase[2]["to"]>, FCase[2]["out"]>>
+type _tfl3 = Expect<Equal<FlattenShape<FCase[3]["s"], FCase[3]["from"], FCase[3]["to"]>, FCase[3]["out"]>>
+
+type UCase = typeof UNFLATTEN_CASES
+type _tuf0 = Expect<Equal<UnflattenShape<UCase[0]["s"], UCase[0]["dim"], UCase[0]["sizes"]>, UCase[0]["out"]>>
+type _tuf1 = Expect<Equal<UnflattenShape<UCase[1]["s"], UCase[1]["dim"], UCase[1]["sizes"]>, UCase[1]["out"]>>
+type _tuf2 = Expect<Equal<UnflattenShape<UCase[2]["s"], UCase[2]["dim"], UCase[2]["sizes"]>, UCase[2]["out"]>>
+
+type _rd1 = Expect<Equal<ReduceDims<[2, 3, 4], [0, 2]>, [3]>>
+type _rd2 = Expect<Equal<ReduceDims<[2, 3, 4], [0, 2], true>, [1, 3, 1]>>
+type _rd3 = Expect<Equal<ReduceDims<[2, 3, 4], [-1]>, [2, 3]>>
+type _rd4 = Expect<Equal<ReduceDims<[2, 3, 4], []>, [2, 3, 4]>>
+type _rd5 = Expect<Equal<ReduceDims<number[], [0]>, number[]>>
+
+// The signature shapes these checks are meant to be worn in. `flatten`
+// and `unflatten` become Tensor methods in W1.8; here they stand in as
+// free functions so the checks are exercised against the real exports.
+declare class LayerNormLike<D extends number> {
+  forward<S extends Shape>(x: Tensor<S> & LastDimCheck<S, D>): Tensor<S>
+}
+declare class AttentionLike<D extends number, H extends number> {
+  constructor(d: D, h: H & DimDivCheck<D, H>)
+}
+declare function flattenT<S extends Shape, const F extends number, const T extends number>(
+  t: Tensor<S>,
+  from: F & FlattenCheck<S, F, T>,
+  to: T,
+): Tensor<FlattenShape<S, F, T>>
+declare function unflattenT<S extends Shape, const D extends number, const Sizes extends number[]>(
+  t: Tensor<S>,
+  dim: D & UnflattenCheck<S, D, Sizes>,
+  sizes: Sizes,
+): Tensor<UnflattenShape<S, D, Sizes>>
+declare function sliceT<S extends Shape, const Spec extends readonly Slice[]>(
+  t: Tensor<S>,
+  spec: Spec & SliceCheck<S, Spec>,
+): Tensor<SliceShape<S, Spec>>
+declare function embedT<S extends Shape>(ids: IndexTensor<S>): Tensor<[...S, 8]>
+declare function indexOnly<T>(t: T & IndexCheck<T>): void
+
+function _w013Negative(
+  x: Tensor<[2, 3, 4]>,
+  grid: Tensor<[4, 5]>,
+  feats: Tensor<[4, 8, 384]>,
+  ids: IndexTensor<[4, 5]>,
+) {
+  // @ts-expect-error 384 is not divisible by 5 heads
+  new AttentionLike(384, 5)
+
+  // @ts-expect-error the last axis is 384, not 128
+  new LayerNormLike<128>().forward(feats)
+
+  // @ts-expect-error flatten range: dim 3 is out of range for a rank-3 shape
+  flattenT(x, 1, 3)
+
+  // @ts-expect-error unflatten dim 5 is out of range for a rank-3 shape
+  unflattenT(x, 5, [2, 2])
+
+  // @ts-expect-error slice window [1, 9] runs past an axis of extent 5
+  sliceT(grid, [2, [1, 9]])
+
+  // @ts-expect-error a float tensor is not an index tensor
+  embedT(grid)
+
+  // @ts-expect-error ...and IndexCheck says so on any tensor-shaped argument
+  indexOnly(grid)
+
+  // the same calls, made correctly
+  const flat = flattenT(x, 1, 2)
+  type _1 = Expect<Equal<typeof flat.shape, [2, 12]>>
+  const split = unflattenT(x, 2, [2, 2])
+  type _2 = Expect<Equal<typeof split.shape, [2, 3, 2, 2]>>
+  const win = sliceT(grid, [2, [1, 3]])
+  type _3 = Expect<Equal<typeof win.shape, [2, 2]>>
+  const emb = embedT(ids)
+  type _4 = Expect<Equal<typeof emb.shape, [4, 5, 8]>>
+  indexOnly(ids)
+  const normed = new LayerNormLike<384>().forward(feats)
+  type _5 = Expect<Equal<typeof normed.shape, [4, 8, 384]>>
+  return { emb, flat, normed, split, win }
+}
+
+// Law 1, once per new check: a naked generic shape decides nothing, so
+// every one of them has to let the call through.
+function _w013FailOpen<S extends Shape>(x: Tensor<S>, n: LayerNormLike<16>, len: number) {
+  const a = n.forward(x)
+  const b = flattenT(x, 0, 1)
+  const c = unflattenT(x, 0, [1, len])
+  const d = sliceT(x, [null, null])
+  return { a, b, c, d }
+}
+
+// ...and generic dims with a known arity behave the same way.
+function _w013GenericDims<B extends number, T extends number, H extends number, Dh extends number>(
+  x: Tensor<[B, T, 16]>,
+  ctx: Tensor<[B, T, H, Dh]>,
+  n: LayerNormLike<16>,
+  h: H,
+  dh: Dh,
+) {
+  const a = n.forward(x)
+  type _1 = Expect<Equal<typeof a.shape, [B, T, 16]>>
+  const b = flattenT(ctx, 2, 3)
+  type _2 = Expect<Equal<typeof b.shape, [B, T, DimMul<H, Dh>]>>
+  const c = unflattenT(x, 2, [h, dh])
+  type _3 = Expect<Equal<typeof c.shape, [B, T, H, Dh]>>
+  const d = sliceT(x, [null, [0, 4], null])
+  return { a, b, c, d }
 }

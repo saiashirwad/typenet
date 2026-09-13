@@ -11,7 +11,17 @@ export type { DType, RandomKind } from "./src/storage.ts"
 export { fromFlat, Tensor } from "./src/tensor.ts"
 export type { NestedNumbers, ShapeOf } from "./src/tensor.ts"
 
-export { disableNative, isNativeAvailable, isNativeEnabled, nativeDevice, nativeDeviceMode, useNative } from "./src/backends/native.ts"
+export {
+  disableNative,
+  isNativeAvailable,
+  isNativeEnabled,
+  nativeCounters,
+  nativeDevice,
+  nativeDeviceInfo,
+  nativeDeviceMode,
+  nativeProfile,
+  useNative,
+} from "./src/backends/native.ts"
 export { crossEntropy, LeakyReLU, Linear, Module, mseLoss, ReLU, sequential, Sigmoid, Softmax, Tanh } from "./src/nn.ts"
 // The Sequential *type* is public for annotations; construction goes
 // through sequential(...) only.
@@ -23,27 +33,55 @@ export type { AdamOptions, SGDOptions } from "./src/optim.ts"
 // arithmetic on literal dims, the function returns it at runtime, so a
 // constructor width like `DimAdd(DimMul(3, channels), 1)` carries its
 // derived type with no cast.
-export { DimAdd, DimMul, DimSub } from "./src/shape.ts"
+export { DimAdd, DimDiv, DimMul, DimSub } from "./src/shape.ts"
+// Conv/pool spatial arithmetic (D35), same dual type/value shape: the type
+// tracks the output extent literally, the function returns it at runtime, so
+// a head width like `DimMul(DimMul(16, PoolOut(11, 2, 2)), PoolOut(11, 2, 2))`
+// carries its derived type with no cast.
+export { ConvOut, flattenFrom, PoolOut } from "./src/shape.ts"
+// The shape assertion. It lives beside the *Check types in shape.ts and
+// is re-exported from src/cast.ts so every asserting call site is one
+// grep away; see that file.
+export { assertChecked } from "./src/cast.ts"
+export { flattenShape, unflattenShape } from "./src/shape.ts"
 export type {
+  BatchPrefix,
   Broadcast,
   BroadcastCheck,
   BroadcastToCheck,
   CanBroadcast,
   Cat,
+  ConvCheck,
+  DimDivCheck,
+  Drop,
   ErrorMessage,
+  FlattenCheck,
+  FlattenFrom,
+  FlattenShape,
+  IndexCheck,
+  IndexTensor,
   InferShape,
+  Init,
+  Last,
+  LastDimCheck,
   MatMul,
   MatMulCheck,
   NestedArray,
   Permute,
+  Prod,
   ReduceDim,
+  ReduceDims,
   ResizeDim,
   ResolveView,
   Shape,
   Slice,
+  SliceCheck,
   SliceShape,
   Squeeze,
   Stack,
+  Take,
   Transpose,
+  UnflattenCheck,
+  UnflattenShape,
   Unsqueeze,
 } from "./src/shape.ts"
