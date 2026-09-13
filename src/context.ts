@@ -70,3 +70,20 @@ export function withContext<T>(
     tracing = prevTracing
   }
 }
+
+/**
+ * Run `fn` with lazy graph building on, restoring whatever the flag
+ * was before — even if `fn` throws. Prefer this to a bare
+ * `configure({ lazy: true })` outside a REPL: `configure` has no
+ * scope, so an exception thrown before the matching `configure({
+ * lazy: false })` leaves the flag flipped for every call downstream,
+ * silently turning unrelated code lazy.
+ */
+export function lazy<T>(fn: () => T): T {
+  return withContext({ lazy: true }, fn)
+}
+
+/** The eager counterpart of {@link lazy}, for symmetry and clarity at a call site. */
+export function eager<T>(fn: () => T): T {
+  return withContext({ lazy: false }, fn)
+}

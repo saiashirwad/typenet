@@ -462,10 +462,8 @@ describe("scalar optimizer options inside a compiled step", () => {
 
     const before1 = net.params[0]!.data[0]!
     step(net.x, net.y)
-    const delta1 = Math.abs(net.params[0]!.data[0]! - before1)
-
-    // Bypass the `private readonly` guard the same way a real user's
-    // mistake (or a scheduler) would: assign straight to the field.
+    const delta1 = Math.abs(net.params[0]!.data[0]! - before1) // Bypass the `private readonly` guard the same way a real user's
+     // mistake (or a scheduler) would: assign straight to the field.
     ;(opt as unknown as { lr: number }).lr = 1e-1
 
     const before2 = net.params[0]!.data[0]!

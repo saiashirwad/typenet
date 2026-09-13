@@ -13,9 +13,8 @@ import {
   evalScatterAddEager,
   evalUnaryEager,
 } from "./eager.ts"
-import { nextStream } from "./kernels.ts"
 import type { BinaryOp, ReduceOp, UnaryOp } from "./ops.ts"
-import { broadcastShapes, broadcastToShape, catShape, matmulShape, permuteShape, reduceShape, resizeDim, type Shape } from "./shape.ts"
+import { broadcastShapes, broadcastToShape, catShape, matmulShape, permuteShape, reduceShape, resizeDim } from "./shape.ts"
 import {
   type DType,
   type LazyNode,
@@ -27,7 +26,7 @@ import {
   shapesEqual,
   showShape,
 } from "./storage.ts"
-import { _internal, type AnyTensor, makeStorage, type Tensor } from "./tensor.ts"
+import { _internal, type AnyTensor, makeStorage } from "./tensor.ts"
 
 // ---------------------------------------------------------------------------
 // The IR: one node constructor, one description table, and the raw*
@@ -544,32 +543,4 @@ export function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
     }
   }
   return out
-}
-
-/**
- * Uniform values in [0, 1), redrawn on every evaluation.
- *
- * Seeded by `configure({ seed })`, not `Math.random`.
- */
-export function uniform<const Sh extends Shape>(
-  shape: Sh,
-): Tensor<Sh> {
-  return rawRandom(
-    "uniform",
-    shape,
-    nextStream(),
-    "float32",
-  ) as any
-}
-
-/** Standard normal values, redrawn per evaluation. See {@link uniform}. */
-export function normal<const Sh extends Shape>(
-  shape: Sh,
-): Tensor<Sh> {
-  return rawRandom(
-    "normal",
-    shape,
-    nextStream(),
-    "float32",
-  ) as any
 }

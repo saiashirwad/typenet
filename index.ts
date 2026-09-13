@@ -1,10 +1,9 @@
 export { noGrad } from "./src/autograd.ts"
 export { compile, printGraph } from "./src/compile.ts"
 export type { CompiledFn } from "./src/compile.ts"
-export { context, withContext } from "./src/context.ts"
+export { context, eager, lazy, withContext } from "./src/context.ts"
 export type { RuntimeContext } from "./src/context.ts"
 export { arange, cat, eye, full, ones, rand, randn, scalar, stack, tensor, zeros } from "./src/factories.ts"
-export { normal, uniform } from "./src/ir.ts"
 export { configure } from "./src/lazy.ts"
 export { broadcastShapes } from "./src/shape.ts"
 export type { DType, RandomKind } from "./src/storage.ts"
@@ -22,10 +21,10 @@ export {
   nativeProfile,
   useNative,
 } from "./src/backends/native.ts"
-export { crossEntropy, LeakyReLU, Linear, Module, mseLoss, ReLU, sequential, Sigmoid, Softmax, Tanh } from "./src/nn.ts"
+export { crossEntropy, isParameter, LeakyReLU, Linear, Module, mseLoss, parameter, ReLU, sequential, Sigmoid, Softmax, Tanh, tie } from "./src/nn.ts"
 // The Sequential *type* is public for annotations; construction goes
 // through sequential(...) only.
-export type { Sequential } from "./src/nn.ts"
+export type { LoadReport, Parameter, Sequential, StateDict } from "./src/nn.ts"
 export { Adam, clipGradNorm, Optimizer, SGD } from "./src/optim.ts"
 export type { AdamOptions, SGDOptions } from "./src/optim.ts"
 

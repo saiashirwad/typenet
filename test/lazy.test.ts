@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
+import { eager, lazy } from "../src/context.ts"
 import { tensor } from "../src/factories.ts"
-import { isLazy } from "../src/lazy.ts"
-import { configure } from "../src/lazy.ts"
+import { configure, isLazy } from "../src/lazy.ts"
 import { crossEntropy } from "../src/nn.ts"
 import { SGD } from "../src/optim.ts"
 import { Tensor } from "../src/tensor.ts"
@@ -33,10 +33,6 @@ function expectGradsClose(
   })
 }
 
-afterEach(() => {
-  configure({ lazy: false })
-})
-
 describe("lazy mode", () => {
   it("is off by default and toggles via configure", () => {
     expect(isLazy()).toBe(false)
@@ -46,20 +42,43 @@ describe("lazy mode", () => {
     expect(isLazy()).toBe(false)
   })
 
+  it("restores the previous flag when lazy() throws", () => {
+    expect(isLazy()).toBe(false)
+    expect(() =>
+      lazy(() => {
+        expect(isLazy()).toBe(true)
+        throw new Error("boom")
+      })
+    ).toThrow("boom")
+    expect(isLazy()).toBe(false)
+  })
+
+  it("restores true when lazy() throws inside an outer lazy() scope", () => {
+    lazy(() => {
+      expect(() =>
+        eager(() => {
+          throw new Error("boom")
+        })
+      ).toThrow("boom")
+      expect(isLazy()).toBe(true)
+    })
+  })
+
   it("builds a graph without touching data", () => {
-    configure({ lazy: true })
-    const a = tensor([
-      [1, 2, 3],
-      [4, 5, 6],
-    ])
-    const b = a.add(tensor([10, 20, 30]))
-    expect(testing.storageOf(b)).toBe("lazy")
-    expect(b.shape).toEqual([2, 3])
-    expect(b.toArray()).toEqual([
-      [11, 22, 33],
-      [14, 25, 36],
-    ])
-    expect(testing.storageOf(b)).toBe("materialized")
+    lazy(() => {
+      const a = tensor([
+        [1, 2, 3],
+        [4, 5, 6],
+      ])
+      const b = a.add(tensor([10, 20, 30]))
+      expect(testing.storageOf(b)).toBe("lazy")
+      expect(b.shape).toEqual([2, 3])
+      expect(b.toArray()).toEqual([
+        [11, 22, 33],
+        [14, 25, 36],
+      ])
+      expect(testing.storageOf(b)).toBe("materialized")
+    })
   })
 
   it("matches eager for binary broadcast", () => {
@@ -166,20 +185,21 @@ describe("lazy mode", () => {
   })
 
   it("mixes lazy and eager tensors", () => {
-    configure({ lazy: false })
-    const eagerLeaf = tensor([1, 2, 3])
-    configure({ lazy: true })
-    const out = tensor([10, 20, 30]).add(eagerLeaf)
-    expect(testing.storageOf(out)).toBe("lazy")
-    expect(out.toArray()).toEqual([11, 22, 33])
+    const eagerLeaf = eager(() => tensor([1, 2, 3]))
+    lazy(() => {
+      const out = tensor([10, 20, 30]).add(eagerLeaf)
+      expect(testing.storageOf(out)).toBe("lazy")
+      expect(out.toArray()).toEqual([11, 22, 33])
+    })
   })
 
   it("forces at data and item()", () => {
-    configure({ lazy: true })
-    const a = tensor([2, 3]).mul(4)
-    expect(a.data).toEqual(Float32Array.from([8, 12]))
-    const s = tensor([5]).add(1)
-    expect(s.item()).toBe(6)
+    lazy(() => {
+      const a = tensor([2, 3]).mul(4)
+      expect(a.data).toEqual(Float32Array.from([8, 12]))
+      const s = tensor([5]).add(1)
+      expect(s.item()).toBe(6)
+    })
   })
 
   it("matches eager for an XOR training step", () => {
@@ -284,24 +304,25 @@ describe("lazy mode", () => {
   })
 
   it("evaluates shared subexpressions once and materializes aliases", () => {
-    configure({ lazy: true })
-    const x = tensor([1, 2, 3]).requiresGrad()
-    const z = (x as AnyTensor).mul(x)
-    const y = z.add(z)
-    const w = z.sum()
-    const loss = y.sum().add(w)
-    loss.backward()
-    // y = 2x² + x² = 3x², dy/dx = 6x
-    expect((x.grad as AnyTensor).toArray()).toEqual([
-      6,
-      12,
-      18,
-    ])
-    // Aliasing: forcing the graph swapped the storage of every alias
-    // of a shared node, so z (referenced by two parents plus sum) is
-    // materialized exactly once and all aliases agree.
-    expect(testing.storageOf(z)).toBe("materialized")
-    expect(z.toArray()).toEqual([1, 4, 9])
-    expect(y.toArray()).toEqual([2, 8, 18])
+    lazy(() => {
+      const x = tensor([1, 2, 3]).requiresGrad()
+      const z = (x as AnyTensor).mul(x)
+      const y = z.add(z)
+      const w = z.sum()
+      const loss = y.sum().add(w)
+      loss.backward()
+      // y = 2x² + x² = 3x², dy/dx = 6x
+      expect((x.grad as AnyTensor).toArray()).toEqual([
+        6,
+        12,
+        18,
+      ])
+      // Aliasing: forcing the graph swapped the storage of every alias
+      // of a shared node, so z (referenced by two parents plus sum) is
+      // materialized exactly once and all aliases agree.
+      expect(testing.storageOf(z)).toBe("materialized")
+      expect(z.toArray()).toEqual([1, 4, 9])
+      expect(y.toArray()).toEqual([2, 8, 18])
+    })
   })
 })

@@ -107,6 +107,26 @@ x.grad // Tensor<[2]>
 
 Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, `matmul`, reductions, shape ops, and gather/scatter; broadcasts are reduced correctly. `noGrad(fn)` disables taping, `.detach()` cuts the graph. Every backward rule is checked against central finite differences in `test/gradcheck.test.ts`, in both eager and lazy modes.
 
+## Lazy mode
+
+Eager mode, the default, runs every operation immediately. `lazy(fn)` runs `fn` with graph building turned on instead — operations return unevaluated nodes, forced only by `.data`, `.item()`, `.toArray()`, or `compile()`'s serializer — and puts the previous mode back when `fn` returns, even if it throws:
+
+```ts
+const out = lazy(() => tensor([1, 2, 3]).add(tensor([10, 20, 30])))
+out.toArray() // [11, 22, 33] — forces the graph
+```
+
+`configure({ lazy: true })` sets the same flag globally, with no scope of its own — the right tool for a REPL, where there is no enclosing function to scope it to, and the wrong one anywhere else. A script that flips the flag, calls something twice, and flips it back has no `try`/`finally`:
+
+```ts
+configure({ lazy: true })
+run()
+run() // if either call throws, lazy mode never gets turned back off
+configure({ lazy: false })
+```
+
+`lazy(fn)` and its `eager(fn)` counterpart (for forcing eager mode inside an outer lazy scope) are `withContext({ lazy: true }, fn)` / `withContext({ lazy: false }, fn)` under the hood — reach for `configure` only at a REPL prompt.
+
 ## Compiled training steps
 
 `compile(fn, exampleInputs)` traces `fn` against the examples up front and replays the graph on every call (omitting the examples still traces on the first call, deprecated). Reading a tensor's values inside `fn` (`.data`, `.item()`, ...) throws — the graph is recorded, not run. A whole training step fits inside one — forward, backward, gradient clipping and the optimizer update all evaluated in a single pass, with nothing read back to JavaScript in between:
@@ -195,11 +215,13 @@ Tensor.cat(a, b, 1)
 x.indexSelect(src) // each edge's source state
 messages.scatterAdd(dst, nodes) // each node's incoming messages
 
-// random values redrawn on every evaluation; rand/randn fill once.
-// Both draw from the seeded generator: configure({ seed }) makes a
-// run — including Linear's init — reproducible.
-uniform([n, 1])
-normal([n, c])
+// rand/randn: { resample: "once" } (the default) fills a plain leaf
+// immediately, fixed for the tensor's life; { resample: "perCall" } is
+// a graph node redrawn on every evaluation. Both draw from the seeded
+// generator: configure({ seed }) makes a run — including Linear's
+// init — reproducible.
+rand([n, 1])
+randn([n, c], { resample: "perCall" })
 configure({ seed: 0 })
 
 // nn / optim
