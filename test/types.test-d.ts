@@ -354,7 +354,7 @@ function _nn() {
   type _4 = Expect<Equal<typeof z.shape, [3, 16]>>
 }
 
-import { ReLU, Sequential, sequential, Softmax } from "../src/nn.ts"
+import { ReLU, Sequential, sequential, SHAPE_EFFECT, Softmax } from "../src/nn.ts"
 
 function _sequential() {
   const net = sequential(
@@ -394,6 +394,115 @@ function _sequential() {
 
   // @ts-expect-error wrong input width
   net.forward(randn([32, 5]))
+}
+
+// ---- W4.9: the shape-effect protocol ---------------------------------------
+//
+// `LayerNorm` (W5.1-A), `Embedding` (W5.1-A) and `TiedLinear` (W5.10-A) do
+// not exist yet. They are `declare`d here with exactly the `forward`
+// signature *and* the `SHAPE_EFFECT` declaration their own items will carry
+// — the stand-in discipline `test/gpt-adopted.test-d.ts` already uses — so
+// the protocol is proved against the real `sequential`, not a mock of it.
+
+declare class LayerNorm<D extends number> {
+  // A norm owns the last axis, so it declares `["mapLast", D, D]` and NOT
+  // `"identity"`: the width it demands is still checked against whatever
+  // the previous layer produced.
+  readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: D]
+  constructor(d: D)
+  forward<S extends Shape>(x: Tensor<S> & LastDimCheck<S, D>): Tensor<S>
+}
+
+declare class Embedding<V extends number, D extends number> {
+  readonly [SHAPE_EFFECT]: [effect: "appendDim", D: D]
+  readonly weight: Tensor<[V, D]>
+  constructor(v: V, d: D)
+  // The reason the protocol exists: `Tensor<S>` is not assignable to
+  // `IndexTensor<S>`, so the structural probe cannot read this layer and
+  // silently treats it as the identity.
+  forward<S extends Shape>(ids: IndexTensor<S>): Tensor<[...S, D]>
+}
+
+declare class TiedLinear<D extends number, V extends number> {
+  // §3.3's one layer whose stored weight is the TRANSPOSE of its shape
+  // effect: it holds the embedding's `[V, D]` and maps `D -> V`. No probe
+  // over its fields could get this right; the declaration is the only
+  // source of truth.
+  readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: V]
+  readonly weight: Tensor<[V, D]>
+  static of<V extends number, D extends number>(e: Embedding<V, D>): TiedLinear<D, V>
+  forward<S extends Shape>(x: Tensor<S> & LastDimCheck<S, D>): Tensor<MatMul<S, [D, V]>>
+}
+
+function _shapeEffect(table: Embedding<50257, 128>) {
+  // Accept #1: the chain the structural probe got wrong before W4.9.
+  const net = sequential(new Linear(4, 4), new Softmax(-1), new LayerNorm(4))
+  const out = net.forward(randn([32, 4]))
+  type _1 = Expect<Equal<typeof out.shape, [32, 4]>>
+
+  // ...and it stays rank-generic, exactly like a chain of Linears.
+  const deep = net.forward(randn([8, 32, 4]))
+  type _2 = Expect<Equal<typeof deep.shape, [8, 32, 4]>>
+
+  // @ts-expect-error the norm owns the last axis: 4 -> 8 is a width mismatch
+  sequential(new Linear(4, 4), new Softmax(-1), new LayerNorm(8))
+
+  // Accept #2: `appendDim` grows the rank by one.
+  const embed = sequential(new Linear(4, 8), new Embedding(8, 16))
+  const ids = embed.forward(randn([32, 4]))
+  type _3 = Expect<Equal<typeof ids.shape, [32, 8, 16]>>
+
+  // Accept #5: `TiedLinear` composes, and its `[V, D]` weight does not
+  // leak into the shape its effect declares.
+  const head = sequential(new LayerNorm(128), TiedLinear.of(table))
+  const logits = head.forward(randn([2, 7, 128]))
+  type _4 = Expect<Equal<typeof logits.shape, [2, 7, 50257]>>
+  type _5 = Expect<Equal<TiedLinear<128, 50257>["weight"]["shape"], [50257, 128]>>
+}
+
+// Law 1 (§2.1): a declared effect decides nothing on a fully generic shape.
+function _shapeEffectFailsOpen(x: Tensor<number[]>, table: Embedding<8, 16>) {
+  const a = sequential(new LayerNorm(16)).forward(x)
+  type _1 = Expect<Equal<typeof a.shape, number[]>>
+  const b = sequential(table).forward(x)
+  type _2 = Expect<Equal<typeof b.shape, number[]>>
+  return { a, b }
+}
+
+// Accept #4 (regression, D24): a hand-written layer that declares no marker
+// composes exactly as it did before W4.9 — through the structural probe,
+// including one that changes the rank.
+class Undeclared {
+  forward<S extends Shape>(x: Tensor<S>): Tensor<S> {
+    return x
+  }
+}
+
+// Concrete on purpose. A *generic* `forward<S>(x: Tensor<S>): Tensor<[...S, 1]>`
+// does not probe — TS will not carry the inference through the return type, so
+// `ApplyLayer` falls through to its `S` fallback and the rank change is lost.
+// That is pre-existing behaviour, unchanged by W4.9, and is exactly the hole
+// `SHAPE_EFFECT` exists to let a layer close by declaring what it does.
+declare class UndeclaredRankChanger {
+  forward(x: Tensor<[32, 4]>): Tensor<[32, 4, 1]>
+}
+
+function _undeclaredLayersStillCompose(grow: UndeclaredRankChanger) {
+  const net = sequential(new Linear(2, 16), new Undeclared(), new Linear(16, 3))
+  const out = net.forward(randn([32, 2]))
+  type _1 = Expect<Equal<typeof out.shape, [32, 3]>>
+
+  const rank = sequential(new Linear(2, 4), grow)
+  const grown = rank.forward(randn([32, 2]))
+  type _2 = Expect<Equal<typeof grown.shape, [32, 4, 1]>>
+  return { grown, out }
+}
+
+// Accept #3: only the "no `forward` at all" fallback is an `ErrorMessage`.
+function _noForwardIsAnErrorMessage() {
+  const notALayer = sequential({ label: "not a layer" })
+  // @ts-expect-error a value with no forward method cannot be a layer
+  notALayer.forward(randn([2, 3]))
 }
 
 function _catN(a: Tensor<[2, 3]>, b: Tensor<[2, 5]>) {
