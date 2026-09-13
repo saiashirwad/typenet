@@ -239,17 +239,6 @@ Index tensors hold integral values — use `int32` / `int64` tensors
 are exact across the full integer range. `float32` indices remain legal
 for compatibility; an f32 mantissa addresses 16.7M rows exactly.
 
-`examples/gnca` is a full application of this: a graph cellular automaton
-that grows a pattern from one seed node and heals after damage, ported
-from [graph-cellular-automata](https://github.com/saiashirwad/graph-cellular-automata)
-and checked against the PyTorch original in `test/gnca.test.ts` — same
-graph, same rollout, same gradients to 3e-5.
-
-```sh
-pnpm gnca --steps 200          # train
-pnpm vite-node examples/gnca/bench.ts
-```
-
 ## Native backend
 
 Eager mode runs typed-array kernels in JavaScript. Lazy and compiled

@@ -11,9 +11,7 @@
     "format": "dprint fmt",
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
-    "example:gat": "vite-node examples/gat.ts",
-    "gnca": "vite-node examples/gnca/train.ts --",
-    "gnca:bench": "vite-node examples/gnca/bench_gate.ts && { PY=${GCA_ROOT:+$GCA_ROOT/.venv/bin/python}; PY=${PY:-python3}; \"$PY\" examples/gnca/bench_torch.py || echo 'torch venv not found; skipped bench_torch.py'; }"
+    "example:gat": "vite-node examples/gat.ts"
   },
   "dependencies": {
     "hotscript": "^1.0.13",

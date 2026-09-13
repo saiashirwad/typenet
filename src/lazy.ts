@@ -158,12 +158,10 @@ function force(t: AnyTensor): AnyTensor {
 // or BLAS setup cost. 65536 = one 256×256 matrix.
 //
 // The cutover was re-measured (2026-08) after the loop evaluator grew
-// strided views, buffer drop, and a single-pass scatter: on the
-// published GNCA training recipe (1024 nodes x 8, one [48, 80] bucket)
-// loops run 0.56 steps/s against candle CPU's 1.50 — the loss is
-// per-element dispatch in the fused passes, not copies — so candle
-// stays the default above the cap and the race with torch.mps rides on
-// a fused Metal step (PR17), not on lifting this constant.
+// strided views, buffer drop, and a single-pass scatter: on a rolled-out
+// graph training step the loop evaluator ran at about a third of candle
+// CPU's rate — the loss is per-element dispatch in the fused passes, not
+// copies — so candle stays the default above the cap.
 const LOOP_EVALUATOR_MAX_WORK = 65536
 
 /**
@@ -171,8 +169,8 @@ const LOOP_EVALUATOR_MAX_WORK = 65536
  *
  * Tiny graphs go to the loop evaluator. Everything else goes to candle
  * on the CPU device, which on macOS means Accelerate for matmul. That is
- * not the obvious default, so the numbers behind it (Apple M5, see
- * PLAN.md "History: measured numbers"): CPU matches Metal on chained
+ * not the obvious default, so the numbers behind it (Apple M5,
+ * measured 2026-08): CPU matches Metal on chained
  * large matmuls, loses to it by
  * ~1.5x on purely elementwise graphs, and beats it by ~7x on the
  * gather/scatter graphs message passing produces — candle's Metal

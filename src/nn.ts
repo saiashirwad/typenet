@@ -53,8 +53,19 @@ export class Linear<
   forward<S extends Shape>(
     x: Tensor<S> & MatMulCheck<S, [In, Out]>,
   ): Tensor<MatMul<S, [In, Out]>> {
-    const y = (x as AnyTensor).matmul(this.weight)
-    return (this.bias ? y.add(this.bias) : y) as any
+    // `forward`'s precondition (`MatMulCheck<S, [In, Out]>` on `x`)
+    // already proves the matmul is shape-valid; the cast below only bridges
+    // generic-deferral: for a generic `S`, TS can't reduce `MatMulCheck` to
+    // `unknown`, so the `other` argument must carry the check explicitly.
+    const y = x.matmul(this.weight as Tensor<[In, Out]> & MatMulCheck<S, [In, Out]>)
+    // Broadcasting a `[Out]` bias over a `[..., Out]` matrix is shape-
+    // preserving at runtime; `Broadcast<MatMul<S,[In,Out]>, [Out]>` does not
+    // reduce to `MatMul<S,[In,Out]>` for generic `S`, so the bias branch
+    // needs the documented double cast rather than `as any`, which would
+    // erase the declared return type entirely.
+    return (this.bias ? y.add(this.bias) : y) as unknown as Tensor<
+      MatMul<S, [In, Out]>
+    >
   }
 }
 

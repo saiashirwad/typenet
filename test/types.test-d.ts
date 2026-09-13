@@ -261,6 +261,20 @@ function _nn() {
 
   // @ts-expect-error wrong input width
   layer.forward(randn([32, 100]))
+
+  // Regression for issue #30: `Linear.forward` must not return `as any`.
+  // The output shape must propagate as a concrete `MatMul<S, [In, Out]>`
+  // literal so downstream code is type-checked against it. A bias-less
+  // layer exercises the pure-matmul branch.
+  const nobias = new Linear(4, 8, { bias: false })
+  const y = nobias.forward(randn([3, 4]))
+  type _3 = Expect<Equal<typeof y.shape, [3, 8]>>
+
+  // ...and a biased layer keeps the same guarantee, including the bias-add
+  // path — the branch that previously forced the `as any` erasure.
+  const biased = new Linear(8, 16)
+  const z = biased.forward(y)
+  type _4 = Expect<Equal<typeof z.shape, [3, 16]>>
 }
 
 import { ReLU, Sequential, sequential, Softmax } from "../src/nn.ts"
@@ -550,54 +564,6 @@ function _compare(a: Tensor<[2, 3]>, b: Tensor<[3]>) {
   a.maximum(zeros([4]))
 
   return { mask, limited, outer }
-}
-
-import { aliveMask, GraphNCA, type GraphTensors, type Percept } from "../examples/gnca/model.ts"
-
-function _gnca(
-  nodes: Tensor<[1024, 16]>,
-  batched: Tensor<[8192, 16]>,
-  graph: GraphTensors<1024, 9574>,
-  batchedGraph: GraphTensors<8192, 76592>,
-  wrongChannels: Tensor<[1024, 8]>,
-  wrongNodes: Tensor<[512, 16]>,
-) {
-  const rule = new GraphNCA(16, 128)
-
-  // The derived widths are literals, not `number`.
-  type _1 = Expect<Equal<Percept<16>, 49>>
-  type _2 = Expect<
-    Equal<typeof rule.inner.weight.shape, [49, 128]>
-  >
-  type _3 = Expect<
-    Equal<typeof rule.gate.weight.shape, [48, 16]>
-  >
-  type _4 = Expect<
-    Equal<typeof rule.outer.weight.shape, [128, 16]>
-  >
-
-  const next = rule.forward(nodes, graph)
-  type _5 = Expect<Equal<typeof next.shape, [1024, 16]>>
-  const nextBatch = rule.forward(batched, batchedGraph)
-  type _6 = Expect<
-    Equal<typeof nextBatch.shape, [8192, 16]>
-  >
-
-  const alive = aliveMask(nodes, graph)
-  type _7 = Expect<Equal<typeof alive.shape, [1024, 1]>>
-  const masked = nodes.mul(alive)
-  type _8 = Expect<Equal<typeof masked.shape, [1024, 16]>>
-
-  // @ts-expect-error a rule built for 16 channels cannot step an 8-channel state
-  rule.forward(wrongChannels, graph)
-
-  // @ts-expect-error the state and the graph must agree on the node count
-  rule.forward(wrongNodes, graph)
-
-  // @ts-expect-error and a batched state needs the batched edge list
-  rule.forward(batched, graph)
-
-  return { next, nextBatch, alive }
 }
 
 type PlusOne<C extends number> = DimAdd<C, 1>
