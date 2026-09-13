@@ -22,40 +22,48 @@ import {
 import { nextSeed, nextStream, randomData } from "./kernels.ts"
 import { force } from "./lazy.ts"
 import { resolveView } from "./shape.ts"
-import type {
-  Broadcast,
-  BroadcastCheck,
-  BroadcastToCheck,
-  Cat,
-  CatCheck,
-  CatN,
-  CatNCheck,
-  DimAt,
-  DimCheck,
-  ErrorMessage,
-  InferShape,
-  IsDynamic,
-  MatMul,
-  MatMulCheck,
-  NestedArray,
-  Permute,
-  PermuteCheck,
-  Rank1Check,
-  ReduceDim,
-  ResizeDim,
-  ResolveView,
-  Shape,
-  Slice,
-  SliceShape,
-  Squeeze,
-  SqueezeDim,
-  SqueezeDimCheck,
-  Stack,
-  Transpose,
-  TransposeCheck,
-  Unsqueeze,
-  UnsqueezeCheck,
-  ViewCheck,
+import {
+  type Broadcast,
+  type BroadcastCheck,
+  type BroadcastToCheck,
+  type Cat,
+  type CatCheck,
+  type CatN,
+  type CatNCheck,
+  type DimAt,
+  type DimCheck,
+  type ErrorMessage,
+  type FlattenCheck,
+  type FlattenShape,
+  flattenShape,
+  type IndexTensor,
+  type InferShape,
+  type IsDynamic,
+  type MatMul,
+  type MatMulCheck,
+  type NestedArray,
+  type Permute,
+  type PermuteCheck,
+  type Prod,
+  type Rank1Check,
+  type ReduceDim,
+  type ResizeDim,
+  type ResolveView,
+  type Shape,
+  type Slice,
+  type SliceShape,
+  type Squeeze,
+  type SqueezeDim,
+  type SqueezeDimCheck,
+  type Stack,
+  type Transpose,
+  type TransposeCheck,
+  type UnflattenCheck,
+  type UnflattenShape,
+  unflattenShape,
+  type Unsqueeze,
+  type UnsqueezeCheck,
+  type ViewCheck,
 } from "./shape.ts"
 import {
   contiguousStrides,
@@ -134,6 +142,31 @@ export function makeStorage(
 
 type Dim0<S extends Shape> = S extends [infer A extends number, ...any[]] ? A : never
 type Dim1<S extends Shape> = S extends [any, infer B extends number, ...any[]] ? B : never
+
+/**
+ * Exact type equality (the standard "distributes over neither side"
+ * trick — two call signatures are mutually assignable only when their
+ * `extends` branches agree, which happens only for identical types).
+ *
+ * `copy_`/`addScaled_` need this rather than {@link BroadcastCheck}
+ * because they never broadcast at run time: a `[1,3]` into a `[2,3]`
+ * would pass a broadcast check and then throw from `shapesEqual` anyway,
+ * which is a worse error than catching it at the call site.
+ *
+ * The check lives on a *fresh* method type parameter (`S2`), never on
+ * `S` directly (`other: Tensor<S>` would make `S` a bare, resolvable
+ * type argument to `Tensor` and — this was measured, not guessed — turn
+ * the whole class invariant in `S`, breaking every `*Check` call site in
+ * the library). Keeping `S` reachable only through a still-generic `S2`
+ * is exactly the shape `add`/`sub`/`BroadcastCheck<S, S2>` already use.
+ */
+type IsSameType<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
+
+type SameShapeCheck<S extends Shape, S2 extends Shape> =
+    IsDynamic<S> extends true ? unknown
+  : IsDynamic<S2> extends true ? unknown
+  : IsSameType<S, S2> extends true ? unknown
+  : ErrorMessage<"shape does not match the receiver">
 
 /**
  * Friend-module access to the private fields. Populated by a static
@@ -228,6 +261,21 @@ export class Tensor<S extends Shape> {
     this.dtype = dtype
   }
 
+  /**
+   * The tensor's own backing buffer — a **live aliased view**, not a copy.
+   * Writing through the returned array mutates this tensor's storage
+   * directly (that is what the `_` mutators do internally), and forcing a
+   * lazy tensor materialises it once and hands back the same buffer on every
+   * later read. Call {@link snapshot} instead when the caller needs bytes
+   * that stay valid across a later `fill_`/`copy_`/`addScaled_`.
+   *
+   * Element type caveat: the declared return type is {@link NumericArray}
+   * (`Float32Array | Float64Array | Int32Array`), but an `int64` tensor's
+   * storage is actually a `BigInt64Array` — indexing it yields a `bigint`,
+   * not a `number`, despite what the type says. Treat `int64` `.data` with
+   * `BigInt64Array` methods (as {@link addScaled_} and {@link toIndex} do
+   * internally), never assume `number` elements from the static type alone.
+   */
   get data(): NumericArray {
     if (isTracing()) {
       const label = tensorNames.get(this as AnyTensor)
@@ -294,8 +342,9 @@ export class Tensor<S extends Shape> {
 
   /**
    * Uniform values in [0, 1), drawn once through the seeded generator —
-   * a plain CPU leaf, unlike `uniform()`, whose graph node redraws per
-   * evaluation. `configure({ seed })` makes the fill reproducible.
+   * a plain CPU leaf, unlike `rand(..., { resample: "perCall" })`, whose
+   * graph node redraws per evaluation. `configure({ seed })` makes the
+   * fill reproducible.
    */
   static rand<const Sh extends Shape>(
     shape: Sh,
@@ -352,6 +401,25 @@ export class Tensor<S extends Shape> {
       [],
       "float32",
     ) as any
+  }
+
+  /**
+   * An {@link IndexTensor} leaf built directly from data, checking
+   * integrality at runtime — the other of the two ways to make one
+   * (see {@link toIndex}).
+   */
+  static indices<const Sh extends Shape>(
+    data: ArrayLike<number>,
+    shape: Sh,
+  ): IndexTensor<Sh> {
+    for (let i = 0; i < data.length; i++) {
+      if (!Number.isInteger(data[i])) {
+        throw new Error(
+          `Tensor.indices(): element ${i} is ${data[i]}, not an integer`,
+        )
+      }
+    }
+    return fromFlat(data, shape, "int32") as unknown as IndexTensor<Sh>
   }
 
   /**
@@ -435,6 +503,139 @@ export class Tensor<S extends Shape> {
       this.dtype,
     )
     return withGrad(t, "clone", [this], g => [g]) as any
+  }
+
+  // ---------------------------------------------------------------------
+  // Safe mutation primitives (W1.8).
+  //
+  // typenet has no in-place op API: autograd never sees a mutation, and
+  // none of these are graph nodes. They exist for initialisation and
+  // assignment — filling a freshly created parameter, restoring an
+  // optimizer buffer, applying a gradient step to a leaf — never for
+  // rewriting a value an active computation still depends on. Every one
+  // of them therefore refuses to run while a tape is recording through
+  // this tensor (`taped`) or while `compile()` is tracing (`isTracing()`):
+  // both are moments where "this tensor's bytes" is a promise other code
+  // is relying on staying put, and a silent in-place write would corrupt
+  // the tape or bake a mid-trace value into the recorded graph. Read the
+  // current bytes safely in either situation with `snapshot()`, which
+  // never mutates and never aliases.
+  // ---------------------------------------------------------------------
+
+  private assertMutable(method: string): void {
+    if (isTracing()) {
+      const label = tensorNames.get(this as AnyTensor)
+      throw new Error(
+        `${method}() cannot mutate a tensor while compile() is tracing`
+          + (label ? ` (mutating "${label}")` : "")
+          + " — read snapshot() for a safe copy, or mutate outside the trace",
+      )
+    }
+    if (this.taped) {
+      throw new Error(
+        `${method}() cannot mutate a tensor of shape ${showShape(this.shape)} `
+          + "while an autograd tape is recording through it — call snapshot() "
+          + "for a safe copy, or detach() the tensor first",
+      )
+    }
+  }
+
+  /** Overwrite every element with `v`, converted to this tensor's dtype. */
+  fill_(v: number): this {
+    this.assertMutable("fill_")
+    this.#cpu = filledData(this.numel, this.dtype, v)
+    return this
+  }
+
+  /** `fill_(0)`. */
+  zero_(): this {
+    this.assertMutable("zero_")
+    this.#cpu = filledData(this.numel, this.dtype, 0)
+    return this
+  }
+
+  /**
+   * Overwrite this tensor's bytes with `other`'s, converting dtype if
+   * they differ. Shapes must match exactly — narrowing or broadcasting
+   * a copy_ is a bug at the call site, not a shape this method resolves.
+   */
+  copy_<S2 extends Shape>(other: Tensor<S2> & SameShapeCheck<S, S2>): this
+  copy_(other: AnyTensor): this {
+    this.assertMutable("copy_")
+    const src = other as AnyTensor
+    if (!shapesEqual(this.shape, src.shape)) {
+      throw new Error(
+        `copy_(): source shape ${showShape(src.shape)} does not match `
+          + `destination shape ${showShape(this.shape)}`,
+      )
+    }
+    this.#cpu = src.dtype === this.dtype
+      ? (src.data as TypedArray).slice()
+      : convertData(src.data, this.dtype)
+    return this
+  }
+
+  /**
+   * `this += alpha * other`, elementwise, in place — the fused
+   * multiply-add an optimizer step is built out of (`param.addScaled_(grad,
+   * -lr)`). Shapes must match exactly, same as {@link copy_}.
+   */
+  addScaled_<S2 extends Shape>(other: Tensor<S2> & SameShapeCheck<S, S2>, alpha: number): this
+  addScaled_(other: AnyTensor, alpha: number): this {
+    this.assertMutable("addScaled_")
+    const src = other as AnyTensor
+    if (!shapesEqual(this.shape, src.shape)) {
+      throw new Error(
+        `addScaled_(): operand shape ${showShape(src.shape)} does not match `
+          + `receiver shape ${showShape(this.shape)}`,
+      )
+    }
+    force(this as AnyTensor)
+    const dst = this.#cpu!
+    const rhs = src.data
+    if (dst instanceof BigInt64Array) {
+      for (let i = 0; i < dst.length; i++) {
+        dst[i] = BigInt(Math.trunc(Number(dst[i]) + alpha * Number(rhs[i])))
+      }
+    } else {
+      for (let i = 0; i < dst.length; i++) {
+        dst[i] = dst[i]! + alpha * rhs[i]!
+      }
+    }
+    return this
+  }
+
+  /**
+   * A fresh copy of this tensor's current data. Unlike {@link data}, the
+   * result never aliases this tensor's storage, so it stays valid across
+   * a later `fill_`/`copy_`/`addScaled_` — and unlike `.data`, it is not
+   * blocked by an active `compile()` trace, since copying already-resident
+   * bytes out never reads back into the graph being built.
+   */
+  snapshot(): NumericArray {
+    force(this as AnyTensor)
+    return (this.#cpu as NumericArray).slice() as NumericArray
+  }
+
+  /**
+   * Brand this tensor as an {@link IndexTensor}, checking integrality at
+   * runtime: int32/int64 storage always qualifies, a float storage must
+   * hold only integral values. The brand is a compile-time marker only —
+   * this returns the same tensor, not a copy.
+   */
+  toIndex(): IndexTensor<S> {
+    if (this.dtype !== "int32" && this.dtype !== "int64") {
+      const data = this.data
+      for (let i = 0; i < data.length; i++) {
+        if (!Number.isInteger(data[i])) {
+          throw new Error(
+            `toIndex(): element ${i} is ${data[i]}, not an integer — `
+              + "index tensors must be int32/int64 or an integral float",
+          )
+        }
+      }
+    }
+    return this as unknown as IndexTensor<S>
   }
 
   // Debug label, shown by printGraph(). Metadata only — no effect on
@@ -1026,6 +1227,47 @@ export class Tensor<S extends Shape> {
     return this.view(shape as any) as any
   }
 
+  /**
+   * Collapse axes `from..to` (inclusive) into one whose extent is their
+   * product — the generic-dim reshape path (D21). `view()` needs the
+   * element count to reduce to a literal, so `[B, T, D] -> [B*T, D]` is
+   * unavailable to it while `B`/`T` are generic; this is pure tuple
+   * surgery and reduces exactly either way. Agrees with `view()` on any
+   * shape where both are legal.
+   */
+  flatten<const F extends number, const T extends number>(
+    from: F & FlattenCheck<S, F, T>,
+    to: T,
+  ): Tensor<FlattenShape<S, F, T>>
+  /** Fold every axis into one. */
+  flatten(): Tensor<[Prod<S>]>
+  flatten(from?: number, to?: number): AnyTensor {
+    const target = from === undefined
+      ? [this.numel]
+      : flattenShape([...this.shape], from, to ?? from)
+    const out = reshapeRaw(this, target)
+    return withGrad(out, "flatten", [this], g => [
+      reshapeRaw(g, [...this.shape]),
+    ]) as any
+  }
+
+  /**
+   * Split axis `dim` into `sizes`, whose product must equal that axis's
+   * extent — the inverse of {@link flatten}, and, chained with
+   * {@link permute}, the generic-dim way to split or merge a head
+   * dimension that `view()` cannot express (D21).
+   */
+  unflatten<const D extends number, const Sizes extends number[]>(
+    dim: D & UnflattenCheck<S, D, Sizes>,
+    sizes: Sizes,
+  ): Tensor<UnflattenShape<S, D, Sizes>> {
+    const target = unflattenShape([...this.shape], dim as number, sizes)
+    const out = reshapeRaw(this, target)
+    return withGrad(out, "unflatten", [this], g => [
+      reshapeRaw(g, [...this.shape]),
+    ]) as any
+  }
+
   squeeze(): Tensor<Squeeze<S>>
   squeeze<D extends number>(
     dim: D & SqueezeDimCheck<S, D>,
@@ -1290,6 +1532,16 @@ export class Tensor<S extends Shape> {
     }
     return (lhs as AnyTensor).pow(rhs)
   }
+}
+
+/**
+ * `numel` copies of `v`, converted through {@link convertData} so a
+ * fill_/zero_ into int32/int64 storage gets exactly the same conversion
+ * (and the same integrality error, for int64) as every other dtype
+ * boundary in the library.
+ */
+function filledData(numel: number, dtype: DType, v: number): TypedArray {
+  return convertData(new Array(numel).fill(v), dtype)
 }
 
 function coerce(
