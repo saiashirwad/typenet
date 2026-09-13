@@ -15,3 +15,6 @@ coverage/
 # native backend build artifacts
 native/target/
 native/*.node
+
+# smoke benchmark results are per-run noise
+bench/results/smoke/
