@@ -23,6 +23,9 @@ export type NativeModule = {
   releaseGraph(handle: number): void
   preparedGraphCount(): number
   deviceName(): string
+  counters(): string
+  deviceInfo(): string
+  takeProfile(): string
 }
 
 let moduleCache: NativeModule | null | undefined
@@ -166,4 +169,30 @@ export function releaseGraphNative(handle: number): void {
 
 export function preparedGraphCountNative(): number {
   return withNative(mod => mod.preparedGraphCount(), () => 0)
+}
+
+/**
+ * The §2.9 structural counters (`prepares`, `instrs`, `fusedRegions`,
+ * `programCacheHits`, ...), parsed from the native addon's JSON. A field
+ * this runtime cannot measure yet is `-1`, never `0`. `{}` when the addon
+ * is not built.
+ */
+export function nativeCounters(): Record<string, unknown> {
+  return withNative(mod => JSON.parse(mod.counters()) as Record<string, unknown>, () => ({}))
+}
+
+/**
+ * Device name plus every declared `TYPENET_*` kill switch and whether
+ * today's runtime actually honours it. `{}` when the addon is not built.
+ */
+export function nativeDeviceInfo(): Record<string, unknown> {
+  return withNative(mod => JSON.parse(mod.deviceInfo()) as Record<string, unknown>, () => ({}))
+}
+
+/**
+ * Op-kind timings gathered since the last call (`TYPENET_PROFILE=1` only;
+ * empty otherwise), as a text table. `""` when the addon is not built.
+ */
+export function nativeProfile(): string {
+  return withNative(mod => mod.takeProfile(), () => "")
 }

@@ -2,12 +2,208 @@ use candle_core::{DType, Device, Tensor};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use rayon::prelude::*;
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 fn to_napi_err(err: candle_core::Error) -> Error {
     Error::new(Status::GenericFailure, err.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Structural counters (§2.9 of PLAN-V2.md). The key list on `counters()` is
+// normative: every field it emits is spelled out there, and a counter this
+// runtime cannot yet measure (no arena, no resident pool, no CSR builder, no
+// per-instruction Program IR) reports `-1`, never `0` — see `counters()`.
+// Everything below is a real, wired count, not a placeholder.
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct Counters {
+    /// Calls into `prepareGraph` (one per compiled function, however many
+    /// times it is later invoked — see `evalPrepared`).
+    prepares: AtomicU64,
+    /// Gather/scatter index tensors actually converted to u32 (cache
+    /// misses in `cached_index`); a replayed compiled step re-reads the
+    /// cached conversion and does not count again.
+    index_builds: AtomicU64,
+    /// Live graph nodes across every plan actually built (cache misses
+    /// only) — the size of the programs this process has prepared.
+    instrs: AtomicU64,
+    /// Elementwise fusion groups created across every plan actually built.
+    fused_regions: AtomicU64,
+    /// Nodes absorbed into a fusion group beyond its leader, i.e. what the
+    /// fusion pass matched — `matchCounts.fusion`.
+    fusion_matches: AtomicU64,
+    /// Matmul graph nodes evaluated, on either evaluator.
+    gemm_calls: AtomicU64,
+    /// Times the GEMV-sum rewrite (dim-0 sum of a wide matrix as a
+    /// ones-row matmul) fired in `eval_reduce`.
+    rowwise_calls: AtomicU64,
+    /// Live nodes evaluated through the candle-backed evaluator
+    /// (`run_graph`); the loop evaluator never touches candle.
+    candle_dispatches: AtomicU64,
+    /// `prepared()`'s JSON-keyed plan cache: hits, misses, and how many
+    /// entries a full-cache clear evicted.
+    program_cache_hits: AtomicU64,
+    program_cache_misses: AtomicU64,
+    program_cache_evictions: AtomicU64,
+    /// Wall time actually spent inside `prepareGraph` / `evalPrepared`,
+    /// accumulated across every call.
+    prepare_ns: AtomicU64,
+    eval_ns: AtomicU64,
+}
+
+static COUNTERS: Counters = Counters {
+    prepares: AtomicU64::new(0),
+    index_builds: AtomicU64::new(0),
+    instrs: AtomicU64::new(0),
+    fused_regions: AtomicU64::new(0),
+    fusion_matches: AtomicU64::new(0),
+    gemm_calls: AtomicU64::new(0),
+    rowwise_calls: AtomicU64::new(0),
+    candle_dispatches: AtomicU64::new(0),
+    program_cache_hits: AtomicU64::new(0),
+    program_cache_misses: AtomicU64::new(0),
+    program_cache_evictions: AtomicU64::new(0),
+    prepare_ns: AtomicU64::new(0),
+    eval_ns: AtomicU64::new(0),
+};
+
+/// Current size of `prepared()`'s JSON-keyed plan cache — the `programs`
+/// counter.
+fn program_count() -> u64 {
+    PLAN_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .len() as u64
+}
+
+/// A counter this runtime cannot measure yet: always `-1`, never `0`, so a
+/// caller can tell "not wired" from "measured zero".
+fn unmeasured() -> serde_json::Value {
+    serde_json::Value::from(-1i64)
+}
+
+/// The §2.9 structural counters, as a BTreeMap-ordered JSON object so key
+/// order is stable across calls regardless of any dependency's
+/// `serde_json/preserve_order` feature.
+#[napi(js_name = "counters")]
+pub fn counters() -> String {
+    let mut m: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    m.insert("prepares".into(), COUNTERS.prepares.load(Ordering::Relaxed).into());
+    m.insert("indexBuilds".into(), COUNTERS.index_builds.load(Ordering::Relaxed).into());
+    m.insert("instrs".into(), COUNTERS.instrs.load(Ordering::Relaxed).into());
+    m.insert("fusedRegions".into(), COUNTERS.fused_regions.load(Ordering::Relaxed).into());
+    m.insert("gemmCalls".into(), COUNTERS.gemm_calls.load(Ordering::Relaxed).into());
+    m.insert("rowwiseCalls".into(), COUNTERS.rowwise_calls.load(Ordering::Relaxed).into());
+    // No CSR structure exists in this runtime yet (future rowwise work).
+    m.insert("csrBuilds".into(), unmeasured());
+    // No arena / allocator instrumentation exists yet.
+    m.insert("arenaBytes".into(), unmeasured());
+    m.insert("peakLiveBytes".into(), unmeasured());
+    m.insert("allocationsDuringRun".into(), unmeasured());
+    // No resident buffer pool exists yet.
+    m.insert("residentSlots".into(), unmeasured());
+    m.insert("candleDispatches".into(), COUNTERS.candle_dispatches.load(Ordering::Relaxed).into());
+    m.insert("programCacheHits".into(), COUNTERS.program_cache_hits.load(Ordering::Relaxed).into());
+    m.insert("programCacheMisses".into(), COUNTERS.program_cache_misses.load(Ordering::Relaxed).into());
+    m.insert(
+        "programCacheEvictions".into(),
+        COUNTERS.program_cache_evictions.load(Ordering::Relaxed).into(),
+    );
+    m.insert("programs".into(), program_count().into());
+    let mut match_counts: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    match_counts.insert("fusion".into(), COUNTERS.fusion_matches.load(Ordering::Relaxed).into());
+    m.insert("matchCounts".into(), serde_json::to_value(&match_counts).unwrap());
+    let mut phase_ns: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    phase_ns.insert("prepare".into(), COUNTERS.prepare_ns.load(Ordering::Relaxed).into());
+    phase_ns.insert("eval".into(), COUNTERS.eval_ns.load(Ordering::Relaxed).into());
+    m.insert("phaseNs".into(), serde_json::to_value(&phase_ns).unwrap());
+    // No arena/resident-pool store slots exist yet — see `storeSlotCount()`.
+    m.insert("storeSlots".into(), unmeasured());
+    serde_json::to_string(&m).unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// Kill switches (§2.9), read once from env at first use. `TYPENET_NO_FUSION`
+// and `TYPENET_PARALLEL_MIN` / `TYPENET_CHUNK` are wired into today's
+// runtime (fusion planning and the chunked-parallel threshold); the rest
+// are parsed and reported by `deviceInfo()` as declared but not yet wired.
+// ---------------------------------------------------------------------------
+
+struct Switches {
+    no_fusion: bool,
+    no_arena: bool,
+    no_peephole: bool,
+    no_simd: bool,
+    no_parallel: bool,
+    threads: Option<usize>,
+    parallel_min: Option<usize>,
+    chunk: Option<usize>,
+    trace: Option<String>,
+}
+
+impl Switches {
+    fn load() -> Self {
+        let flag = |name: &str| std::env::var(name).map(|v| v == "1").unwrap_or(false);
+        let num = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<usize>().ok());
+        Switches {
+            no_fusion: flag("TYPENET_NO_FUSION"),
+            no_arena: flag("TYPENET_NO_ARENA"),
+            no_peephole: flag("TYPENET_NO_PEEPHOLE"),
+            no_simd: flag("TYPENET_NO_SIMD"),
+            no_parallel: flag("TYPENET_NO_PARALLEL"),
+            threads: num("TYPENET_THREADS"),
+            parallel_min: num("TYPENET_PARALLEL_MIN"),
+            chunk: num("TYPENET_CHUNK"),
+            trace: std::env::var("TYPENET_TRACE").ok(),
+        }
+    }
+}
+
+fn switches() -> &'static Switches {
+    static SWITCHES: OnceLock<Switches> = OnceLock::new();
+    SWITCHES.get_or_init(Switches::load)
+}
+
+#[derive(Serialize)]
+struct SwitchInfo {
+    value: serde_json::Value,
+    wired: bool,
+}
+
+fn opt_num(v: Option<usize>) -> serde_json::Value {
+    v.map(|v| serde_json::Value::from(v as u64)).unwrap_or(serde_json::Value::Null)
+}
+
+/// Device plus every declared `TYPENET_*` switch and whether today's
+/// runtime actually honours it.
+#[napi(js_name = "deviceInfo")]
+pub fn device_info() -> String {
+    let s = switches();
+    let mut out: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    out.insert("device".into(), serde_json::Value::String(device_name()));
+    let mut sw: BTreeMap<String, SwitchInfo> = BTreeMap::new();
+    sw.insert("TYPENET_NO_FUSION".into(), SwitchInfo { value: s.no_fusion.into(), wired: true });
+    sw.insert("TYPENET_PARALLEL_MIN".into(), SwitchInfo { value: opt_num(s.parallel_min), wired: true });
+    sw.insert("TYPENET_CHUNK".into(), SwitchInfo { value: opt_num(s.chunk), wired: true });
+    sw.insert("TYPENET_NO_ARENA".into(), SwitchInfo { value: s.no_arena.into(), wired: false });
+    sw.insert("TYPENET_NO_PEEPHOLE".into(), SwitchInfo { value: s.no_peephole.into(), wired: false });
+    sw.insert("TYPENET_NO_SIMD".into(), SwitchInfo { value: s.no_simd.into(), wired: false });
+    sw.insert("TYPENET_NO_PARALLEL".into(), SwitchInfo { value: s.no_parallel.into(), wired: false });
+    sw.insert("TYPENET_THREADS".into(), SwitchInfo { value: opt_num(s.threads), wired: false });
+    sw.insert(
+        "TYPENET_TRACE".into(),
+        SwitchInfo {
+            value: s.trace.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+            wired: false,
+        },
+    );
+    out.insert("switches".into(), serde_json::to_value(&sw).unwrap());
+    serde_json::to_string(&out).unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -228,13 +424,13 @@ impl LeafTy {
 }
 
 /// The byte slice of one leaf, bounds-checked against the buffer.
-fn leaf_bytes<'a>(
-    leaves: &'a [u8],
+fn leaf_bytes(
+    leaves: &[u8],
     leaf: usize,
     offset: usize,
     n: usize,
     width: usize,
-) -> candle_core::Result<&'a [u8]> {
+) -> candle_core::Result<&[u8]> {
     let len = n.checked_mul(width).ok_or_else(|| {
         candle_core::Error::Msg(format!("leaf {leaf} byte size overflows"))
     })?;
@@ -855,6 +1051,12 @@ fn plan_fusion(
             consumers[input] += 1;
         }
     }
+    if switches().no_fusion {
+        // TYPENET_NO_FUSION=1: skip the fusion pass entirely so every
+        // elementwise node runs as its own kernel — the A/B baseline the
+        // fusion pass is measured against.
+        return (FusionPlan { group_of: vec![None; n], groups: Vec::new() }, consumers);
+    }
     let mut group_of: Vec<Option<usize>> = vec![None; n];
     let mut groups: Vec<Vec<usize>> = Vec::new();
     // Reverse topo order: consumers get to be leaders before their inputs
@@ -1176,17 +1378,32 @@ static PLAN_CACHE: OnceLock<Mutex<HashMap<String, Arc<PreparedGraph>>>> = OnceLo
 fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
     let cache = PLAN_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(p) = cache.lock().unwrap().get(graph_json) {
+        COUNTERS.program_cache_hits.fetch_add(1, Ordering::Relaxed);
         return Ok(p.clone());
     }
+    COUNTERS.program_cache_misses.fetch_add(1, Ordering::Relaxed);
     let graph: Graph = serde_json::from_str(graph_json)
         .map_err(|e| Error::new(Status::InvalidArg, format!("invalid graph JSON: {e}")))?;
     let mut plan = PreparedGraph::prepare(graph).map_err(to_napi_err)?;
     localize(&mut plan);
+    // Program-size counters, taken once per plan actually built (not on a
+    // cache hit, so a steady loop of compiled-fn calls — which never
+    // rebuilds the plan — leaves these unchanged).
+    let live_instrs = plan.live.iter().filter(|&&l| l).count() as u64;
+    COUNTERS.instrs.fetch_add(live_instrs, Ordering::Relaxed);
+    COUNTERS.fused_regions.fetch_add(plan.groups.len() as u64, Ordering::Relaxed);
+    let matched: u64 = plan
+        .groups
+        .iter()
+        .map(|g| (g.small_members.len() + g.main_members.len()).saturating_sub(1) as u64)
+        .sum();
+    COUNTERS.fusion_matches.fetch_add(matched, Ordering::Relaxed);
     let prep = Arc::new(plan);
     let mut map = cache.lock().unwrap();
     // Bounded: compiled functions cache one plan each; a pathological
     // caller building fresh graphs forever just falls back to re-planning.
     if map.len() >= 128 {
+        COUNTERS.program_cache_evictions.fetch_add(map.len() as u64, Ordering::Relaxed);
         map.clear();
     }
     map.insert(graph_json.to_string(), prep.clone());
@@ -1245,6 +1462,7 @@ fn leaf_offsets(prep: &PreparedGraph) -> candle_core::Result<(Vec<(usize, usize)
 /// Parse and plan a graph once, returning a handle for `evalPrepared`.
 #[napi(js_name = "prepareGraph")]
 pub fn prepare_graph(graph_json: String) -> Result<u32> {
+    let started = std::time::Instant::now();
     let prep = prepared(&graph_json)?;
     let (offsets, total) = leaf_offsets(&prep).map_err(to_napi_err)?;
     let mut next = NEXT_HANDLE.lock().unwrap();
@@ -1258,6 +1476,8 @@ pub fn prepare_graph(graph_json: String) -> Result<u32> {
             offsets,
         },
     );
+    COUNTERS.prepares.fetch_add(1, Ordering::Relaxed);
+    COUNTERS.prepare_ns.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
     Ok(handle)
 }
 
@@ -1486,23 +1706,34 @@ fn read_flat(
 
 /// How many elements one thread takes at a time. Small enough that a big
 /// pass spreads over the cores, large enough that rayon's bookkeeping and
-/// the per-chunk scratch allocation stay noise.
-const CHUNK: usize = 8192;
+/// the per-chunk scratch allocation stay noise. Overridable with
+/// `TYPENET_CHUNK` (see `chunk_size`).
+const CHUNK_DEFAULT: usize = 8192;
 
 /// Below this many elements a pass runs on the calling thread: the work is
-/// smaller than the cost of handing it out.
-const PARALLEL_MIN: usize = 16384;
+/// smaller than the cost of handing it out. Overridable with
+/// `TYPENET_PARALLEL_MIN` (see `parallel_min`).
+const PARALLEL_MIN_DEFAULT: usize = 16384;
+
+fn chunk_size() -> usize {
+    switches().chunk.unwrap_or(CHUNK_DEFAULT)
+}
+
+fn parallel_min() -> usize {
+    switches().parallel_min.unwrap_or(PARALLEL_MIN_DEFAULT)
+}
 
 /// Run `body` over `out` in parallel chunks (or in place if it is small),
 /// giving it each chunk together with the flat index the chunk starts at.
 fn over_chunks(out: &mut [f32], body: impl Fn(usize, &mut [f32]) + Send + Sync) {
-    if out.len() < PARALLEL_MIN {
+    if out.len() < parallel_min() {
         body(0, out);
         return;
     }
-    out.par_chunks_mut(CHUNK)
+    let chunk = chunk_size();
+    out.par_chunks_mut(chunk)
         .enumerate()
-        .for_each(|(c, slice)| body(c * CHUNK, slice));
+        .for_each(|(c, slice)| body(c * chunk, slice));
 }
 
 /// One elementwise op over its own output shape, into a fresh buffer.
@@ -1724,15 +1955,18 @@ fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Resul
                     prep.shapes[idx].clone(),
                 )
             }
-            Node::Matmul { a, b, .. } => Buf::owned(
-                cpu_matmul(
-                    &get(*a)?.packed(),
-                    &prep.shapes[*a],
-                    &get(*b)?.packed(),
-                    &prep.shapes[*b],
-                )?,
-                prep.shapes[idx].clone(),
-            ),
+            Node::Matmul { a, b, .. } => {
+                COUNTERS.gemm_calls.fetch_add(1, Ordering::Relaxed);
+                Buf::owned(
+                    cpu_matmul(
+                        &get(*a)?.packed(),
+                        &prep.shapes[*a],
+                        &get(*b)?.packed(),
+                        &prep.shapes[*b],
+                    )?,
+                    prep.shapes[idx].clone(),
+                )
+            }
             Node::Reduce {
                 kind,
                 dim,
@@ -1911,9 +2145,7 @@ fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
     if c.is_empty() || k == 0 {
         return;
     }
-    let block = ((m + rayon::current_num_threads() - 1)
-        / rayon::current_num_threads())
-    .max(64);
+    let block = m.div_ceil(rayon::current_num_threads()).max(64);
     let run = |rows: usize, a: &[f32], c: &mut [f32]| unsafe {
         cblas_sgemm(
             CBLAS_ROW_MAJOR,
@@ -1947,9 +2179,7 @@ fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
     if c.is_empty() || k == 0 {
         return;
     }
-    let block = ((m + rayon::current_num_threads() - 1)
-        / rayon::current_num_threads())
-    .max(64);
+    let block = m.div_ceil(rayon::current_num_threads()).max(64);
     c.par_chunks_mut((block * n).max(1))
         .zip(a.par_chunks((block * k).max(1)))
         .for_each(|(c, a)| {
@@ -2218,7 +2448,7 @@ fn tiny_cat(
         out[ablock..].copy_from_slice(&bdata[i * bblock..(i + 1) * bblock]);
     };
     let block = (ablock + bblock).max(1);
-    if out.len() < PARALLEL_MIN {
+    if out.len() < parallel_min() {
         out.chunks_mut(block).enumerate().for_each(|(i, out)| copy(i, out));
     } else {
         out.par_chunks_mut(block)
@@ -2279,6 +2509,7 @@ fn eval_reduce(
                 && a.rank() == 2
                 && a.dim(0)? >= GEMV_SUM_MIN_ROWS =>
         {
+            COUNTERS.rowwise_calls.fetch_add(1, Ordering::Relaxed);
             let rows = a.dim(0)?;
             let row = match ones.get(&rows) {
                 Some(row) => row.clone(),
@@ -2410,6 +2641,7 @@ fn cached_index(
 ) -> candle_core::Result<Tensor> {
     if cache[at].is_none() {
         cache[at] = Some(index_u32(index)?);
+        COUNTERS.index_builds.fetch_add(1, Ordering::Relaxed);
     }
     Ok(cache[at].as_ref().unwrap().clone())
 }
@@ -2512,6 +2744,7 @@ fn run_graph(
                 ..
             } => eval_unary(kind, *parameter, get(*input)?)?,
             Node::Matmul { a, b, .. } => {
+                COUNTERS.gemm_calls.fetch_add(1, Ordering::Relaxed);
                 let a = get(*a)?;
                 let b = get(*b)?;
                 let ar = a.rank();
@@ -2618,6 +2851,7 @@ fn run_graph(
                 device,
             )?,
         };
+        COUNTERS.candle_dispatches.fetch_add(1, Ordering::Relaxed);
         if let Some(started) = started {
             record(
                 op_kind(node),
@@ -2723,7 +2957,10 @@ fn vec_readback(mut vec: Vec<f32>) -> Readback {
 // problem without a sampling profiler.
 // ---------------------------------------------------------------------------
 
-static PROFILE: Mutex<Option<Vec<(String, f64, u64, u64)>>> = Mutex::new(None);
+/// Per-op-kind (name, seconds, elements, calls) rows.
+type ProfileRows = Vec<(String, f64, u64, u64)>;
+
+static PROFILE: Mutex<Option<ProfileRows>> = Mutex::new(None);
 
 fn profiling() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -2813,6 +3050,13 @@ pub fn sgemm_entry(
 
 /// Run a prepared graph on the evaluator it was planned for.
 fn evaluate(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> Result<Readback> {
+    let started = std::time::Instant::now();
+    let result = evaluate_inner(prep, leaves, seed);
+    COUNTERS.eval_ns.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    result
+}
+
+fn evaluate_inner(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> Result<Readback> {
     let target = forced_target().map_err(to_napi_err)?.unwrap_or(prep.target);
     if target == Target::Loops {
         let data = execute(prep, leaves, seed).map_err(to_napi_err)?;
