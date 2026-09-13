@@ -1,6 +1,7 @@
 "use tsover"
 
-import { Adam, crossEntropy, eye, Module, rand, randn, Tensor } from "../index.ts"
+import { Adam, crossEntropy, eye, Module, randn, Tensor } from "../index.ts"
+import * as init from "../src/nn/init.ts"
 import { accuracy } from "./util.ts"
 
 class GATHead<FIn extends number, FOut extends number> extends Module {
@@ -10,8 +11,10 @@ class GATHead<FIn extends number, FOut extends number> extends Module {
 
   constructor(fin: FIn, fout: FOut) {
     super()
-    const k = 1 / Math.sqrt(fin)
-    this.W = (rand([fin, fout]) * (2 * k) - k).requiresGrad()
+    // `W` is `[FIn, FOut]`, the same matmul-order layout as `Linear`'s
+    // weight — `fanMode: "fanOut"` lands on `fanIn`, reproducing the
+    // `1/sqrt(fin)` bound this used to re-derive inline. See linear.ts.
+    this.W = init.kaimingUniform([fin, fout], { fanMode: "fanOut" }).requiresGrad()
     this.attSrc = (randn([fout, 1]) * 0.1).requiresGrad()
     this.attDst = (randn([fout, 1]) * 0.1).requiresGrad()
   }

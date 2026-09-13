@@ -1,5 +1,6 @@
 import type { MatMul, MatMulCheck, Shape } from "../../shape.ts"
 import { Tensor } from "../../tensor.ts"
+import * as init from "../init.ts"
 import { Module } from "../module.ts"
 
 export class Linear<
@@ -19,10 +20,21 @@ export class Linear<
     super()
     this.inFeatures = inFeatures
     this.outFeatures = outFeatures
-    const k = 1 / Math.sqrt(inFeatures)
-    this.weight = Tensor.rand([inFeatures, outFeatures])
-      .mul(2 * k)
-      .sub(k)
+    // `weight` is `[In, Out]` (matmul order), transposed relative to
+    // PyTorch's `[Out, In]` — `fanMode: "fanOut"` reads `init`'s
+    // fan table (dim 0 = "fan-out") to land on `fanIn = inFeatures`,
+    // reproducing this layer's old `1/sqrt(fanIn)` bound bit for bit
+    // (init.ts's `kaimingBound`, W1.9's accept #2).
+    this.weight = init.kaimingUniform_(
+      // Explicit type argument: inferring `Sh` from `[inFeatures,
+      // outFeatures]` through a second, outer generic call
+      // (`kaimingUniform_<T extends AnyTensor>`) widens it to the bare
+      // `Shape` instead of the tuple `const Sh` would otherwise pick up
+      // directly — a TS inference quirk with nested generic calls, not
+      // a runtime concern.
+      Tensor.zeros<[In, Out]>([inFeatures, outFeatures]),
+      { fanMode: "fanOut" },
+    )
       .detach()
       .requiresGrad()
     this.bias = options.bias === false
