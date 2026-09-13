@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (simd=${{ matrix.simd }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        simd: [default, no_simd]
+    env:
+      TYPENET_NO_SIMD: ${{ matrix.simd == 'no_simd' && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: pnpm store path
+        id: pnpm-cache
+        run: echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('native/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm build:native
+        run: pnpm build:native
+
+      - name: pnpm test:ci
+        run: pnpm test:ci
+
+  bench:
+    name: bench (indicative, not a gate)
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm build:native
+        run: pnpm build:native
+
+      - name: pnpm bench:micro
+        run: pnpm bench:micro
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results
+          path: bench/results/*.jsonl
+          if-no-files-found: warn
