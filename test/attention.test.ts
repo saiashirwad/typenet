@@ -1,14 +1,13 @@
-// W5.2-A: MultiHeadAttention, TransformerBlock, sdpa, ModuleList, Residual.
+// MultiHeadAttention, TransformerBlock, sdpa, ModuleList, Residual.
 //
-// Gate C11 lives at the bottom of this file: the WHOLE block gradchecks
+// The whole-block gradcheck lives at the bottom of this file: it gradchecks
 // against an eager central-difference reference on all four paths (eager /
-// lazy / native / compiled). "native" here means the native backend is
-// switched ON and the graph is handed to `serializeLazyGraph`, which —
-// until A-L1 lands the lowering half (PLAN-V2 §5A.9's showcase cut parks
-// it) — returns `null` for any graph containing `layerNorm`/`softmax`/
-// `gelu`/`dropout` and routes the whole thing to the JS interpreter. That
-// is a real, distinct code path and it is asserted AS a fallback through
-// `jsCounters()`, not quietly run twice and called two paths.
+// lazy / native / compiled). "Native" here means the graph is handed to
+// `serializeLazyGraph`, which returns `null` for any graph containing
+// `layerNorm`/`softmax`/`gelu`/`dropout` (no lowering yet) and routes the
+// whole thing to the JS interpreter. That is a real, distinct code path,
+// asserted as a fallback through `jsCounters()`, not quietly run twice and
+// called two paths.
 
 import { afterEach, describe, expect, it } from "vitest"
 import { noGrad } from "../src/autograd.ts"
@@ -28,7 +27,7 @@ afterEach(() => {
   disableNative()
 })
 
-// mulberry32 — the same small seeded PRNG the rest of the suite uses, so
+// mulberry32: the same small seeded PRNG the rest of the suite uses, so
 // every tensor in this file is reproducible and nothing here is flaky.
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
@@ -82,13 +81,10 @@ function count(xs: readonly string[], op: string): number {
   return xs.filter(x => x === op).length
 }
 
-// ---------------------------------------------------------------------------
 // An independent reference: plain JS loops over the layer's own weights,
 // with no typenet op in sight. Comparing `MultiHeadAttention` against a
 // composition of typenet ops would only prove the layer calls the ops it
 // calls; this proves it computes attention.
-// ---------------------------------------------------------------------------
-
 function referenceAttention(
   x: Float32Array,
   dims: { B: number; T: number; D: number; H: number },
@@ -154,10 +150,6 @@ function referenceAttention(
   }
   return out
 }
-
-// ---------------------------------------------------------------------------
-// 1. MultiHeadAttention
-// ---------------------------------------------------------------------------
 
 describe("MultiHeadAttention", () => {
   it("derives the head width and stores the BARE h, not the check intersection", () => {
@@ -227,7 +219,8 @@ describe("MultiHeadAttention", () => {
 
     const causal = run(true)
     // Every position before the last is bit-identical: `toBe`, not a
-    // tolerance — a causal mask that leaks is not a rounding difference.
+    // tolerance, because a causal mask that leaks is not a rounding
+    // difference.
     for (let i = 0; i < (dims.T - 1) * dims.D; i++) {
       expect(causal.after[i], `causal position ${Math.floor(i / dims.D)}`).toBe(causal.before[i])
     }
@@ -276,7 +269,7 @@ describe("MultiHeadAttention", () => {
     }
   })
 
-  it("gate C2: eager, lazy and native agree on the attention forward", () => {
+  it("eager, lazy and native agree on the attention forward", () => {
     const mha = new MultiHeadAttention(8, 2, { causal: true })
     seedParameters(mha, 21)
     const x = filled([2, 5, 8], 31)
@@ -292,15 +285,12 @@ describe("MultiHeadAttention", () => {
     expect(count(train.ops, "dropout")).toBe(1)
     mha.eval()
     const evalOps = graphShape(mha.forward(x as never) as AnyTensor)
-    // Not "a dropout node that happens to be the identity" — no node at all.
+    // Not "a dropout node that happens to be the identity": no node at all.
     expect(count(evalOps.ops, "dropout")).toBe(0)
   })
 })
 
-// ---------------------------------------------------------------------------
-// 2. sdpa, the rank-4 escape hatch
-// ---------------------------------------------------------------------------
-
+// sdpa, the rank-4 escape hatch
 describe("sdpa", () => {
   it("is softmax(q@k / sqrt(dh)) @ v", () => {
     const B = 2, H = 2, T = 3, K = 4
@@ -328,8 +318,8 @@ describe("sdpa", () => {
     const v = filled([B, H, T, K], 23)
     const got = (sdpa(q as never, kT as never, v as never, { causal: true }) as AnyTensor).data as Float32Array
     const vd = v.data as Float32Array
-    // Row 0's only unmasked weight is 1.0, so the context IS v's first row
-    // — bit for bit, because `exp(-Infinity)` is exactly 0 and the row
+    // Row 0's only unmasked weight is 1.0, so the context is v's first
+    // row bit for bit: `exp(-Infinity)` is exactly 0 and the row
     // normalises to a single 1. No `-1e9` fudge could make this exact.
     for (let j = 0; j < K; j++) expect(got[j]).toBe(vd[j])
   })
@@ -352,11 +342,6 @@ describe("sdpa", () => {
     ).toBe(1)
   })
 })
-
-// ---------------------------------------------------------------------------
-// 3. Accept #4 (PLAN-V2 §5A.4's Phase A form): the causal mask is a
-//    property of the node, and the head split costs no extra permute.
-// ---------------------------------------------------------------------------
 
 describe("the attention graph itself", () => {
   const build = (T: number): AnyTensor => {
@@ -404,10 +389,6 @@ describe("the attention graph itself", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 4. TransformerBlock — structure, then gate C11.
-// ---------------------------------------------------------------------------
-
 const DIMS = { B: 1, T: 3, D: 4, H: 2 }
 
 function makeBlock(seed = 7): TransformerBlock<4, 2> {
@@ -443,16 +424,15 @@ describe("TransformerBlock: the attention block", () => {
     for (let i = 0; i < a.length; i++) expect(b[i]).toBe(a[i])
   })
 
-  it("gate C2: eager, lazy and native agree on the whole block", () => {
+  it("eager, lazy and native agree on the whole block", () => {
     const blk = makeBlock(12)
     const x = filled([DIMS.B, DIMS.T, DIMS.D], 13)
     expectAgreeStrict(() => blk.forward(x as never) as AnyTensor)
   })
 
   it("falls back to the JS interpreter, loudly and countably, under the native backend", () => {
-    // The honest half of "all four paths" in the showcase cut: A-L1 is
-    // parked, so a block containing layerNorm/softmax/gelu/dropout cannot
-    // reach the addon. It must say so — a SILENT interpreter fallback on a
+    // A block containing layerNorm/softmax/gelu/dropout cannot reach the
+    // addon, and it must say so: a silent interpreter fallback on a
     // transformer is the 30x regression `jsCounters()` exists to catch.
     if (!isNativeAvailable()) return
     const blk = makeBlock(3)
@@ -471,10 +451,6 @@ describe("TransformerBlock: the attention block", () => {
     }
   })
 })
-
-// ---------------------------------------------------------------------------
-// 5. Gate C11 — the whole-block gradcheck, on all four paths.
-// ---------------------------------------------------------------------------
 
 const EPS = 1e-3
 const TOL = 3e-3
@@ -531,7 +507,7 @@ function expectMatchesNumeric(
   })
 }
 
-describe("gate C11: the whole attention block gradchecks", () => {
+describe("the whole attention block gradchecks", () => {
   const blk = makeBlock(7)
   const x = filled([DIMS.B, DIMS.T, DIMS.D], 77, true)
   const paramNames = [...blk.namedParameters().keys()]
@@ -560,7 +536,7 @@ describe("gate C11: the whole attention block gradchecks", () => {
     // `compile()` traces forward AND backward into one graph, so the
     // gradients it returns are graph outputs rather than a replay of the
     // eager tape. The input is a placeholder and therefore not a
-    // differentiable leaf — parameter gradients are the whole of what a
+    // differentiable leaf; parameter gradients are the whole of what a
     // compiled training step ever needs, and they are what is checked.
     blk.zeroGrad()
     const params = blk.parameters().map(p => p as AnyTensor)
@@ -582,10 +558,6 @@ describe("gate C11: the whole attention block gradchecks", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 6. Accept #4's second half: one trace, however many steps.
-// ---------------------------------------------------------------------------
-
 describe("a compiled attention step traces once", () => {
   it("traces once over 1000 calls and never re-serialises", () => {
     const mha = new MultiHeadAttention(8, 2, { causal: true })
@@ -597,24 +569,16 @@ describe("a compiled attention step traces once", () => {
     try {
       for (let i = 0; i < 1000; i++) step(x)
       // `serializeLazyGraph` runs exactly once, at trace time, and is the
-      // only place `noteFallback` can fire — so a fallback count of one
-      // after a thousand steps IS "prepares === 1" for a graph that cannot
-      // reach the addon yet (PLAN-V2 §5A.4's Phase A form of accept #4;
-      // A-L1 turns this into a literal `nativeFallbacks === 0` plus
-      // `counters().prepares === 1`).
+      // only place `noteFallback` can fire, so a fallback count of one
+      // after a thousand steps is "prepares === 1" for a graph that
+      // cannot reach the addon yet.
       expect(jsCounters().nativeFallbacks).toBe(1)
-      // ...and the addon was never asked to prepare anything, which is the
-      // other half of the same statement.
       expect((nativeCounters().prepares as number) - preparesBefore).toBe(0)
     } finally {
       step.dispose()
     }
   })
 })
-
-// ---------------------------------------------------------------------------
-// 7. Containers
-// ---------------------------------------------------------------------------
 
 describe("ModuleList (attention block containers)", () => {
   it("builds n independent modules and reports their parameters by path", () => {
@@ -625,7 +589,7 @@ describe("ModuleList (attention block containers)", () => {
     const names = [...stack.namedParameters().keys()]
     expect(names).toContain("items.0.attn.qkv.weight")
     expect(names).toContain("items.2.ln1.gamma")
-    // Three blocks, three independent parameter sets — `of` calls `make`
+    // Three blocks, three independent parameter sets: `of` calls `make`
     // once per index rather than sharing one module.
     expect(names.filter(n => n.endsWith("attn.qkv.weight")).length).toBe(3)
   })
@@ -661,7 +625,7 @@ describe("Residual (attention block containers)", () => {
 
   it("is the runtime twin of ResidualCheck for an undeclared inner layer", () => {
     // `Linear` declares no SHAPE_EFFECT, so the type side is fail-open
-    // here by design — the value side has to catch it, and name it.
+    // here by design; the value side has to catch it, and name it.
     const res = new Residual(new Linear(4, 8))
     expect(() => res.forward(filled([2, 4], 1) as never)).toThrow(
       /Residual: Linear maps \[2, 4\] to \[2, 8\]/,

@@ -12,7 +12,7 @@ function stats(data: ArrayLike<number>): { mean: number; variance: number } {
   return { mean, variance: sq / data.length }
 }
 
-/** ±10% relative tolerance against an analytic value — W1.9's accept #1. */
+/** ±10% relative tolerance against an analytic value. */
 function expectVarianceNear(data: ArrayLike<number>, analytic: number) {
   const { variance } = stats(data)
   expect(variance).toBeGreaterThan(analytic * 0.9)
@@ -20,11 +20,10 @@ function expectVarianceNear(data: ArrayLike<number>, analytic: number) {
 }
 
 /**
- * The analytic variance of `Normal(mean, std)` truncated to `[a, b]`,
- * by direct numeric quadrature of the truncated density — deliberately
- * independent of init.ts's own `erf`/`erfinv` approximations, so this
- * is an honest check of the implementation rather than a restatement
- * of it.
+ * The analytic variance of `Normal(mean, std)` truncated to `[a, b]`, by
+ * direct numeric quadrature of the truncated density. Independent of
+ * init.ts's own `erf`/`erfinv` approximations, so this is an honest check
+ * of the implementation rather than a restatement of it.
  */
 function truncNormalVariance(mean: number, std: number, a: number, b: number): number {
   const steps = 20_000
@@ -68,7 +67,7 @@ describe("in-place constant forms", () => {
   })
 })
 
-describe("statistical accuracy (§ accept #1: within 10% of the analytic variance at [1024,1024])", () => {
+describe("statistical accuracy (within 10% of the analytic variance at [1024,1024])", () => {
   const BIG: [1024, 1024] = [1024, 1024]
 
   it("uniform_", () => {
@@ -161,8 +160,7 @@ describe("determinism under a seed", () => {
   it("an explicit generator() reproduces identical draws independent of call order", () => {
     const g1 = init.generator(7)
     const a = Array.from(init.uniform([32] as const, { generator: g1 }).data)
-    // Consume some of the ambient counter in between — an explicit
-    // generator must not be affected by it.
+    // burn some ambient draws; the explicit generator must not care
     void init.uniform([32])
     const g2 = init.generator(7)
     const b = Array.from(init.uniform([32] as const, { generator: g2 }).data)
@@ -181,8 +179,8 @@ describe("calculateFan", () => {
   })
 })
 
-describe("Linear re-pointed at init.kaimingUniform_ (W1.9 accept #2)", () => {
-  it("is bit-identical to the pre-refactor `1/sqrt(fanIn)` formula for a fixed seed", () => {
+describe("Linear re-pointed at init.kaimingUniform_", () => {
+  it("is bit-identical to the `1/sqrt(fanIn)` formula for a fixed seed", () => {
     const reference = () =>
       withContext({ seed: 12345 }, () => {
         const k = 1 / Math.sqrt(37)

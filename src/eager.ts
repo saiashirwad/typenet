@@ -5,13 +5,6 @@ import { broadcastShapes, catShape, matmulShape, reduceShape, resizeDim } from "
 import { arrayCtor, broadcastStrides, contiguousStrides, type DType, prod, promoteBinaryDtype, shapesEqual, type TypedArray } from "./storage.ts"
 import { type AnyTensor, makeRaw } from "./tensor.ts"
 
-// ---------------------------------------------------------------------------
-// The JS eager kernels: one per IR kind, values in, values out. These
-// are the numeric spec — the lazy interpreter replays them per node and
-// the native backend must match them. No kernel consults the lazy flag;
-// dispatch lives in ir.ts.
-// ---------------------------------------------------------------------------
-
 function forEachStrided(
   shape: readonly number[],
   strideSets: readonly (readonly number[])[],
@@ -49,8 +42,7 @@ export function evalBinaryEager(
   const out = new (arrayCtor(dtype))(n)
   const ad = a.data
   const bd = b.data
-  // Every path applies the same scalar kernel, so the fast paths are
-  // bit-identical to the strided walk — they only skip the odometer.
+  // Fast paths are bit-identical to the strided walk; they only skip the odometer.
   if (shapesEqual(a.shape, b.shape)) {
     for (let i = 0; i < n; i++) {
       out[i] = applyBinary(op, ad[i]!, bd[i]!, parameter)
@@ -193,10 +185,7 @@ export function evalMatmulEager(
   const batch = outShape.slice(0, -2)
   const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
   const batchCount = prod(batch)
-  // A large packed f32 GEMM goes to Accelerate when the native addon is
-  // enabled — eager + useNative() is no longer "ignore native". Only
-  // + and * are involved, in the same association BLAS uses row-major,
-  // so tests that require bit-stability opt out with disableNative().
+  // Large packed f32 GEMMs go to Accelerate; bit-stability tests opt out with disableNative().
   if (
     dtype === "float32"
     && batchCount === 1
@@ -216,28 +205,7 @@ export function evalMatmulEager(
   const sbBatch = broadcastStrides(batchB, batch)
   const out = new (arrayCtor(dtype))(batchCount * m * n)
 
-  // W4.1 step 8: the `i-j-k` loop below reads `b` with stride `n`, which is
-  // cache-hostile, and the item asked for a LOCALITY fix that keeps the
-  // per-output `k` accumulation order bit-identical (8(a)) — an `i-k-j` swap
-  // would reassociate the k-sum and move the last bits of every output,
-  // invalidating W0.7's recorded reference curve and gate C3.
-  //
-  // Measured, on this machine, at four nanoGPT/MLP-shaped GEMMs, all
-  // bit-identical to this loop:
-  //
-  //   (i, j) blocking, JB in {16,32,64,128} x IB in {8,32,128}
-  //     256x784x256 1.01x   64x784x256 1.01x   256x256x1024 1.01x
-  //     512x512x512 1.18x
-  //   pre-transposing `b` into a scratch buffer (contiguous inner reads)
-  //     256x784x256 1.25x   64x784x256 1.15x   256x256x1024 0.97x
-  //     512x512x512 1.19x   64x784x10  1.03x
-  //
-  // The bar was >= 2x. Per step 8(c) the speedup is therefore DROPPED and
-  // the reference curve is NOT re-baselined: the loop stays exactly as it
-  // was, the op plumbing lands without it, and the gap is recorded here.
-  // This is not the fast path — a large packed f32 GEMM goes to Accelerate
-  // above — and trading the anchor of gates C3/C3R/W3.3/W4.6/W4.7/W6.2/W6.4
-  // for 1.25x on the specification path is a bad trade at any speedup.
+  // i-j-k order keeps the k-accumulation bit-identical; an i-k-j swap would reassociate the sum.
   const aMat = m * k
   const bMat = k * n
   const rank = batch.length
@@ -366,9 +334,7 @@ export function evalRandomEager(
   )
 }
 
-// `index` holds integral values. typenet's integer dtypes (`int32` /
-// `int64`) store them directly; a float index (the pre-integer default)
-// addresses 16.7M rows exactly, the f32 mantissa limit.
+// Float indices address at most 16.7M rows exactly (the f32 mantissa limit).
 
 function checkIndex(
   value: number | bigint,
@@ -451,21 +417,7 @@ export function evalScatterAddEager(
   return makeRaw(out, outShape, a.dtype)
 }
 
-// ---------------------------------------------------------------------------
-// W4.1 semantic kernels (PLAN-V2 §2.3 / §5A.2a).
-//
-// Written the obvious way on purpose: this is the *specification*, not the
-// fast path (W4.1 step 3). Two rules the native kernels of W4.2-W4.5 inherit:
-//
-//  * each kernel is the composition §5A.2a's lowering table names, in that
-//    evaluation order — so A-L1's lowering is the same arithmetic, not an
-//    approximation of it;
-//  * a node with several outputs returns ONE flat `[total]` tensor holding
-//    its outputs' elements back to back, and a `pick` node slices it. No
-//    multi-output machinery exists anywhere else (W4.1 step 2).
-// ---------------------------------------------------------------------------
-
-/** Rows x last-axis width, the layout every "over the last axis" kernel uses. */
+/** Rows x last-axis width, the layout every over-the-last-axis kernel uses. */
 function lastAxisLayout(shape: readonly number[]): {
   rows: number
   width: number
@@ -541,16 +493,7 @@ export function evalSiluGradEager(
   return mapGrad(g, a, siluGrad)
 }
 
-/**
- * `m = max(x, dim)` -> `e = exp(x - m)` -> `e / sum(e, dim)`, exactly the
- * three-step shift-and-normalise §5A.2a pins.
- *
- * `causal` folds the additive `[T, T]` mask of a decoder block into the same
- * pass: the row maximum is taken over the unmasked prefix only, and the
- * masked entries are `exp(-Infinity) = 0` *exactly*, so there is no `-1e9`
- * fudge factor and no NaN — the diagonal is never masked, so every row's
- * maximum is finite.
- */
+/** Max-shift, exp, normalize; under causal, masked entries are exp(-Infinity) = 0 exactly. */
 export function evalSoftmaxEager(
   a: AnyTensor,
   d: number,
@@ -559,9 +502,8 @@ export function evalSoftmaxEager(
   const { outer, dimSize, inner } = axisLayout(a.shape, d)
   const out = new (floatCtor(a.dtype))(a.numel)
   const ad = a.data
-  // Under `causal`, `d` is the last axis (checked by the dispatcher), so
-  // `inner === 1` and `outer` runs over query rows; the query position
-  // inside the last-but-one axis is what bounds the key range.
+  // Under causal, d is the last axis (dispatcher-checked): outer runs over query rows,
+  // and the query position bounds the key range.
   const queries = causal ? a.shape[a.shape.length - 2]! : 0
   for (let i = 0; i < outer; i++) {
     for (let k = 0; k < inner; k++) {
@@ -616,11 +558,7 @@ export function evalSoftmaxGradEager(
   return makeRaw(out, y.shape, y.dtype)
 }
 
-/**
- * `(y, mean, rstd)` flat-concatenated, normalising over the last axis:
- * `mean = sum(x)/D`, `var = sum((x-mean)^2)/D`, `rstd = (var+eps)^-0.5`,
- * `y = (x-mean)*rstd*gamma + beta`.
- */
+/** Returns (y, mean, rstd) flat-concatenated, normalized over the last axis. */
 export function evalLayerNormEager(
   x: AnyTensor,
   gamma: AnyTensor,
@@ -652,12 +590,7 @@ export function evalLayerNormEager(
   return makeRaw(out, [out.length], x.dtype)
 }
 
-/**
- * `(dx, dgamma, dbeta)` flat-concatenated. With `a_j = g_j*gamma_j` and
- * `xhat_j = (x_j - mean)*rstd`:
- * `dx_j = rstd*(a_j - mean_k(a) - xhat_j*mean_k(a*xhat))`,
- * `dgamma_j = sum_rows g*xhat`, `dbeta_j = sum_rows g`.
- */
+/** Returns (dx, dgamma, dbeta) flat-concatenated. */
 export function evalLayerNormGradEager(
   g: AnyTensor,
   x: AnyTensor,
@@ -725,11 +658,7 @@ export function evalRmsNormEager(
   return makeRaw(out, [out.length], x.dtype)
 }
 
-/**
- * `(dx, dgamma)` flat-concatenated. With `a_j = g_j*gamma_j` and
- * `r = rstd`: `dx_j = r*(a_j - r^2*x_j*sum_k(a_k*x_k)/D)`,
- * `dgamma_j = sum_rows g_j*x_j*r`.
- */
+/** Returns (dx, dgamma) flat-concatenated. */
 export function evalRmsNormGradEager(
   g: AnyTensor,
   x: AnyTensor,
@@ -761,12 +690,7 @@ export function evalRmsNormGradEager(
   return makeRaw(out, [out.length], x.dtype)
 }
 
-/**
- * `(loss, dlogits)` flat-concatenated over `[N, C]` logits and `[N]` class
- * indices: `logp = x - logSumExp(x, -1)`, `loss = -sum(logp[target])/N`,
- * `dlogits = (softmax(x, -1) - onehot(target))/N`. The `[N, C]` one-hot
- * never exists — that is the whole point of the fused node.
- */
+/** Returns (loss, dlogits) flat-concatenated; the [N, C] one-hot never exists. */
 export function evalCrossEntropyEager(
   logits: AnyTensor,
   target: AnyTensor,
@@ -878,12 +802,7 @@ export function evalScatterAddRowsEager(
   )
 }
 
-/**
- * `(y, mask)` flat-concatenated. `mask` already carries the `1/(1-p)`
- * inverted-dropout scale, so `y = x*mask` and `dx = g*mask` — one draw,
- * used by both passes (see the node's own comment in `storage.ts` for why
- * the mask is an output on this runtime).
- */
+/** Returns (y, mask) flat-concatenated; the mask carries the 1/(1-p) inverted-dropout scale. */
 export function evalDropoutEager(
   x: AnyTensor,
   p: number,
@@ -918,11 +837,7 @@ export function evalPickEager(
   )
 }
 
-/**
- * Explicit materialisation. A no-op on a runtime that materialises every
- * node anyway; it exists so Phase B's `Layout` canonicalisation has a node
- * to insert, and so the IR can say "this must be contiguous here" today.
- */
+/** Explicit materialisation; a copy today, kept as a node for layout canonicalisation. */
 export function evalContiguousEager(a: AnyTensor): AnyTensor {
   const out = new (arrayCtor(a.dtype))(a.numel)
   const ad = a.data
@@ -930,16 +845,7 @@ export function evalContiguousEager(a: AnyTensor): AnyTensor {
   return makeRaw(out, a.shape, a.dtype)
 }
 
-/**
- * A reduction over several axes: one single-axis pass per axis, ASCENDING,
- * against the progressively shrinking tensor. The order is normative and is
- * not §5A.2a's descending one *by design*: ascending is exactly the chain
- * the pre-W4.1 `sumTo` emitted (`sum(0)` for each surplus leading axis, then
- * each broadcast axis left to right), so the step-6 rewrite moves no f32
- * bits — gate C3 and the pinned nanoGPT curve compare equal. Whoever
- * un-parks A-L1 must emit the wire chain in this same order (and
- * `lower-native.ts` does).
- */
+/** One ascending single-axis reduction pass per axis, matching the wire chain lower-native.ts emits. */
 export function evalReduceDimsEager(
   a: AnyTensor,
   dims: readonly number[],

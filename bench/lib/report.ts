@@ -1,11 +1,7 @@
 // Appends one JSON line per (script, case, mode) to
-// `bench/results/<script>.jsonl` (PLAN-V2 §4.2, §2.9, W0.1).
-//
-// Smoke runs (bench/README.md; the default unless `--full` is passed) write
-// to `bench/results/smoke/<script>.jsonl` instead — a different directory,
-// never the same file a full run appends to — and every line, smoke or
-// full, carries `smoke: true | false` so a smoke number can never be
-// mistaken for a real baseline even if a file is copied elsewhere.
+// `bench/results/<script>.jsonl`. Smoke runs (the default unless `--full`)
+// write to `bench/results/smoke/<script>.jsonl` instead, and every line
+// carries `smoke: true | false`.
 
 import { execFileSync } from "node:child_process"
 import { appendFileSync, mkdirSync } from "node:fs"
@@ -14,11 +10,8 @@ import { dirname, join } from "node:path"
 
 import type { Mode } from "./cli.ts"
 
-// The structural-counters key list is normative (PLAN-V2 §2.9): no bench
-// script or later work item may invent, rename or drop a key. A counter a
-// given wave's runtime cannot yet measure reports `-1`, never `0` — W0.8
-// is what starts wiring these up from the native side; until then every
-// bench line carries this all-`-1` shape.
+// Structural counters are a fixed key list: a counter not yet measurable
+// reports -1, never 0.
 export const COUNTER_KEYS = [
   "prepares",
   "indexBuilds",
@@ -72,9 +65,7 @@ export interface BenchLine {
   p10_ms: number
   p90_ms: number
   counters: Counters
-  /** Whether this line came from a smoke run (default) or a `--full` run. */
   smoke: boolean
-  /** From `--tag`, when the run was given one. */
   tag?: string
 }
 
@@ -100,12 +91,7 @@ function gitInfo(): { git: string; dirty: boolean } {
   return cachedGit
 }
 
-/**
- * Smoke lines and full lines never share a file: smoke routes to
- * `bench/results/smoke/<script>.jsonl`, full to `bench/results/<script>.jsonl`.
- * The directory split — rather than a runtime check on an existing file's
- * content — is what makes "never in the same file" structurally true.
- */
+/** Smoke and full results never share a file: smoke routes to bench/results/smoke/. */
 export function resultsPath(script: string, smoke: boolean): string {
   return smoke
     ? join(process.cwd(), "bench", "results", "smoke", `${script}.jsonl`)
@@ -113,9 +99,9 @@ export function resultsPath(script: string, smoke: boolean): string {
 }
 
 /**
- * Append one result line. Refuses to record — and prints a warning instead
- * — when `TYPENET_PROFILE` is set: a profiling run's timings are not a
- * throughput number and must never land in the same file as one.
+ * Refuses to record (prints a warning instead) when TYPENET_PROFILE is set:
+ * profiling timings are not throughput numbers and must never land in the
+ * same file as one.
  */
 export function appendResult(input: BenchLineInput): void {
   if (process.env.TYPENET_PROFILE) {

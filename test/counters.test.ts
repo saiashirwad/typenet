@@ -12,9 +12,8 @@ import { type AnyTensor } from "../src/tensor.ts"
 
 const available = isNativeAvailable()
 
-// The §2.9 normative key list on `counters()`. No item may invent, rename
-// or drop a key here — every later work item's acceptance spells these
-// exactly.
+// The normative key list on `counters()`: no key may be invented,
+// renamed or dropped.
 const NORMATIVE_KEYS = [
   "prepares",
   "indexBuilds",
@@ -37,8 +36,7 @@ const NORMATIVE_KEYS = [
   "storeSlots",
 ].sort()
 
-// Fields this wave's runtime genuinely cannot measure (no arena, no
-// resident pool, no CSR builder yet) — must read -1, never 0.
+// Counters this runtime cannot measure yet; they must read -1, never 0.
 const UNMEASURED_KEYS = [
   "csrBuilds",
   "arenaBytes",
@@ -88,7 +86,7 @@ describe.skipIf(!available)("native counters", () => {
     }
   })
 
-  it("gate C7: prepares stays 1 across 100 calls of one compiled fn", () => {
+  it("prepares stays 1 across 100 calls of one compiled fn", () => {
     useNative()
     const fn = compile((x: AnyTensor) => x.mul(2).sum())
     const before = nativeCounters()
@@ -105,12 +103,12 @@ describe.skipIf(!available)("native counters", () => {
     fn.dispose()
   })
 
-  it("gate C7: structural counters are identical across iterations of a steady loop", () => {
+  it("structural counters are identical across iterations of a steady loop", () => {
     useNative()
     const fn = compile((x: AnyTensor) => x.mul(2).sum())
     fn(tensor([1, 2, 3, 4])) // warm up: the one prepare happens here
     // Structural / plan counters (prepares, program-size, plan-cache
-    // bookkeeping) must not move once warm — that's the whole point of
+    // bookkeeping) must not move once warm; that is the whole point of
     // the plan cache. Per-eval work counters (candleDispatches, gemmCalls,
     // phaseNs.eval, ...) are expected to keep accumulating and are not
     // asserted here.
@@ -135,10 +133,9 @@ describe.skipIf(!available)("native counters", () => {
   })
 
   // TYPENET_NO_FUSION is read once into a Rust OnceLock at first use, so
-  // exercising it needs a fresh process per value — this spawns one
-  // per side and measures a bandwidth-bound elementwise chain (cheap
-  // ops: neg/relu) through the loop evaluator directly, bypassing the
-  // TS compile layer entirely.
+  // exercising it needs a fresh process per value. Each side spawns one and
+  // measures a bandwidth-bound elementwise chain (cheap ops: neg/relu)
+  // through the loop evaluator directly, bypassing the TS compile layer.
   function runFusionProbe(env: NodeJS.ProcessEnv): { minNs: number; fusedRegions: number } {
     const addonPath = createRequire(import.meta.url).resolve("@typenet/native")
     const dir = mkdtempSync(join(tmpdir(), "typenet-fusion-probe-"))
@@ -201,9 +198,8 @@ describe.skipIf(!available)("native counters", () => {
       const baseEnv = { ...process.env }
       delete baseEnv.TYPENET_NO_FUSION
       const unfusedEnv = { ...baseEnv, TYPENET_NO_FUSION: "1" }
-      // The structural counter is the proof the switch reaches
-      // plan_fusion; a timing comparison was tried first and was flaky
-      // on a shared machine, so it is deliberately not asserted here.
+      // The structural counter proves the switch reaches plan_fusion;
+      // timing is flaky on shared machines and is not asserted.
       const fused = runFusionProbe(baseEnv)
       const unfused = runFusionProbe(unfusedEnv)
       expect(fused.fusedRegions).toBe(1)

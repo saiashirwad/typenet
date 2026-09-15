@@ -1,25 +1,9 @@
 #!/usr/bin/env node
-// W5.7a — the README typechecker.
-//
-// Extracts every ```ts fenced block from README.md, writes each one to a
-// temp directory as a standalone module, and compiles the lot with the
-// workspace tsc (tsover). A block that does not compile fails the script,
-// with the diagnostic re-anchored to its line in README.md rather than to
-// the temp file nobody wrote.
-//
-// WHY every block is standalone rather than sharing a hidden prelude: a
-// README block that only compiles against setup the reader cannot see is
-// exactly the block that goes stale. Each one carries its own imports, and
-// `import { … } from "typenet"` is rewritten to the repo's index.ts here
-// so the published spelling is what the reader copies.
-//
-// A block that genuinely must not be compiled opts out with an HTML
-// comment on the line above its fence:
-//
-//     <!-- check-readme: skip — why this one is not a program -->
-//
-// The reason is mandatory, and every skip is printed in the summary, so
-// opting out is a visible choice and not a silent one.
+// Extracts every ```ts fenced block from README.md, compiles each as a
+// standalone module with the workspace tsc, and re-anchors diagnostics to
+// their README line. A block opts out with
+// `<!-- check-readme: skip, why this one is not a program -->` above its
+// fence; every skip is printed in the summary.
 
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -34,10 +18,7 @@ const readmePath = resolve(root, "README.md")
 /** Languages whose blocks are compiled. `sh`, `json`, … are prose. */
 const CHECKED = new Set(["ts", "tsx", "typescript"])
 
-/**
- * Fenced blocks, with the 1-based README line of the first line of code and
- * the `check-readme:` directive that precedes the fence, if any.
- */
+/** Fenced blocks, with the 1-based README line of the first code line. */
 function extractBlocks(markdown) {
   const lines = markdown.split("\n")
   const blocks = []

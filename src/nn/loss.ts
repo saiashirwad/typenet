@@ -13,32 +13,16 @@ export function mseLoss<
     .mean() as any
 }
 
-/**
- * Cross-entropy over the LAST axis of `logits`, with `targets` addressing
- * that same axis one rank down: `[B,C]` logits take a `[B]` target,
- * `[B,T,V]` logits (a transformer's LM head, unreshaped) take a `[B,T]`
- * target. The flatten a caller used to have to do by hand before calling
- * this happens here instead, once — `Init<S>` (everything but the class
- * axis) IS the target shape, so there is nothing left for a caller to get
- * wrong about which axes to merge.
- *
- * `targets` is an {@link IndexTensor} (OWNER-5, D26): the untyped plain
- * numeric array spelling this used to also accept is gone, with no
- * overload and no deprecation window — build one with `Tensor.indices(ids,
- * shape)` or brand an existing tensor with `.toIndex()`.
- */
+/** Cross-entropy over the last axis of `logits`: `[B,C]` logits take a `[B]` target, `[B,T,V]` logits take a `[B,T]` target. */
 export function crossEntropy<
   S extends Shape,
 >(
   logits: Tensor<S>,
   targets: IndexTensor<Init<S>>,
   o: {
-    /** A target value to exclude from the mean and its gradient entirely,
-     * the way PyTorch's `ignore_index` does — e.g. padding positions in a
-     * batched sequence. */
+    /** Excluded from the loss and its gradient entirely, like PyTorch's `ignore_index`. */
     readonly ignoreIndex?: number
-    /** Blend the one-hot target with a uniform distribution over classes,
-     * by this fraction, before taking the log-probability dot product. */
+    /** Blend the one-hot target with a uniform distribution over classes by this fraction. */
     readonly labelSmoothing?: number
   } = {},
 ): Tensor<[]> {
@@ -50,10 +34,8 @@ export function crossEntropy<
     )
   }
   const classes = l.shape[l.rank - 1]!
-  // Everything but the class axis collapses into one batch axis — the
-  // [B,T,V]/[B,T] case is [B,C]/[B] with B := the product of the leading
-  // dims, and `flatten` (not a reshape a caller wrote by hand) is what
-  // makes that true without copying the backward rule too.
+  // Everything but the class axis collapses into one batch axis, so
+  // [B,T,V]/[B,T] reduces to [B,C]/[B].
   const flatLogits = (l.rank > 2 ? l.flatten(0, l.rank - 2) : l) as AnyTensor
   const flatTargets = (t.rank > 1 ? t.flatten() : t) as AnyTensor
   const batch = flatLogits.shape[0]!
@@ -75,15 +57,13 @@ export function crossEntropy<
     for (let i = 0; i < raw.length; i++) {
       const isIgnored = raw[i] === ii
       keepData[i] = isIgnored ? 0 : 1
-      // A sentinel like PyTorch's -100 is not a valid class id and would
-      // make `oneHot` throw; swap it for class 0 and zero its row's
-      // contribution below instead.
+      // A sentinel like PyTorch's -100 is not a valid class id; use
+      // class 0 here and zero its contribution below.
       safeIds[i] = isIgnored ? 0 : raw[i]!
       if (!isIgnored) kept++
     }
     keep = Tensor.of(keepData) as AnyTensor
-    // Every row ignored is a degenerate call, not a div-by-zero: the loss
-    // is then exactly 0 (nothing contributes) with a denominator of 1.
+    // Every row ignored is loss 0 with denominator 1, not a div-by-zero.
     denom = kept || 1
     oneHotSource = Tensor.indices(safeIds, [raw.length]) as AnyTensor
   }
@@ -99,14 +79,7 @@ export function crossEntropy<
   return perRow.sum().div(denom) as any
 }
 
-/**
- * Fraction of rows whose argmax over the last axis matches `targets` — the
- * same target typing {@link crossEntropy} uses, so a `[B,T,V]` LM head's
- * predictions compare against `[B,T]` targets with no reshape in between.
- * A plain number, not a `Tensor<[]>`: this reads `.data` directly and
- * never joins the autograd tape, so it costs nothing to compute inside a
- * training loop's periodic logging.
- */
+/** Fraction of rows whose argmax over the last axis matches `targets`; reads `.data` directly and never joins the autograd tape. */
 export function accuracy<
   S extends Shape,
 >(

@@ -1,25 +1,9 @@
-/**
- * One table of shape cases. Most tables are run twice: `types.test-d.ts`
- * asserts the eight positive tables through the type algebra, while
- * `shape.test.ts` runs every table through the runtime value functions
- * in `src/shape.ts`. The negative `*_FAIL_CASES` tables generally have
- * no type-level twin and are only exercised by `shape.test.ts` — except
- * `BROADCAST_TO_FAIL_CASES`, whose type-level twin lives in
- * `test/polarity.test-d.ts` (W0.14): `BroadcastToCheck` has two distinct
- * error branches (cannot broadcast at all, vs. broadcastable but not
- * expand-only), the second of which is exactly the row below. The first
- * branch has its own type-only row, `BROADCAST_TO_TYPE_FAIL_CASES`,
- * kept separate rather than added here because `shape.test.ts`'s
- * `broadcastTo fail` case asserts one shared error-message pattern
- * (`/is not a broadcast of/`) across every row of THIS table, which the
- * "cannot broadcast at all" branch throws a different message for. A
- * positive case added here is checked in both worlds, which is what
- * keeps them from drifting.
- *
- * The `as [2, 3]` casts matter: they make each entry a *mutable* literal
- * tuple, which is what the type-level operators (constrained to
- * `Shape = number[]`) accept.
- */
+// Shared shape tables: `types.test-d.ts` asserts the positive tables
+// through the type algebra while `shape.test.ts` runs every table through
+// the runtime value functions in `src/shape.ts`, so the two worlds cannot
+// drift. The `as [2, 3]` casts make each entry a *mutable* literal tuple,
+// which is what the type-level operators (constrained to `Shape = number[]`)
+// accept.
 
 export const BROADCAST_CASES = [
   { a: [2, 3] as [2, 3], b: [3] as [3], out: [2, 3] as [2, 3] },
@@ -144,26 +128,19 @@ export const BROADCAST_TO_FAIL_CASES = [
 ] as const
 
 /**
- * Type-only companion to `BROADCAST_TO_FAIL_CASES` (W0.14): the "cannot
- * broadcast at all" branch of `BroadcastToCheck`, which throws a
- * different runtime message than the row above and so is not folded
- * into that table (see its header comment). Exercised only by
- * `test/polarity.test-d.ts`.
+ * Type-only companion to `BROADCAST_TO_FAIL_CASES`: the "cannot broadcast
+ * at all" branch of `BroadcastToCheck` throws a different runtime message
+ * than the expand-only row there, so it gets its own table. Exercised only
+ * by `test/polarity.test-d.ts`.
  */
 export const BROADCAST_TO_TYPE_FAIL_CASES = [
   { from: [2, 3] as [2, 3], to: [4] as [4] },
 ] as const
 
 /**
- * Conv / pool spatial arithmetic (W0.16, D35). Driven from here by
- * `types.test-d.ts` (the `ConvOut`/`PoolOut`/`FlattenFrom` types) and by
- * `shape.test.ts` (the `ConvOut`/`PoolOut`/`flattenFrom` value twins), so
- * a drift between the two worlds is a test failure rather than a surprise
- * at a call site.
- *
- * The ladder rows are `examples`-shaped on purpose: `28 -> 26 -> 13 -> 11
- * -> 5` is a two-block MNIST CNN, `32 @ k3 p1 -> 32` is "same" padding, and
- * `3 @ k3 -> 1` is the smallest legal input (an exactly-1 output is fine).
+ * Conv / pool spatial arithmetic, driven by `types.test-d.ts` (the
+ * `ConvOut`/`PoolOut`/`FlattenFrom` types) and by `shape.test.ts` (the
+ * value twins), so a drift between the two worlds is a test failure.
  */
 export const CONV_CASES = [
   { h: 28 as const, k: 3 as const, s: 1 as const, p: 0 as const, out: 26 as const },
@@ -183,16 +160,12 @@ export const POOL_CASES = [
 ] as const
 
 /**
- * Kernels that do not fit. `span` is `h + 2p - k`, the quantity
- * `ConvCheck` actually tests, and `out` is what `ConvOut` — type AND value
- * twin — reports anyway, because `Numbers.Div` and `Math.trunc` both
- * truncate toward zero rather than flooring.
- *
- * The last two rows are the truncation trap in its pure form: the true
- * floor answer is `0` and `<= 0`, yet the reported output is `1` and `1`.
- * A `ConvCheck` written on the QUOTIENT instead of the span reads those as
- * a legal 1-wide output and lets a 5-wide kernel onto a 4-wide input. That
- * is the regression `test/conv-shapes.test-d.ts` pins directly.
+ * Kernels that do not fit. `span` is `h + 2p - k`, the quantity `ConvCheck`
+ * actually tests; `out` is what `ConvOut` reports anyway, because
+ * `Numbers.Div` and `Math.trunc` both truncate toward zero rather than
+ * flooring. A check written on the quotient instead of the span reads the
+ * last rows as a legal 1-wide output and lets a 5-wide kernel onto a
+ * 4-wide input; `test/conv-shapes.test-d.ts` pins that regression.
  */
 export const CONV_FIT_FAIL_CASES = [
   { h: 2 as const, k: 5 as const, s: 1 as const, p: 0 as const, span: -3 as const, out: -2 as const },
@@ -204,8 +177,8 @@ export const CONV_FIT_FAIL_CASES = [
 ] as const
 
 /**
- * `FlattenFrom<[B, ...R]>` — the classifier head's flatten. The rank-1 row
- * folds an empty tail to `1`, and the rank-0 row is its own flatten.
+ * The classifier head's flatten. The rank-1 row folds an empty tail to
+ * `1`, and the rank-0 row is its own flatten.
  */
 export const FLATTEN_FROM_CASES = [
   { s: [64, 16, 5, 5] as [64, 16, 5, 5], out: [64, 400] as [64, 400] },

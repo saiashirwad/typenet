@@ -77,16 +77,7 @@ function applyUnary(
   }
 }
 
-// ---------------------------------------------------------------------------
-// W4.1 semantic scalar kernels. These are the *numeric specification* (D16):
-// `src/eager.ts` maps them over a buffer, `src/lazy.ts`'s interpreter replays
-// the same kernel per node, and a native kernel must reproduce them. Each is
-// written as the composition PLAN-V2 §5A.2a's lowering table names, in that
-// evaluation order, so when A-L1 lowers the node to primitives the two paths
-// are the same arithmetic rather than two arithmetics within a tolerance.
-// ---------------------------------------------------------------------------
-
-/** `sqrt(2/pi)` — the constant of the tanh GELU approximation. */
+/** sqrt(2/pi), the constant of the tanh GELU approximation. */
 const GELU_C = Math.sqrt(2 / Math.PI)
 /** The cubic coefficient of the same approximation (Hendrycks & Gimpel). */
 const GELU_A = 0.044715
@@ -96,12 +87,7 @@ function gelu(x: number): number {
   return 0.5 * x * (1 + Math.tanh(GELU_C * (x + GELU_A * x * x * x)))
 }
 
-/**
- * d/dx of {@link gelu}, times an upstream `g`. Written out rather than
- * differentiated numerically because the tanh approximation is the thing
- * being differentiated — the exact-erf GELU has a different derivative and
- * mixing the two is the classic silent 1e-3 error in a transformer.
- */
+/** d/dx of {@link gelu} times upstream `g`; the tanh approximation's derivative, not the erf one. */
 function geluGrad(g: number, x: number): number {
   const inner = GELU_C * (x + GELU_A * x * x * x)
   const t = Math.tanh(inner)
@@ -199,8 +185,7 @@ function randomData(
     for (let i = 0; i < n; i++) {
       out[i] = unitFloat(seed, stream, i)
     }
-  } // Box-Muller per element from two independent draws: stateless, so
-  // element i does not depend on how many were drawn before it.
+  } // Box-Muller per element from two independent draws: element i never depends on earlier draws.
   else {
     for (let i = 0; i < n; i++) {
       const u = 1 - unitFloat(seed, stream, 2 * i)

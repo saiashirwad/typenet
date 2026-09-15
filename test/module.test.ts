@@ -22,9 +22,9 @@ describe("Module.parameters dedup", () => {
     expect([...net.namedParameters().keys()]).toEqual(["a"])
 
     const opt = new SGD(net.parameters(), { lr: 0.1 })
-    // loss = a (identity): d(loss)/da = 1, so one correct SGD step moves
-    // `a` by exactly `-lr`. Today's bug pushes the same object twice and
-    // would move it by `-2*lr`.
+    // loss = a (identity), so d(loss)/da = 1 and a correct step moves `a`
+    // by exactly `-lr`; double-counting the shared object would move it
+    // by `-2*lr`.
     opt.zeroGrad()
     net.a.backward()
     opt.step()

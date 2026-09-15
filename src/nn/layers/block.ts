@@ -11,30 +11,11 @@ import { Dropout } from "./dropout.ts"
 import { Linear } from "./linear.ts"
 import { LayerNorm } from "./norm.ts"
 
-/**
- * A pre-norm transformer block (W5.2-A step 4, §3.7):
- *
- * ```
- * h = x + attn(ln1(x))
- * y = h + drop(proj(gelu(fc(ln2(h)))))
- * ```
- *
- * Pre-norm (`ln` INSIDE the residual branch, not after the sum) because
- * that is what makes a deep stack trainable without a warmup schedule —
- * the residual stream stays an identity path from embedding to head.
- *
- * The MLP is the standard `4·D` expansion, carried as `DimMul<4, D>` so
- * the two `Linear`s' widths are derived rather than restated: a `D` of 384
- * gives a `Linear<384, 1536>` and a `Linear<1536, 384>` with no literal
- * `1536` written anywhere.
- *
- * The two residual adds are the tsover `+` operator (hence the file's
- * `"use tsover"` directive) rather than `.add(...)`: `x + y` goes through
- * the same `Broadcast`-checked overload `.add` does, so nothing is weaker
- * — it just reads like the equation it is.
- */
+// `"use tsover"` lets the residual adds be written `x + y` (the same
+// Broadcast-checked overload `.add` uses).
+
+/** Pre-norm transformer block: `h = x + attn(ln1(x))`, then `y = h + drop(proj(gelu(fc(ln2(h)))))`. */
 export class TransformerBlock<D extends number, H extends number> extends Module {
-  /** Same reasoning as {@link MultiHeadAttention}'s: the block owns `D`. */
   declare readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: D]
 
   readonly ln1: LayerNorm<D>
@@ -59,13 +40,8 @@ export class TransformerBlock<D extends number, H extends number> extends Module
     super()
     const p = options.dropout ?? 0
     this.ln1 = new LayerNorm(d, { eps: options.eps })
-    // D20's forwarding discipline, and the reason this call carries
-    // EXPLICIT type arguments: `h`'s declared type here is already
-    // `H & DimDivCheck<D, H>`, so letting inference re-derive `H` from it
-    // would make the callee's own `DimDivCheck<D, H>` a check of the
-    // intersection against itself — trivially satisfied, and the
-    // divisibility precondition would be silently discharged one level up
-    // from where the widths are actually known.
+    // Explicit type arguments: inference from the `h` intersection would
+    // re-derive `H` and discharge the divisibility check against itself.
     this.attn = new MultiHeadAttention<D, H>(d, h, {
       causal: options.causal ?? true,
       dropout: p,

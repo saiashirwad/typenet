@@ -12,8 +12,8 @@ class GATHead<FIn extends number, FOut extends number> extends Module {
   constructor(fin: FIn, fout: FOut) {
     super()
     // `W` is `[FIn, FOut]`, the same matmul-order layout as `Linear`'s
-    // weight — `fanMode: "fanOut"` lands on `fanIn`, reproducing the
-    // `1/sqrt(fin)` bound this used to re-derive inline. See linear.ts.
+    // weight: `fanMode: "fanOut"` lands on `fanIn`, reproducing the
+    // `1/sqrt(fin)` bound. See linear.ts.
     this.W = init.kaimingUniform([fin, fout], { fanMode: "fanOut" }).requiresGrad()
     this.attSrc = (randn([fout, 1]) * 0.1).requiresGrad()
     this.attDst = (randn([fout, 1]) * 0.1).requiresGrad()

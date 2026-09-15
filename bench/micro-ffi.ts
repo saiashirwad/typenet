@@ -1,17 +1,9 @@
-// The phase ladder behind PLAN-V2 §0 fact 2: typenet's compiled MLP step
-// is dominated by FFI parameter marshalling, not compute. Each phase adds
-// one more thing that crosses the JS<->native boundary on every call --
-// an empty compiled graph, a `[64,784]` input, a real forward pass, a
-// forward+backward pass, +SGD, +Adam -- and this prints µs/step plus an
-// implied marshalling rate in GB/s for each.
-//
-// Only `native` mode actually crosses the FFI boundary, so every phase
-// runs there exclusively: `eager` and `interp` never leave the JS
-// process, so there is nothing to marshal and no floor to measure.
-//
-// `pnpm vite-node bench/micro-ffi.ts` (no flags) is the accept-tested
-// invocation; `--only <substr>` still filters phases when this is run
-// through `pnpm bench:micro`.
+// FFI phase ladder: typenet's compiled MLP step is dominated by parameter
+// marshalling, not compute. Each phase adds one more thing crossing the
+// JS<->native boundary on every call, printing us/step plus an implied
+// marshalling rate in GB/s. Only `native` mode crosses the boundary
+// (eager/interp never leave the JS process), so every phase runs there
+// exclusively.
 
 import { Adam, compile, mseLoss, rand, SGD, Tensor } from "../index.ts"
 import { parseCliArgs } from "./lib/cli.ts"
@@ -40,22 +32,22 @@ interface Phase {
 function buildPhases(): Phase[] {
   const phases: Phase[] = []
 
-  // Phase 1: the FFI floor itself -- the smallest possible compiled call.
+  // The FFI floor: the smallest possible compiled call.
   {
     const x = rand([1]) as AnyTensor
     const step = compile((xIn: AnyTensor) => xIn.mul(2))
     phases.push({ id: "ffi-empty", call: () => step(x), dirtyBytes: bytesOf(x) })
   }
 
-  // Phase 2: the same op, but on the `[64,784]` shape the MLP forward
-  // pass reads -- isolates input marshalling from any actual compute.
+  // Same op at the [64,784] MLP input shape: isolates input marshalling
+  // from any actual compute.
   {
     const x = rand([BATCH, 784]) as AnyTensor
     const step = compile((xIn: AnyTensor) => xIn.mul(2))
     phases.push({ id: "ffi-input-64x784", call: () => step(x), dirtyBytes: bytesOf(x) })
   }
 
-  // Phase 3: forward only.
+  // Forward only.
   {
     const net = mlpLegacyNet()
     const { x } = mlpLegacyData(BATCH)
@@ -63,11 +55,11 @@ function buildPhases(): Phase[] {
     phases.push({ id: "ffi-forward", call: () => step(x), dirtyBytes: bytesOf(x) })
   }
 
-  // Phase 4: forward + backward, no optimizer. Returning every
-  // parameter's gradient as an extra output is what forces the native
-  // backend to actually compute (and marshal back) the backward pass --
-  // a bare `loss.backward()` whose grads nothing reads would let the
-  // compiled graph prune the backward half away as dead code.
+  // Forward + backward, no optimizer. Returning every parameter's gradient
+  // as an extra output is what forces the native backend to actually
+  // compute (and marshal back) the backward pass: a bare `loss.backward()`
+  // whose grads nothing reads would let the compiled graph prune the
+  // backward half away as dead code.
   {
     const net = mlpLegacyNet()
     const { x, y } = mlpLegacyData(BATCH)
@@ -79,9 +71,8 @@ function buildPhases(): Phase[] {
     phases.push({ id: "ffi-forward-backward", call: () => step(x, y), dirtyBytes: bytesOf([x, y]) })
   }
 
-  // Phase 5: + SGD. Every update target -- each parameter, plus its
-  // momentum buffer -- is resent on every call, over the same 203 k
-  // parameters as §0 fact 2.
+  // + SGD: every parameter plus its momentum buffer is resent on every
+  // call.
   {
     const net = mlpLegacyNet()
     const { x, y } = mlpLegacyData(BATCH)
@@ -102,9 +93,8 @@ function buildPhases(): Phase[] {
     })
   }
 
-  // Phase 6: + Adam. Adam resends two state buffers (m, v) per
-  // parameter on top of the parameter itself -- this is where the
-  // measured 8.5x-off-ceiling comes from.
+  // + Adam: two state buffers (m, v) resent per parameter on top of the
+  // parameter itself -- the source of the measured 8.5x-off-ceiling.
   {
     const net = mlpLegacyNet()
     const { x, y } = mlpLegacyData(BATCH)
@@ -142,11 +132,10 @@ interface BatchedTiming {
 
 /**
  * Times `call` in batches sized so each batch takes at least
- * `targetBatchMs` -- at a floor of a few µs/call, timing one call at a
- * time makes `performance.now()`'s own overhead and V8's per-call
- * bookkeeping a large fraction of what gets measured. Doubling the inner
- * loop until a batch clears the target, then dividing batch time by
- * batch size, amortizes that overhead away.
+ * `targetBatchMs`: at a few us/call, timing one call at a time makes
+ * `performance.now()` overhead a large fraction of the measurement.
+ * Doubling the inner loop until a batch clears the target amortizes it
+ * away.
  */
 function timeBatched(
   call: () => AnyTensor | AnyTensor[],
@@ -202,9 +191,6 @@ async function main(): Promise<void> {
     return
   }
 
-  // Smoke (the default, no `--full`) shrinks this to the owner's fixed
-  // shape (1 warm-up batch, 2 timed samples) the same way
-  // `bench/lib/harness.ts`'s `bench()` does for every other script.
   const smoke = isSmokeRun(args)
   const warmupBatches = smoke ? 1 : 3
   const samples = smoke ? 2 : 15

@@ -5,8 +5,7 @@ import { fileURLToPath } from "node:url"
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 /** vite-node's CLI entry: scenarios are TypeScript and this project has no
- * build step, so a plain `node <file>.ts` can't run them. Resolved once,
- * relative to this file, so it doesn't depend on the caller's cwd. */
+ * build step, so a plain `node <file>.ts` can't run them. */
 const viteNodeBin = path.resolve(here, "../node_modules/vite-node/dist/cli.mjs")
 
 export interface SmallStackResult {
@@ -16,16 +15,10 @@ export interface SmallStackResult {
   stderr: string
 }
 
-/** Runs `test/scenarios/<scenario>.ts` to completion in a fresh Node process
- * with a deliberately small V8 stack (`--stack-size=256`), and reports its
- * exit code. This is the *one* place the small-stack command is spelled out
- * — callers pass just the scenario's basename.
- *
- * The point is to catch any algorithm on a deep graph that recurses per
- * node instead of working iteratively: a 256 KB stack blows on a few
- * thousand JS frames, well short of the default (much larger) stack every
- * other test in this file runs under, so a regression to recursion shows up
- * here even when it wouldn't under vitest's own stack. */
+/** Runs `test/scenarios/<scenario>.ts` in a fresh Node process with a
+ * small V8 stack (`--stack-size=256`). A 256 KB stack blows
+ * on a few thousand JS frames, so an algorithm that recurses per node on
+ * a deep graph fails here even though it passes under vitest's own stack. */
 export function runOnSmallStack(scenario: string): Promise<SmallStackResult> {
   const scenarioPath = path.resolve(here, "scenarios", `${scenario}.ts`)
   return new Promise((resolve, reject) => {

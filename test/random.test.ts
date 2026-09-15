@@ -56,10 +56,9 @@ describe("rand({ resample: \"perCall\" })", () => {
     })
   })
 
-  it("matches a checked-in reference — the rename moved no bits", () => {
-    // Captured from the old `uniform` spelling (1024 draws, seed 99,
-    // lazy interpreter) before OWNER-5 deleted it — see W1.11's accept
-    // #6. If this ever moves, the rename changed draws, not just names.
+  it("matches a checked-in reference", () => {
+    // Golden values (1024 draws, seed 99, lazy interpreter): if these
+    // move, the RNG changed, not just a name.
     const data = withContext(
       { lazy: true, seed: 99 },
       () => Array.from((rand([1024], { resample: "perCall" }) as AnyTensor).data),
@@ -235,10 +234,9 @@ describe("rand/randn are seeded", () => {
   })
 
   it("resample: \"once\" (default) draws a fixed leaf under compile(); \"perCall\" redraws", () => {
-    // compile() traces fn once under lazy semantics regardless of the
-    // ambient mode (compile.ts), so this is the sharpest test of the
-    // distinction the option exists for: "once" is baked in at trace
-    // time, "perCall" is a graph node re-evaluated on every call.
+    // compile() traces once under lazy semantics regardless of ambient
+    // mode: "once" is baked in at trace time, "perCall" is a graph node
+    // re-evaluated on every call.
     const once = compile(() => randn([64]).add(0))
     expect(Array.from(once().data)).toEqual(Array.from(once().data))
 

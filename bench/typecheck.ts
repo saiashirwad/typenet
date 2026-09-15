@@ -1,16 +1,6 @@
-// W0.10 — appends the typecheck-budget numbers to bench/results/typecheck.jsonl
-// on every bench run: `tsc --extendedDiagnostics` instantiations/types/check-time
-// over the budget file set (tsconfig.budget.json — see scripts/typecheck-budget.mjs,
-// the single source of truth for measuring and parsing that output).
-//
-// This script is intentionally self-contained rather than routed through
-// `bench/lib/*` (a different item's Files): it is not a runtime-mode bench
-// (there is no "eager/interp/native" for a `tsc` invocation), so it writes
-// its own JSONL line following the general shape in PLAN-V2 §4.2
-// (`{host, cores, git, dirty, mode, script, case, n, median_ms, p10_ms,
-// p90_ms, counters}`), with `counters` carrying the normative structural
-// keys (all -1 here — a `tsc` run measures none of them, per W0.8: report
-// -1, never 0) plus the typecheck-specific numbers this script exists for.
+// Appends the typecheck-budget numbers to bench/results/typecheck.jsonl on
+// every bench run. Measuring and parsing live in
+// scripts/typecheck-budget.mjs.
 
 import { execFileSync } from "node:child_process"
 import { appendFileSync, mkdirSync } from "node:fs"
@@ -20,8 +10,7 @@ import { fileURLToPath } from "node:url"
 
 import { measureBudget } from "../scripts/typecheck-budget.mjs"
 
-// The structural-counters key list is normative (PLAN-V2 §2.9): no script
-// may invent, rename or drop a key. A `tsc` run measures none of them.
+// Fixed structural-counter keys; a tsc run measures none of them.
 const STRUCTURAL_COUNTER_KEYS = [
   "prepares",
   "indexBuilds",

@@ -1,20 +1,14 @@
-// Serialises six representative compiled-graph JSONs into
-// `test/fixtures/graphs/*.json` (PLAN-V2 §4.2, W0.2): the round-trip
-// corpus W1.1 reads and the seed corpus W2.5's fuzzer starts from. Every
-// fixture is built with ordinary tensor ops under `configure({ lazy:
-// true })` and dumped through `serializeLazyGraph` -- nothing here
-// hand-writes JSON, per the item's own instruction.
+// Serialises representative compiled-graph JSONs into
+// test/fixtures/graphs/*.json. Every fixture is built with ordinary tensor
+// ops under `configure({ lazy: true })` and dumped through
+// `serializeLazyGraph` -- nothing here hand-writes JSON.
 //
-// "MLP fwd+bwd+Adam" is the one fixture that can't just call `.backward()`
-// and `Adam.step()`: outside a `compile()` trace, both force-evaluate
-// immediately (the same "eager under the hood" behavior every other bench
-// script in this file relies on), which would collapse the graph to
-// leaves before it could be serialized. So that fixture writes out the
-// same math by hand -- an analytic backward pass for this exact 2-layer
-// net, then one Adam update per parameter -- entirely in ordinary lazy
-// tensor ops. It is not wired to any real training loop; it exists to
-// give the wire format a realistic mix of op kinds (matmul, relu, gt,
-// pow, sum, sqrt, div, ...) over multiple roots.
+// "MLP fwd+bwd+Adam" cannot just call `.backward()` and `Adam.step()`:
+// outside a `compile()` trace both force-evaluate immediately, collapsing
+// the graph to leaves before it can be serialized. That fixture writes the
+// same math by hand -- an analytic backward pass, then one Adam update per
+// parameter -- entirely in lazy ops, to give the wire format a realistic
+// mix of op kinds over multiple roots.
 
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -46,7 +40,6 @@ function dump(name: string, roots: AnyTensor[]): void {
   )
 }
 
-// 1. MLP forward: Linear(784,256) -> relu -> Linear(256,10), one root.
 function buildMlpForward(): AnyTensor[] {
   const x = rand([64, 784]) as AnyTensor
   const w1 = rand([784, 256]) as AnyTensor
@@ -57,7 +50,7 @@ function buildMlpForward(): AnyTensor[] {
   return [pred]
 }
 
-// 2. MLP forward + backward + Adam, by hand (see the file banner for why).
+// Hand-written math; see the file banner for why.
 function buildMlpForwardBackwardAdam(): AnyTensor[] {
   const batch = 64
   const x = rand([batch, 784]) as AnyTensor
@@ -73,7 +66,7 @@ function buildMlpForwardBackwardAdam(): AnyTensor[] {
   const diff = pred.sub(y)
   const loss = diff.pow(2).mean()
 
-  // Analytic backward for this exact graph: mseLoss = mean((pred-y)^2).
+  // Analytic backward: mseLoss = mean((pred-y)^2).
   const dpred = diff.mul(2 / pred.numel)
   const dW2 = h.transpose(0, 1).matmul(dpred)
   const db2 = dpred.sum(0)
@@ -98,7 +91,6 @@ function buildMlpForwardBackwardAdam(): AnyTensor[] {
   return [loss, adamStep(w1, dW1), adamStep(b1, db1), adamStep(w2, dW2), adamStep(b2, db2)]
 }
 
-// 3. An elementwise chain, mixing arithmetic with a transcendental.
 function buildElementwiseChain(): AnyTensor[] {
   const a = rand([4096]) as AnyTensor
   const b = rand([4096]) as AnyTensor
@@ -109,7 +101,6 @@ function buildElementwiseChain(): AnyTensor[] {
   return [t]
 }
 
-// 4. A reduce chain: sum / mean / max over different axes, recombined.
 function buildReduceChain(): AnyTensor[] {
   const a = rand([32, 128]) as AnyTensor
   const sum0 = a.sum(0)
@@ -119,19 +110,15 @@ function buildReduceChain(): AnyTensor[] {
   return [combined, sum0, mean1]
 }
 
-// 5. A gather/scatter pair at embedding scale: indexSelect then the
-// exact-reverse scatterAdd.
 function buildGatherScatterPair(): AnyTensor[] {
   const table = rand([65, 384]) as AnyTensor
-  // `.toIndex()` brands it for `indexSelect`/`scatterAdd` (OWNER-5, D25);
-  // int32 storage makes the brand check free.
+  // int32 storage makes the .toIndex() brand check free.
   const ids = tensor([1, 4, 4, 7, 12, 30, 30, 63]).to("int32").toIndex()
   const gathered = table.indexSelect(ids) as AnyTensor
   const scattered = gathered.scatterAdd(ids, 65)
   return [gathered, scattered]
 }
 
-// 6. A 4-D batched matmul: [B,H,T,K] @ [B,H,K,K2], as attention projects.
 function buildBatchedMatmul(): AnyTensor[] {
   const a = rand([2, 3, 4, 8]) as AnyTensor
   const b = rand([2, 3, 8, 5]) as AnyTensor

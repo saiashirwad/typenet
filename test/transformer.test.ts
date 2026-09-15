@@ -1,27 +1,23 @@
-// Whole hand-composed transformer block gradcheck (PLAN-V2 W4.10, gate
-// C11): LayerNorm -> causal multi-head self-attention (via `sdpa`) ->
-// residual add -> LayerNorm -> GELU MLP -> residual add, at
-// B=2, T=4, D=8, H=2. Central differences (eps=1e-3, tol=1e-3 — the f32
-// rationale is `gradcheck.test.ts`'s, unchanged) check every weight AND
-// the input, and the analytic gradient is re-derived on every path
-// typenet runs today:
+// Whole hand-composed transformer block gradcheck: LayerNorm -> causal
+// multi-head self-attention (via `sdpa`) -> residual add -> LayerNorm ->
+// GELU MLP -> residual add, at B=2, T=4, D=8, H=2. Central differences
+// (eps=1e-3, tol=1e-3; the f32 rationale is `gradcheck.test.ts`'s,
+// unchanged) check every weight and the input, and the analytic gradient
+// is re-derived on every path typenet runs today:
 //
-//   - eager    — the plain JS kernels
-//   - lazy     — the JS graph interpreter
-//   - native   — candle, with `lower-native.ts`'s fallback half (PLAN-V2
-//                §5A.9) sending softmax/layerNorm/gelu to the JS
-//                interpreter automatically (they have no native kernel
-//                yet); matmul/add still run through candle, so this path
-//                genuinely exercises the fallback rather than assuming it
-//   - compiled — `compile()`: forward + backward traced into one graph
-//                once, then replayed
+//   - eager: the plain JS kernels
+//   - lazy: the JS graph interpreter
+//   - native: candle, with softmax/layerNorm/gelu falling back to the JS
+//     interpreter automatically (they have no native kernel yet); matmul/add
+//     still run through candle, so this path genuinely exercises the
+//     fallback rather than assuming it
+//   - compiled: `compile()`, forward + backward traced into one graph once,
+//     then replayed
 //
-// Hand-composed on purpose: this is not `nn.TransformerBlock` (W5.2). It
-// is the same arithmetic built directly out of the free functions
-// (`layerNorm`, `sdpa`, `gelu`), so a sign error in one of W1.4/W4.1's
-// hand-derived closed-form backward rules has nowhere to hide behind a
-// layer's own tests — a finite difference is the only thing that catches
-// it (Accept #2's mutation check, below, proves that it does).
+// Hand-composed on purpose, out of the free functions (`layerNorm`, `sdpa`,
+// `gelu`) rather than `nn.TransformerBlock`: a sign error in a hand-derived
+// closed-form backward rule has nowhere to hide behind a layer's own tests,
+// and a finite difference is the only thing that catches it.
 
 import { describe, expect, it } from "vitest"
 import { noGrad } from "../src/autograd.ts"
@@ -35,10 +31,9 @@ const EPS = 1e-3
 const TOL = 1e-3
 const SEED = 4242
 
-// Fixed by the item. The MLP's hidden width is not specified there, so
-// it is picked small (2x, not the usual 4x) purely to keep the ~600
-// element finite-difference sweep fast — it changes nothing about what
-// is being checked.
+// B, T, D and H are fixed; the MLP hidden width is picked small (2x, not
+// the usual 4x) purely to keep the ~600 element finite-difference sweep
+// fast. It changes nothing about what is being checked.
 const B = 2
 const T = 4
 const D = 8
@@ -46,9 +41,8 @@ const H = 2
 const K = D / H
 const HID = 2 * D
 
-// mulberry32 — small seeded PRNG so the sampled weights are
-// deterministic and the test is never flaky (same generator as
-// `gradcheck.test.ts`).
+// mulberry32: small seeded PRNG so the sampled weights are deterministic
+// and the test is never flaky (same generator as `gradcheck.test.ts`).
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
   return () => {
@@ -81,9 +75,9 @@ const KEYS = Object.keys(PARAM_SHAPES) as Key[]
 
 /** Deterministic starting values for every parameter, keyed the same
  * way `PARAM_SHAPES` is. LayerNorm gains start near 1 (their identity
- * value); everything else starts near 0 — both small, so GELU and
- * softmax stay away from the flat regions where a central difference
- * would be swamped by f32 noise rather than testing the block. */
+ * value); everything else starts near 0. Both small, so GELU and softmax
+ * stay away from the flat regions where a central difference would be
+ * swamped by f32 noise rather than testing the block. */
 function sampleAll(seed: number): Record<Key, Float32Array> {
   const out = {} as Record<Key, Float32Array>
   KEYS.forEach((k, i) => {
@@ -111,11 +105,11 @@ function makeParams(
 }
 
 /**
- * The mutation check (Accept #2): negate every gradient a node's
- * hand-derived backward reports, leaving its forward value untouched.
- * Applied to `sdpa`'s own output — a real closed-form rule (the final
- * `matmul`'s backward inside `sdpa`) turned into the deliberate sign
- * error a finite difference is supposed to catch.
+ * The mutation check: negate every gradient a node's hand-derived
+ * backward reports, leaving its forward value untouched. Applied to
+ * `sdpa`'s own output, so a real closed-form rule (the final `matmul`'s
+ * backward inside `sdpa`) is turned into the deliberate sign error a
+ * finite difference is supposed to catch.
  */
 function flipBackward(t: AnyTensor): void {
   const node = _internal.gradNodeOf(t)
@@ -132,8 +126,8 @@ function flipBackward(t: AnyTensor): void {
 
 /**
  * LayerNorm -> causal MHA (via `sdpa`) -> residual -> LayerNorm -> GELU
- * MLP -> residual. `opts.bug` runs the mutation check of Accept #2; it
- * is never set outside that one test.
+ * MLP -> residual. `opts.bug` runs the mutation check; it is never set
+ * outside that one test.
  */
 function block(
   p: Record<Key, AnyTensor>,
@@ -144,7 +138,7 @@ function block(
   const k = normed1.matmul(p.wk!)
   const v = normed1.matmul(p.wv!)
   // [B,T,D] -> [B,H,T,K] (q, v) or [B,H,K,T] (k, as `sdpa` expects it
-  // pre-transposed — see `src/nn/functional.ts`'s `sdpa` doc comment).
+  // pre-transposed; see `src/nn/functional.ts`'s `sdpa` doc comment).
   const toHeads = (t: AnyTensor): AnyTensor => t.unflatten(2, [H, K]).permute(0, 2, 1, 3)
   const qh = toHeads(q)
   const vh = toHeads(v)
@@ -175,7 +169,7 @@ function lossOf(
 }
 
 /** Central-difference reference gradient for every parameter, taken
- * eagerly and with grad disabled — the numeric spec every mode below is
+ * eagerly and with grad disabled: the numeric spec every mode below is
  * checked against. */
 function numericGrads(): Record<Key, Float32Array> {
   const values = sampleAll(SEED)
@@ -233,7 +227,7 @@ function analyticDirect(
 /** Analytic gradient through `compile()`: forward + backward traced once
  * and replayed. The gradients are returned as part of the compiled
  * function's own output tuple (`[loss, ...grads]`) rather than read back
- * off `params[k].grad` afterwards — a compiled graph's roots are exactly
+ * off `params[k].grad` afterwards: a compiled graph's roots are exactly
  * its outputs plus its update targets, and a bare `.grad` read here would
  * be reading an unforced lazy expression from `trace()` time. */
 function analyticCompiled(
@@ -296,7 +290,7 @@ function expectAgreesWithNumeric(
   }
 }
 
-describe("transformer block gradcheck (gate C11)", () => {
+describe("transformer block gradcheck", () => {
   const numeric = numericGrads()
 
   it("eager matches finite differences", () => {
@@ -320,9 +314,9 @@ describe("transformer block gradcheck (gate C11)", () => {
   })
 
   it("a flipped sign in a hand-derived backward makes the check fail", () => {
-    // Same seed, same block, the ONLY difference is `sdpa`'s backward
-    // negated after the fact — proof that a real regression in a
-    // closed-form rule is not silently accepted by this suite.
+    // Same seed, same block; the only difference is `sdpa`'s backward
+    // negated after the fact, so a real regression in a closed-form rule
+    // cannot be silently accepted by this suite.
     const buggy = analyticDirect("eager", { bug: true })
     expect(
       maxRelError(buggy, numeric),

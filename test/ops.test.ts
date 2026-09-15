@@ -6,25 +6,14 @@ import { NON_WIRE_OPS, SUPPORT, WIRE_OPS } from "../src/lower-native.ts"
 import { BINARY_OPS, NODE_OPS, UNARY_OPS } from "../src/ops.ts"
 
 /**
- * The TS op tables and the Rust addon must list the same kinds. The
- * Rust side is handwritten (its lowering maps onto candle APIs, not a
- * scalar apply), so this test reads native/src/lib.rs and compares:
- * a kind added on one side fails here until the other side moves.
+ * The TS op tables and the Rust addon must list the same kinds. The Rust
+ * side is handwritten (its lowering maps onto candle APIs, not a scalar
+ * apply), so this test reads native/src/lib.rs and compares three ways so
+ * a one-sided edit fails in both directions:
  *
- * W4.1 split the first assertion in three rather than deleting it. The IR
- * now has more kinds than the addon parses (PLAN-V2 §5A.2a), so:
- *
- *   1. the Rust `Node` enum is compared against `WIRE_OPS` — the addon's
- *      own op set, which `native/` being frozen for Phase A does not
- *      change;
- *   2. `NODE_OPS` is still exactly `["leaf", ...OP_DESC keys]`;
- *   3. every `NODE_OPS \ WIRE_OPS` member is classified in `SUPPORT`.
- *
- * Together these still fail in BOTH directions on a one-sided edit: a new
- * Rust arm with no `WIRE_OPS` entry fails (1); a new `OP_DESC` entry with
- * no `NODE_OPS` member fails (2); and a new `NODE_OPS` member is a compile
- * error in `SUPPORT` (a `Record<NodeOp, Support>`) before it ever reaches
- * (3), which is the stronger half.
+ *   1. the Rust `Node` enum against `WIRE_OPS` (the addon's own op set);
+ *   2. `NODE_OPS` against `["leaf", ...OP_DESC keys]`;
+ *   3. every `NODE_OPS \ WIRE_OPS` member classified in `SUPPORT`.
  */
 
 const librs = readFileSync(
@@ -70,8 +59,7 @@ describe("op kind lists match the Rust addon", () => {
     for (const op of NON_WIRE_OPS) {
       expect(SUPPORT[op], `SUPPORT entry for ${op}`)
         .toBeDefined()
-      // Phase A has no lowerings yet (A-L1 adds them), so every non-wire
-      // kind must carry a reason a user can read.
+      // every non-wire kind must carry a reason a user can read
       expect(SUPPORT[op].kind).toBe("unsupported")
       if (SUPPORT[op].kind === "unsupported") {
         expect(SUPPORT[op].reason).toContain(op)

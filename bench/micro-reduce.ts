@@ -1,6 +1,5 @@
-// sum/mean/max/argmax by axis and size, including the > 4096-row
-// GEMV-sum route (`GEMV_SUM_MIN_ROWS` at `native/src/lib.rs:2497`)
-// (PLAN-V2 §4.2, W0.3).
+// sum/mean/max/argmax by axis and size, including the > 4096-row GEMV-sum
+// route.
 
 import { disableNative, useNative } from "../index.ts"
 import { rand } from "../src/factories.ts"
@@ -12,11 +11,9 @@ import { REDUCE_SHAPES_FULL, REDUCE_SHAPES_SMOKE } from "./lib/sizes.ts"
 type ReduceOp = "sum" | "mean" | "max" | "argmax"
 const OPS: readonly ReduceOp[] = ["sum", "mean", "max", "argmax"]
 
-// `gemv-route` (full only) deliberately sits at >= 4096 rows
-// (`GEMV_SUM_MIN_ROWS`) so `sum`/`mean` along dim 0 exercise the GEMV-sum
-// rewrite; `below-route` is the same shape family just under the
-// threshold, as a contrast. Smoke keeps only the two smallest families,
-// shrunk further.
+// `gemv-route` (full only) sits at >= 4096 rows (GEMV_SUM_MIN_ROWS) so
+// dim-0 sum/mean exercise the GEMV-sum rewrite; `below-route` is the same
+// shape family just under the threshold, as a contrast.
 const SHAPES = isSmokeRun() ? REDUCE_SHAPES_SMOKE : REDUCE_SHAPES_FULL
 
 interface ReduceCase extends BenchCaseSpec {

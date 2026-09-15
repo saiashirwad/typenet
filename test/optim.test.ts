@@ -30,7 +30,7 @@ describe("optimizer lr is public and mutable", () => {
     ;(p.grad!.data as Float32Array).set([1])
     opt.step()
     const after2 = p.data[0]!
-    // step 1 moved by 1e-3, step 2 by 1e-1 — a 100x jump.
+    // a 100x jump
     expect(Math.abs(after1 - 1)).toBeCloseTo(1e-3, 6)
     expect(Math.abs(after2 - after1)).toBeCloseTo(1e-1, 6)
   })
@@ -45,7 +45,7 @@ describe("AdamW (decoupled weight decay)", () => {
     const wd = 0.1
     const g = 0.5
 
-    // Independent reference: Loshchilov & Hutter 2019, eq. 12 —
+    // Independent reference: Loshchilov & Hutter 2019, eq. 12:
     // theta_t = theta_{t-1} - lr*wd*theta_{t-1} - lr*mHat/(sqrt(vHat)+eps).
     // `Math.fround` after each step mirrors the real parameter's float32
     // storage (the moment estimates below stay double precision, exactly

@@ -77,19 +77,15 @@ describe.skipIf(!isNativeAvailable())(
   },
 )
 
-// These re-run the deep chains above (and a new one mixing in views and
-// reductions) as child processes with a deliberately tiny (256 KB) V8
-// stack, so that graph construction, forcing and backward all have to stay
-// iterative rather than recursing one native call frame per graph node —
-// the same class of bug effect-torch hit rewriting Clone/PartialEq/Hash/Drop
-// as worklists. `runOnSmallStack` spawns each `test/scenarios/*.ts` file
-// under vite-node; a scenario asserts internally and exits non-zero on
-// failure (assertion or native stack overflow alike).
+// These re-run the deep chains above as child processes with a tiny
+// (256 KB) V8 stack, so graph construction, forcing and backward all have
+// to stay iterative rather than recursing one native frame per graph node.
+// `runOnSmallStack` spawns each `test/scenarios/*.ts` file under vite-node;
+// a scenario asserts internally and exits non-zero on failure (assertion
+// or native stack overflow alike).
 describe("deep graphs, small stack", () => {
-  // Each scenario is a cold vite-node process (its own TS transform/typecheck
-  // pass), which dominates the wall time far more than the actual small-stack
-  // chain evaluation does — give it plenty of headroom above vitest's 5s
-  // default.
+  // A cold vite-node process (its own TS transform) dominates the wall
+  // time; give it headroom above vitest's 5s default.
   const SMALL_STACK_TIMEOUT = 60_000
 
   it("forces, and differentiates, the depth-20000 chain on a small stack", async () => {
@@ -102,7 +98,7 @@ describe("deep graphs, small stack", () => {
     expect(code, `stdout:\n${stdout}\nstderr:\n${stderr}`).toBe(0)
   }, SMALL_STACK_TIMEOUT)
 
-  it("genuinely fails a deliberately recursive scenario", async () => {
+  it("genuinely fails a recursive scenario", async () => {
     const { code } = await runOnSmallStack("recursive-overflow")
     expect(code).not.toBe(0)
   }, SMALL_STACK_TIMEOUT)

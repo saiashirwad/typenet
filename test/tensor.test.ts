@@ -3,9 +3,7 @@ import { compile } from "../src/compile.ts"
 import { arange, eye, ones, tensor, zeros } from "../src/factories.ts"
 import { Tensor } from "../src/tensor.ts"
 
-// Compile-time-only helpers for the "types as it" half of a couple of
-// accept criteria below — `pnpm typecheck` checks this file too, vitest
-// just never runs the types.
+// `pnpm typecheck` checks this file too; vitest never runs the types.
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
 type Expect<T extends true> = T
 
@@ -277,7 +275,7 @@ describe("dtype tags", () => {
   })
 })
 
-describe("flatten / unflatten (W1.8)", () => {
+describe("flatten / unflatten", () => {
   it("flatten(from,to) agrees with view() on ranks 2-4", () => {
     const t3 = arange(24).view([2, 3, 4])
     expect(t3.flatten(0, 1).shape).toEqual([6, 4])
@@ -316,7 +314,7 @@ describe("flatten / unflatten (W1.8)", () => {
     expect(split4.flatten(1, 2).toArray()).toEqual(t4.toArray())
   })
 
-  it("unflatten(dim, sizes).permute(...) builds the attention head split (the W5.2 case)", () => {
+  it("unflatten(dim, sizes).permute(...) builds the attention head split", () => {
     const B = 2, T = 3, H = 2, Dh = 2
     const q = arange(B * T * H * Dh).view([B, T, H * Dh])
     const heads = q.unflatten(2, [H, Dh]).permute(0, 2, 1, 3)
@@ -333,7 +331,7 @@ describe("flatten / unflatten (W1.8)", () => {
   })
 })
 
-describe("safe mutation primitives (W1.8)", () => {
+describe("safe mutation primitives", () => {
   it("fill_ overwrites every element", () => {
     const t = zeros([3])
     t.fill_(7)
@@ -401,7 +399,7 @@ describe("safe mutation primitives (W1.8)", () => {
   })
 })
 
-describe("index tensors (W1.8)", () => {
+describe("index tensors", () => {
   it("toIndex brands an integral tensor in place, without copying", () => {
     const t = tensor([1, 2, 3])
     const idx = t.toIndex()

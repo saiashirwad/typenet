@@ -32,8 +32,8 @@ import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
 
-// mulberry32 — small seeded PRNG so the sampled inputs are
-// deterministic and the test is never flaky.
+// mulberry32: small seeded PRNG so the sampled inputs are deterministic
+// and the test is never flaky.
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
   return () => {
@@ -58,14 +58,11 @@ interface Case {
       finite difference sits just above the global 1e-3 floor. */
   readonly tol?: number
   /**
-   * The item that makes this case runnable on the NATIVE path (PLAN-V2
-   * §5A.0 rule 2). W4.1's semantic ops have no native kernel and no
-   * lowering yet, so a native run of them would land on the JS
+   * Marks a case the native block must filter: the op has no native
+   * kernel or lowering yet, so a native run would land on the JS
    * interpreter and the "the native graph was prepared" assertion in
-   * `checkCase` would fail for the wrong reason. The native
-   * `describe.each` block below FILTERS these out — it does not `.skip`
-   * them, and the eager and lazy blocks run every case. A-L1 removes the
-   * flags, and its own acceptance is that no `nativeFrom` survives.
+   * `checkCase` would fail for the wrong reason. The eager and lazy
+   * blocks run every case.
    */
   readonly nativeFrom?: string
 }
@@ -80,7 +77,7 @@ interface CheckOpts {
 const defaultSample = (rand: () => number): number => (rand() * 2 - 1) * 1.5 + 0.6
 const awayFromZero = (rand: () => number): number => (rand() > 0.5 ? 1 : -1) * (0.5 + rand())
 const positive = (rand: () => number): number => 0.5 + rand() * 2
-// |x| in [0.2, 0.7] or [1.5, 2.5] — never within EPS of ±1, so the
+// |x| in [0.2, 0.7] or [1.5, 2.5]: never within EPS of ±1, so the
 // corners of clamp/maximum/minimum stay outside the difference window
 const awayFromUnit = (rand: () => number): number =>
   (rand() > 0.5 ? 1 : -1)
@@ -88,13 +85,13 @@ const awayFromUnit = (rand: () => number): number =>
 
 // Index tensors are exact integers, not sampled inputs, so they are
 // built inside `build` rather than coming from `shapes`. `.toIndex()`
-// brands them (OWNER-5, D25): `indexSelect`/`scatterAdd` take an
-// `IndexTensor`, never a bare `Tensor<[E]>`.
+// brands them: `indexSelect`/`scatterAdd` take an `IndexTensor`, never a
+// bare `Tensor<[E]>`.
 //
 // The static return is widened to `any` because `IndexTensor` is
-// invariant in its shape — the cases below feed the same helper into
+// invariant in its shape: the cases below feed the same helper into
 // parameters spelled `[number]`, `[any]` and `[never]`, and no single
-// concrete spelling fits all three. The *value* is a real branded index
+// concrete spelling fits all three. The value is a real branded index
 // tensor; only the type is loosened, and only inside this test.
 const index = (values: number[]): any => Tensor.of(values).toIndex()
 
@@ -133,8 +130,8 @@ function checkCase(c: Case, seed: number, opts: CheckOpts = {}): void {
   ).toEqual([])
 
   // Under native mode, the analytic gradient must actually run through
-  // the native path — record the prepare count before backward() so we
-  // can confirm it advanced, rather than silently falling back to JS.
+  // the native path: record the prepare count before backward() to
+  // confirm it advanced, rather than silently falling back to JS.
   const nativeUnderTest = isNativeEnabled()
   const preparesBefore = nativeUnderTest
     ? (nativeCounters().prepares as number)
@@ -164,15 +161,11 @@ function checkCase(c: Case, seed: number, opts: CheckOpts = {}): void {
   })
 
   // The finite-difference reference is always taken with the eager
-  // evaluator, even when the analytic gradient above ran natively: f32
-  // accumulation on the native (candle/Accelerate) path is noisier than
-  // eager's f64-arithmetic-on-f32-storage kernels, and central
-  // differences amplify that noise by 1/eps. Comparing native noise
-  // against native noise (or lazy against itself) would hide real
-  // regressions; comparing the analytic gradient against the eager
-  // numeric spec is the stronger, and only meaningful, check. Eager and
-  // lazy modes are unaffected: native is already disabled for them, so
-  // this is a no-op save/restore around the same computation as before.
+  // evaluator, even when the analytic gradient above ran natively:
+  // f32 accumulation on the native path is noisier, and central
+  // differences amplify that noise by 1/eps, so comparing native noise
+  // against native noise would hide real regressions. Eager and lazy
+  // modes are unaffected; this is a no-op save/restore for them.
   const savedNativeState = _nativeState()
   const savedLazy = isLazy()
   if (nativeUnderTest) {
@@ -590,10 +583,8 @@ const CASES: Case[] = [
     sample: awayFromUnit,
   },
 
-  // --- W4.1 semantic ops ---------------------------------------------------
-  // Every one of these carries `nativeFrom: "A-L1"`: the op exists in the IR
-  // and runs eager and lazy today, but the addon cannot parse it, so the
-  // native block filters it until A-L1 lowers it.
+  // semantic ops: the addon cannot parse these yet, so the native block
+  // filters them (`nativeFrom`) until a lowering exists
   {
     name: "gelu",
     shapes: [[6]],
@@ -655,12 +646,10 @@ const CASES: Case[] = [
     nativeFrom: "A-L1",
   },
   {
-    // The [B,T,V] shape a transformer's LM head actually produces.
-    // `crossEntropy` now collapses the leading axes itself (W5.3), so
-    // this case keeps the *explicit* `flatten(0, 1)` on purpose: it puts
-    // `flatten`'s own backward (an unflatten-shaped reshape) under the
-    // same finite-difference check as the loss. The no-reshape spelling
-    // is covered by `test/losses.test.ts`.
+    // The [B,T,V] shape a transformer's LM head actually produces. The
+    // explicit `flatten(0, 1)` is kept on purpose: it puts `flatten`'s
+    // own backward under the same finite-difference check as the loss.
+    // The no-reshape spelling is covered by `test/losses.test.ts`.
     name: "crossEntropy over [B,T,V]",
     shapes: [[2, 3, 4]],
     build: ([a]) =>
@@ -671,9 +660,9 @@ const CASES: Case[] = [
     nativeFrom: "A-L1",
   },
   {
-    // `sdpa` (W5.2) is not an IR node itself — it is `matmul`/`mul`
-    // (native) around a `softmax{causal}` node (not yet native, PLAN-V2
-    // §5A.9) — so it carries the same flag the softmax node above does.
+    // `sdpa` is not an IR node itself: it is matmul/mul (native) around
+    // a softmax{causal} node (not yet native), so it carries the same
+    // flag as the softmax node above.
     name: "sdpa (causal)",
     shapes: [
       [1, 2, 3, 2], // q [B,H,T,K]
@@ -718,10 +707,9 @@ const CASES: Case[] = [
   },
   {
     // p = 0 is the only deterministic dropout, and determinism is what a
-    // finite difference needs: with p > 0 the perturbed evaluations would
-    // each draw their own mask. That the mask is shared between forward
-    // and backward at p > 0 is asserted directly in
-    // `test/semantic-ops.test.ts`, against the mask itself.
+    // finite difference needs: with p > 0 each perturbed evaluation would
+    // draw its own mask. That the mask is shared between forward and
+    // backward at p > 0 is asserted directly in `test/semantic-ops.test.ts`.
     name: "dropout(p=0)",
     shapes: [[6]],
     build: ([a]) => dropout(a!, 0).pow(3).sum() as AnyTensor,
@@ -734,9 +722,9 @@ const CASES: Case[] = [
     nativeFrom: "A-L1",
   },
   {
-    // The multi-axis `reduce{dims}` W4.1 step 6 introduced: a `[2,3,4] +
-    // [4]` bias backward reduces axes 0 and 1 in ONE node. Native-clean —
-    // `reduce` is a wire op at every arity (`encodeForWire`).
+    // The multi-axis `reduce{dims}`: a `[2,3,4] + [4]` bias backward
+    // reduces axes 0 and 1 in one node, and `reduce` is a wire op at
+    // every arity, so it is native-clean.
     name: "broadcast add [2,3,4]+[4] (multi-axis sumTo)",
     shapes: [[2, 3, 4], [4]],
     // `tanh` rather than `pow(3)`: a 24-term f32 sum of cubes puts the
@@ -761,9 +749,9 @@ describe.each([
     disableNative()
   })
 
-  // Filtered, not skipped (PLAN-V2 §5A.0 rule 2): a case whose op the
-  // addon cannot run is not a native case yet, and pretending otherwise by
-  // `.skip`ing it would leave a permanently red-ish suite that nobody reads.
+  // Filtered, not skipped: a case whose op the addon cannot run is not a
+  // native case yet, and `.skip`ing it would leave a permanently red-ish
+  // suite that nobody reads.
   const cases = native
     ? CASES.filter(c => c.nativeFrom === undefined)
     : CASES

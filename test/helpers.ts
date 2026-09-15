@@ -34,9 +34,9 @@ export function expectClose(
   }
 }
 
-/** Runs `fn` eagerly, in lazy (JS) mode, and — when the native addon is
- * built — through the native backend, resetting global flags afterwards.
- * `native` is `null` when the addon is not available. */
+/** Runs `fn` eagerly, in lazy (JS) mode, and through the native backend
+ * when the addon is built, resetting global flags afterwards. `native` is
+ * `null` when the addon is not available. */
 export function allPaths(fn: () => AnyTensor): {
   eager: AnyTensor
   lazy: AnyTensor
@@ -58,8 +58,8 @@ export function allPaths(fn: () => AnyTensor): {
 }
 
 /** Elementwise agreement of the lazy and (when available) native paths
- * against the eager path. Silently skips the native leg when the addon
- * is not built — see `expectAgreeStrict` for a version that fails instead. */
+ * against the eager path. Skips the native leg when the addon is not
+ * built; see `expectAgreeStrict` for a version that fails instead. */
 export function expectAgree(
   fn: () => AnyTensor,
   tolerance = 1e-5,
@@ -88,7 +88,7 @@ export function expectAgree(
 
 /** Same as `expectAgree`, but fails when an expected target (e.g. the
  * native backend on a machine where `pnpm build:native` was run) is
- * unavailable instead of silently skipping it. */
+ * unavailable instead of skipping it. */
 export function expectAgreeStrict(
   fn: () => AnyTensor,
   tolerance = 1e-5,

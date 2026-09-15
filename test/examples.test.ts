@@ -31,10 +31,6 @@ function run(
   }
 }
 
-// ---------------------------------------------------------------------------
-// The examples run
-// ---------------------------------------------------------------------------
-
 describe("examples", () => {
   it("example:shapes runs and prints the gallery", () => {
     const out = run(bin("vite-node"), ["examples/shapes.ts"])
@@ -62,16 +58,11 @@ describe("examples", () => {
   }, 120_000)
 })
 
-// ---------------------------------------------------------------------------
-// The eight compile-time errors, checked against the compiler
-// ---------------------------------------------------------------------------
-//
 // `pnpm typecheck` already proves every `@ts-expect-error` in the gallery
-// fires — an unused directive is itself an error. What it cannot prove is
-// that the message quoted above each case is the message the compiler
-// actually produces, which is the only reason the quotes are worth printing
-// in the README. So: strip the directives, compile the file again, and read
-// the diagnostics back.
+// fires (an unused directive is itself an error). What it cannot prove is
+// that the quoted message is the message the compiler actually produces.
+// So: strip the directives, compile the file again, and read the
+// diagnostics back.
 
 type GalleryCase = {
   /** The TS error code the case claims, e.g. 2345. */
@@ -203,9 +194,9 @@ describe("examples/shapes.ts", () => {
   it("every quoted message appears in the README", () => {
     const readme = readFileSync(resolve(root, "README.md"), "utf8")
     for (const testCase of cases) {
-      // The README's table quotes the sentence the shape algebra produced —
-      // the part inside the `"..."` of an assignability error — or, for a
-      // diagnostic that has no such sentence, the whole first line.
+      // The README quotes the sentence the shape algebra produced (the
+      // part inside the `"..."` of an assignability error), or, for a
+      // diagnostic with no such sentence, the whole first line.
       const inner = /"([^"]+)"/.exec(testCase.quoted)
       const sentence = normalize(inner ? inner[1]! : testCase.quoted)
       expect(normalize(readme), `README.md does not quote: ${sentence}`).toContain(sentence)
@@ -213,14 +204,9 @@ describe("examples/shapes.ts", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// The rules the examples are written under
-// ---------------------------------------------------------------------------
-
 describe("examples are cast-free", () => {
   it("no example reaches for an escape hatch", () => {
-    // W5.7a's acceptance grep, as a test: the showcase is worthless if the
-    // shapes are asserted rather than inferred.
+    // The showcase is worthless if shapes are asserted rather than inferred.
     const banned = /\bas (any|unknown|never)\b|assertChecked|AnyTensor/
     const files = ["examples/shapes.ts", "examples/mlp.ts"]
     for (const file of files) {

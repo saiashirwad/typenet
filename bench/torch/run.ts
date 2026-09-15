@@ -1,20 +1,8 @@
-// bench/torch/run.ts — the PyTorch bench driver (PLAN-V2 §4.2/§5A.4, W0.4).
-//
-// Discovers every `bench/torch/bench_*.py` script, runs each once per
-// available mode (`torch-cpu`, and `torch-mps` when `hasTorch()`'s MPS
-// flag is set) through `runTorch()`, and appends its JSONL lines to
-// `bench/results/torch-*.jsonl` (smoke by default — every bench script in
-// this repo is smoke-by-default per PLAN-V2 §5A.0 and `bench/README.md`;
-// `--full` opts a run into the real `bench/lib/sizes.ts`-equivalent shapes
-// and the >= 10 sample floor, which Phase A never passes).
-//
-// Mirrors `bench/lib/cli.ts`'s `--only`/`--tag`/`--full` flags with a
-// fresh, local parse rather than importing that module: `bench/lib/cli.ts`
-// belongs to a different plan item and is out of this item's Files line,
-// and this file must compose with it by flag shape, not by import.
-//
-// An unknown flag throws, naming the flag — the same "fail loudly" rule
-// `bench/lib/cli.ts` applies on the TS side.
+// PyTorch bench driver: discovers every bench/torch/bench_*.py script, runs
+// each once per available device (torch-cpu, and torch-mps when probed),
+// and appends its JSONL lines to bench/results/torch-*.jsonl. Mirrors
+// bench/lib/cli.ts's --only/--tag/--full flags with a local parse so the
+// two drivers compose by flag shape rather than by import.
 
 import { execFileSync } from "node:child_process"
 import { appendFileSync, mkdirSync, readdirSync } from "node:fs"
@@ -60,14 +48,8 @@ function parseArgs(argv: string[]): RunArgs {
   return args
 }
 
-// The structural-counters key list (PLAN-V2 §2.9) is normative — no bench
-// script may invent, rename or drop a key. A torch run measures none of
-// them (it is not typenet's runtime), so every key is `-1`, exactly like
-// `bench/typecheck.ts` (a different item's file, following the same rule)
-// reports for a `tsc` run. Duplicated here rather than imported from
-// `bench/lib/report.ts` for the same reason `bench/typecheck.ts` states:
-// that file belongs to a different plan item and is out of this item's
-// Files line.
+// A torch run measures none of typenet's structural counters, so every key
+// is -1. Duplicated from bench/lib/report.ts rather than imported.
 const COUNTER_KEYS = [
   "prepares",
   "indexBuilds",
@@ -138,12 +120,7 @@ function gitInfo(): { git: string; dirty: boolean } {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 
-/**
- * Smoke and full lines never share a file, exactly like
- * `bench/lib/report.ts`'s `resultsPath` on the TS side: smoke routes to
- * `bench/results/smoke/torch-<script>.jsonl`, full to
- * `bench/results/torch-<script>.jsonl`.
- */
+/** Smoke and full results never share a file: smoke routes to bench/results/smoke/. */
 function resultsPath(script: string, smoke: boolean): string {
   return smoke
     ? join(root, "bench", "results", "smoke", `torch-${script}.jsonl`)

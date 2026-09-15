@@ -23,10 +23,8 @@ describe("losses", () => {
     expect(() =>
       crossEntropy(
         tensor([[1, 2], [3, 4]]),
-        // @ts-expect-error one target per row: batch is 2, not 1 — this
-        // is now ALSO a compile error (a wrong-length target is not
-        // `IndexTensor<Init<S>>`), and the cast-free call still exercises
-        // crossEntropy's own runtime check
+        // @ts-expect-error one target per row: batch is 2, not 1. This is
+        // also a compile error, and the runtime check is still exercised.
         Tensor.indices([0], [1]),
       )
     ).toThrow(/1 targets for batch of 2/)
@@ -38,9 +36,6 @@ describe("losses", () => {
     )
   })
 
-  // Accept #1: [B,T,V] logits with a [B,T] target, with NO manual reshape
-  // on the caller's side — the flatten crossEntropy used to force by hand
-  // happens inside it now.
   it("crossEntropy over [B,T,V]/[B,T] needs no manual reshape", () => {
     const logitsBTV = tensor([
       [
@@ -55,15 +50,13 @@ describe("losses", () => {
     const targets = Tensor.indices([1, 0, 2, 0], [2, 2])
     const loss = crossEntropy(logitsBTV, targets)
 
-    // Same number, computed by hand-flattening to [4,3]/[4] the way a
-    // caller used to have to.
+    // Same number via hand-flattening to [4,3]/[4].
     const flatLoss = crossEntropy(
       logitsBTV.flatten(0, 1),
       Tensor.indices([1, 0, 2, 0], [4]),
     )
     expect(loss.item()).toBeCloseTo(flatLoss.item(), 6)
 
-    // And against a fully hand-computed reference, row by row.
     const p = (row: number[], target: number) => {
       const m = Math.max(...row)
       const exps = row.map(v => Math.exp(v - m))
@@ -87,7 +80,7 @@ describe("losses", () => {
       [0.5, 1.5, -1],
       [1, 1, 1],
     ]).requiresGrad()
-    // Row 2's target is the sentinel: it should count for nothing.
+    // Row 2's target is the ignoreIndex sentinel.
     const targets = Tensor.indices([0, 1, -100], [3])
     const loss = crossEntropy(logits, targets, { ignoreIndex: -100 })
 
@@ -115,7 +108,6 @@ describe("losses", () => {
     const targets = Tensor.indices([0], [1])
     const sharp = crossEntropy(logits, targets)
     const smoothed = crossEntropy(logits, targets, { labelSmoothing: 0.1 })
-    // Smoothing moves the loss away from the sharp one-hot loss.
     expect(smoothed.item()).not.toBeCloseTo(sharp.item(), 5)
   })
 

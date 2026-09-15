@@ -236,7 +236,7 @@ describe.skipIf(!available)("native backend", () => {
     const y = z.add(z)
     const w = z.sum()
     y.sum().add(w).backward()
-    // loss = 3 * sum(x²) → d/dx = 6x; the forward x*x must be one
+    // loss = 3 * sum(x²), so d/dx = 6x; the forward x*x must be one
     // node in the serialized graph (dedupe) and every alias must see
     // the same materialized values.
     expectClose(
@@ -302,10 +302,8 @@ describe("native backend availability", () => {
 })
 
 // Leak baselines: neither the eager-native GEMM assist nor the
-// compile/dispose cycle should grow the native prepared-graph table.
-// These don't move any gradient math, but a leak here would eventually
-// exhaust native handles in any long-running process (e.g. a training
-// loop), so they're asserted directly rather than left to intuition.
+// compile/dispose cycle should grow the native prepared-graph table; a
+// leak would eventually exhaust native handles in a long-running process.
 describe.skipIf(!available)("native backend leak baselines", () => {
   it("10,000 eager-native matmuls leave preparedGraphCount at baseline", () => {
     configure({ lazy: false })
@@ -314,8 +312,8 @@ describe.skipIf(!available)("native backend leak baselines", () => {
     const a = Tensor.rand([8, 8]) as AnyTensor
     const b = Tensor.rand([8, 8]) as AnyTensor
     for (let i = 0; i < 10_000; i++) {
-      // eager native GEMM assist path (src/eager.ts), never touches
-      // prepareGraph/releaseGraph — this pins that invariant down.
+      // eager native GEMM assist path (src/eager.ts); it must never
+      // touch prepareGraph/releaseGraph.
       a.matmul(b).data
     }
     expect(preparedGraphCountNative()).toBe(before)

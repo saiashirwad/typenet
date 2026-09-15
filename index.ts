@@ -21,14 +21,12 @@ export {
   nativeProfile,
   useNative,
 } from "./src/backends/native.ts"
-// The whole nn surface: layers, losses, Module/Parameter, sequential,
-// and the `init` / `functional` namespaces.
 export { jsCounters, resetJsCounters } from "./src/counters.ts"
 export * from "./src/nn/index.ts"
 export { Adam, AdamW, clipGradNorm, Optimizer, SGD } from "./src/optim.ts"
 export type { AdamOptions, AdamWOptions, OptimizerSource, OptimizerStateDict, OptimizerStateEntry, SGDOptions } from "./src/optim.ts"
-// Plain `(step: number) => number` learning-rate schedules (W1.10) — no
-// coupling to `Optimizer`; assign `opt.lr = schedule(step)` yourself.
+// Plain `(step: number) => number` schedules, decoupled from `Optimizer`;
+// assign `opt.lr = schedule(step)` yourself.
 export { constant, cosine, linearDecay, oneCycle, stepDecay, warmup, warmupCosine } from "./src/optim/schedule.ts"
 export type { Schedule } from "./src/optim/schedule.ts"
 
@@ -37,15 +35,11 @@ export type { Schedule } from "./src/optim/schedule.ts"
 // constructor width like `DimAdd(DimMul(3, channels), 1)` carries its
 // derived type with no cast.
 export { DimAdd, DimDiv, DimMul, DimSub } from "./src/shape.ts"
-// Conv/pool spatial arithmetic (D35), same dual type/value shape: the type
-// tracks the output extent literally, the function returns it at runtime, so
-// a head width like `DimMul(DimMul(16, PoolOut(11, 2, 2)), PoolOut(11, 2, 2))`
-// carries its derived type with no cast.
-export { ConvOut, flattenFrom, PoolOut } from "./src/shape.ts"
-// The shape assertion. It lives beside the *Check types in shape.ts and
-// is re-exported from src/cast.ts so every asserting call site is one
-// grep away; see that file.
+// Same dual type/value shape for conv/pool spatial arithmetic: a head width
+// like `DimMul(DimMul(16, PoolOut(11, 2, 2)), PoolOut(11, 2, 2))` carries its
+// derived type with no cast.
 export { assertChecked } from "./src/cast.ts"
+export { ConvOut, flattenFrom, PoolOut } from "./src/shape.ts"
 export { flattenShape, unflattenShape } from "./src/shape.ts"
 export type {
   BatchPrefix,

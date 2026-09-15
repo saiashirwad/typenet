@@ -1,7 +1,5 @@
-// Embedding forward + backward, hand-composed from `indexSelect` /
-// `scatterAdd` (PLAN-V2 §4.2, W0.3) — there is no `Embedding` module in
-// `src/nn.ts` yet, so this is the bench-only stand-in, read by
-// `bench/macro-embedding.ts`.
+// Bench-only embedding stand-in (no Embedding module in src/nn yet), read
+// by bench/macro-embedding.ts.
 
 import { Module, randn } from "../../index.ts"
 import type { IndexTensor } from "../../src/shape.ts"
@@ -12,8 +10,7 @@ export interface EmbeddingConfig {
   embedDim: number
 }
 
-/** `weight.indexSelect(ids, 0)` — an `F.embedding` lookup with no fused
- * kernel; the backward is `scatterAdd`, exercised via `.backward()`. */
+/** `weight.indexSelect(ids, 0)` lookup; backward is `scatterAdd` via `.backward()`. */
 export class Embedding extends Module {
   readonly weight: AnyTensor
 
@@ -31,10 +28,8 @@ export class Embedding extends Module {
   }
 }
 
-/** `count` random integer ids in `[0, vocabSize)`, as a rank-1 float32
- * index tensor (`indexSelect`/`scatterAdd` accept a float32 index for
- * compatibility with plain JS number arrays), branded with `.toIndex()`
- * because those methods take an `IndexTensor` (OWNER-5, D25). */
+/** `count` random integer ids in `[0, vocabSize)` as a float32 index tensor
+ * (indexSelect/scatterAdd accept float32 indices), branded with `.toIndex()`. */
 export function randomIds(vocabSize: number, count: number): IndexTensor<[number]> {
   const data = new Float32Array(count)
   for (let i = 0; i < count; i++) {

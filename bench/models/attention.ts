@@ -1,10 +1,6 @@
-// A hand-composed causal multi-head self-attention block (PLAN-V2 §4.2,
-// W0.3) — the same shape `examples/gat.ts` writes, built entirely from
-// today's primitives: `matmul`, `permute`, `view`, `softmax`. No
-// `MultiHeadAttention` module exists in `src/nn.ts` yet (that lands with
-// the real `TransformerBlock` in a later wave); this is bench-only
-// scaffolding, read by `bench/macro-attention.ts` and `bench/micro-trace.ts`,
-// and is not part of the public package surface.
+// Bench-only causal multi-head self-attention built from primitives
+// (matmul, permute, view, softmax); no MultiHeadAttention module exists yet.
+// Read by bench/macro-attention.ts and bench/micro-trace.ts.
 
 import { Linear, Module, randn } from "../../index.ts"
 import { type AnyTensor, fromFlat } from "../../src/tensor.ts"
@@ -29,11 +25,9 @@ function causalMask(seqLen: number): AnyTensor {
 }
 
 /**
- * One causal self-attention block: separate Q/K/V/output projections
- * (no fused QKV weight — nothing fuses that yet), scaled dot-product
- * attention with a causal mask, output projection. Forward only; there
- * is no dropout or residual here, that belongs to the eventual
- * `TransformerBlock`.
+ * One causal self-attention block: separate Q/K/V/output projections,
+ * scaled dot-product attention with a causal mask, output projection.
+ * Forward only.
  */
 export class CausalSelfAttention extends Module {
   readonly q: Linear<number, number>
@@ -62,17 +56,15 @@ export class CausalSelfAttention extends Module {
   }
 
   /** `x`: `[batch, seqLen, nEmbd]` -> `[batch, seqLen, nEmbd]`. */
+  /** `x`: `[batch, seqLen, nEmbd]` -> `[batch, seqLen, nEmbd]`. */
   forward(x: AnyTensor): AnyTensor {
     const { batch, seqLen, nEmbd } = this.config
     const { nHead, headDim } = this
 
-    // `permute` is a metadata-only strided view (D-something's "views"
-    // pass) and today's native GEMM requires contiguous operands — there
-    // is no strided-GEMM rewrite yet (`_NO_STRIDED_GEMM` in §2.9 is a
-    // future switch, not a present capability). An identity `reshape`
-    // right after each permute forces the materializing copy `matmul`
-    // needs; dropping it reproduces `MatMulUnexpectedStriding` on the
-    // native path today.
+    // Native GEMM requires contiguous operands and `permute` is a
+    // metadata-only strided view, so this identity reshape forces the
+    // materializing copy `matmul` needs (dropping it reproduces
+    // MatMulUnexpectedStriding on the native path).
     const contiguous = (t: AnyTensor): AnyTensor => t.reshape([...t.shape])
 
     const toHeads = (t: AnyTensor): AnyTensor =>

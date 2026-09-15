@@ -1,16 +1,10 @@
 /**
  * `FlattenShape` / `UnflattenShape` and their checks, against the real
- * exports. Checked-in version of `scratchpad/probe/flatten.ts`.
- *
- * These are the generic-dim reshape path (D21): `view()` needs the
+ * exports. These are the generic-dim reshape path: `view()` needs the
  * element count to reduce to a literal, so `[B, T, D] -> [B*T, D]` is
  * unavailable to it while `B` and `T` are generics. The attention body
- * (`gpt-adopted.test-d.ts`) is built out of exactly these two.
- *
- * The `flatten` / `unflatten` *methods* land on `Tensor` in W1.8; the
- * free functions below are local stand-ins with the same signatures, so
- * this file exercises the type algebra without pre-announcing an API
- * that does not exist yet.
+ * (`gpt-adopted.test-d.ts`) is built out of exactly these two; the free
+ * functions below are local stand-ins with the same signatures.
  */
 import { DimMul } from "../src/shape.ts"
 import type { FlattenCheck, FlattenShape, Shape, UnflattenCheck, UnflattenShape } from "../src/shape.ts"
@@ -31,7 +25,6 @@ declare function unflatten<S extends Shape, const D extends number, const Sizes 
   sizes: Sizes,
 ): Tensor<UnflattenShape<S, D, Sizes>>
 
-// ---- literal shapes ---------------------------------------------------------
 declare const lit234: Tensor<[2, 3, 4]>
 
 const _f1 = flatten(lit234, 0, 1)
@@ -61,7 +54,7 @@ const _uOutOfRange = unflatten(lit234, 5, [2, 2])
 // @ts-expect-error 2 * 3 is 6, and axis 2 is 4
 const _uWrongProduct = unflatten(lit234, 2, [2, 3])
 
-// ---- generic dims: the point of the exercise --------------------------------
+// generic dims are the point of the exercise
 function _generic<B extends number, T extends number, D extends number, H extends number, Dh extends number>(
   x: Tensor<[B, T, D]>,
   idx: Tensor<[B, T]>,
@@ -89,14 +82,13 @@ function _generic<B extends number, T extends number, D extends number, H extend
   return [f1, u1, q4, m1, l1] as const
 }
 
-// A naked generic shape decides nothing and is therefore accepted (law 1);
-// the result is the residual, which re-fires at instantiation.
+// A naked generic shape decides nothing and is therefore accepted; the
+// result is the residual, which re-fires at instantiation.
 //
-// This is the regression for the distribution triggers in `shape.ts`: a
-// check whose error branch is still *reachable* while `S` is unresolved
-// rejects every generic caller, because a deferred conditional in a
-// parameter position is satisfied only by a value assignable to all of
-// its branches.
+// Regression for the distribution triggers in `shape.ts`: a check whose
+// error branch is still reachable while `S` is unresolved rejects every
+// generic caller, because a deferred conditional in a parameter position
+// is satisfied only by a value assignable to all of its branches.
 function _naked<S extends Shape>(x: Tensor<S>) {
   return flatten(x, 0, 1)
 }

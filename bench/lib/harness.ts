@@ -1,16 +1,7 @@
-// The per-script bench runner (PLAN-V2 §4.2, W0.1): `bench(name, cases, fn)`
-// runs every case under every available mode, reports median/p10/p90/min/max,
-// prints a mode × case table, and appends one JSONL line per (script, case,
-// mode).
-//
-// Smoke vs full (bench/README.md): by default (no `--full`) this is a SMOKE
-// run — 1 warm-up, 2 timed samples, regardless of what a script's own
-// `config.warmup`/`config.samples` ask for — so every bench script stays a
-// short correctness check. `--full` opts into the real ≥ 3 warm-up / ≥ 10
-// sample floors below. Every JSONL line records which one produced it via
-// `smoke: true | false` (`appendResult`/`resultsPath` also route smoke rows
-// to a separate `bench/results/smoke/` directory so they can never land in
-// the same file as a full run's numbers).
+// Per-script bench runner: `bench(name, cases, fn)` runs every case under
+// every available mode, prints a mode x case table, and appends one JSONL
+// line per (script, case, mode). Without `--full` this is a smoke run
+// (1 warm-up, 2 timed samples, results routed to bench/results/smoke/).
 
 import { isNativeAvailable } from "../../index.ts"
 import { type CliArgs, type Mode, parseCliArgs } from "./cli.ts"
@@ -33,15 +24,13 @@ export interface BenchStats {
   n: number
 }
 
-/** A case run may report partial structural counters; unset keys default to -1 (§2.9). */
+/** A case run may report partial structural counters; unset keys default to -1. */
 export type BenchOutcome = void | { counters?: Partial<Counters> }
 
 export type BenchFn<C extends BenchCaseSpec> = (kase: C, mode: Mode) => BenchOutcome | Promise<BenchOutcome>
 
 export interface BenchConfig {
-  /** Minimum warm-up iterations before timing; floored at 3. */
   warmup?: number
-  /** Minimum timed samples; floored at 10. */
   samples?: number
 }
 
@@ -66,7 +55,6 @@ function computeStats(samples: readonly number[]): BenchStats {
   }
 }
 
-/** True unless `--full` was passed — every bench script is a smoke run by default. */
 export function isSmokeRun(args: CliArgs = parseCliArgs()): boolean {
   return !args.full
 }
@@ -93,13 +81,9 @@ function printTable(scriptName: string, table: ReadonlyMap<string, Partial<Recor
 }
 
 /**
- * Run `cases` under `fn` across every available mode, print a mode × case
- * table, and append one JSONL line per (script, case, mode) to
- * `bench/results/<scriptName>.jsonl`.
- *
- * `--only <substr>` filters cases by substring match on `id`; when nothing
- * matches, this prints a line and returns without error (exit 0, nothing
- * run) rather than throwing.
+ * Run `cases` under `fn` across every available mode. With `--only <substr>`,
+ * a filter matching nothing prints a line and returns without error rather
+ * than throwing.
  */
 export async function bench<C extends BenchCaseSpec>(
   scriptName: string,
@@ -109,10 +93,7 @@ export async function bench<C extends BenchCaseSpec>(
 ): Promise<void> {
   const args = parseCliArgs()
   const smoke = isSmokeRun(args)
-  // A smoke run ignores a script's own warmup/samples config entirely —
-  // those are tuned for statistically meaningful full runs, not for "does
-  // this still work" — and instead floors to the owner's fixed smoke
-  // shape (1 warm-up, 2 timed samples per case × mode).
+  // Smoke runs ignore a script's own warmup/samples config.
   const warmup = smoke ? 1 : Math.max(3, config.warmup ?? 3)
   const samples = smoke ? 2 : Math.max(10, config.samples ?? 10)
 

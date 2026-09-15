@@ -40,13 +40,7 @@ import { _internal, type AnyTensor } from "./tensor.ts"
 
 export function configure(options: {
   lazy?: boolean
-  /**
-   * Reseeds `rand()` / `randn()` (both `resample` modes) and
-   * `Tensor.rand` / `Tensor.randn` — all draw through the seeded
-   * generator; there is no `Math.random` in the RNG path. A run
-   * replays identically given the same seed and the same sequence of
-   * operations.
-   */
+  /** Reseeds every RNG path (rand/randn, Tensor.rand/r.randn); same seed, same replay. */
   seed?: number
 }): void {
   if (options.lazy !== undefined) setLazyMode(options.lazy)
@@ -67,11 +61,7 @@ function eagerly<T>(fn: () => T): T {
   }
 }
 
-/**
- * One IR node, replayed through the eager kernels. Inputs are forced
- * first, so this never re-enters the dispatchers or flips the mode
- * flag — eager is the spec, and this is the interpreter reading it.
- */
+/** Replays one IR node through the eager kernels, forcing inputs first. */
 function evalNode(node: LazyNode): AnyTensor {
   switch (node.op) {
     case "binary":
@@ -146,7 +136,6 @@ function evalNode(node: LazyNode): AnyTensor {
         node.dtype,
       )
 
-    // --- W4.1 semantic ops ---------------------------------------------
     case "gelu":
       return evalGeluEager(force(node.input))
     case "geluGrad":
@@ -223,9 +212,7 @@ function evalNode(node: LazyNode): AnyTensor {
         force(node.index),
         node.rows,
       )
-    // One seed per evaluation pass (set by `evalInterpreted` below), so a
-    // replay of the same graph redraws the mask and the forward and its
-    // backward — which run in the SAME pass — share it.
+    // One seed per pass: forward, backward, and any replay share it.
     case "dropout":
       return evalDropoutEager(
         force(node.input),
@@ -245,8 +232,7 @@ function evalNode(node: LazyNode): AnyTensor {
 }
 
 function evalInterpreted(roots: AnyTensor[]): void {
-  // One seed per evaluation: every random node in this pass draws from
-  // it, and the next pass over the same graph draws different numbers.
+  // One seed per evaluation pass; a replay of the same graph draws different numbers.
   setActiveSeed(nextSeed())
   for (const t of topoOrder(roots)) {
     const source = _internal.sourceOf(t)
@@ -269,30 +255,11 @@ function force(t: AnyTensor): AnyTensor {
   return t
 }
 
-// Graphs touching at most this many elements (leaves + intermediate node
-// outputs) go to the native fused loop evaluator, which pays no dispatch
-// or BLAS setup cost. 65536 = one 256×256 matrix.
-//
-// The cutover was re-measured (2026-08) after the loop evaluator grew
-// strided views, buffer drop, and a single-pass scatter: on a rolled-out
-// graph training step the loop evaluator ran at about a third of candle
-// CPU's rate — the loss is per-element dispatch in the fused passes, not
-// copies — so candle stays the default above the cap.
+// Graphs up to this many elements run on the native fused loop evaluator;
+// above the cap, per-element dispatch makes candle the faster default.
 const LOOP_EVALUATOR_MAX_WORK = 65536
 
-/**
- * Which native evaluator a graph of `work` elements should run on.
- *
- * Tiny graphs go to the loop evaluator. Everything else goes to candle
- * on the CPU device, which on macOS means Accelerate for matmul. That is
- * not the obvious default, so the numbers behind it (Apple M5,
- * measured 2026-08): CPU matches Metal on chained
- * large matmuls, loses to it by
- * ~1.5x on purely elementwise graphs, and beats it by ~7x on the
- * gather/scatter graphs message passing produces — candle's Metal
- * index_select/index_add are slow and the graphs are made of many small
- * kernels. `useNative({ device: "gpu" })` opts back in.
- */
+/** Native target for a graph of `work` elements: loop evaluator below the cap, else the configured device. */
 function pickTarget(work: number): "loops" | "cpu" | "gpu" {
   if (work <= LOOP_EVALUATOR_MAX_WORK) return "loops"
   return nativeBackend.nativeDeviceMode()
@@ -312,8 +279,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
   const leafChunks: Uint8Array[] = []
   const leafTensors: AnyTensor[] = []
   const leafOffsets: number[] = []
-  // Integer leaves may only feed gather/scatter `index` slots; compute
-  // leaves stay f32. Kept as node indices for the post-pass below.
+  // Integer leaves may only feed gather/scatter index slots.
   const intLeaves = new Set<number>()
   let leafBytes = 0
   let work = 0
@@ -322,9 +288,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     const source = _internal.sourceOf(t)
     if (source.kind !== "lazy" || _internal.hasValue(t)) {
       if (t.dtype === "float64") {
-        // Native compute is f32-only. This used to fall back to the JS
-        // interpreter silently; with native enabled that is a
-        // performance surprise, so it is now an error.
+        // Native compute is f32-only.
         throw new Error(
           `native backend requires float32 CPU leaves; got a ${t.dtype} leaf. `
             + "Keep the graph in float32 or call disableNative().",
@@ -358,19 +322,13 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     const node = (source as LazyStorage).node
     const support = supportOf(node)
     if (support.kind === "unsupported") {
-      // Loudly, once per reason, and countably: the whole graph goes to
-      // the JS interpreter through the `null` route `compile()` and
-      // `forceMany` already take. This is a CAPABILITY gap, so it is a
-      // notice; the two errors below it are USER mistakes, and they stay
-      // errors.
+      // Capability gaps fall back to the interpreter via `null` and are counted; user errors below throw.
       noteFallback(node.op, support.reason)
       return null
     }
     work += prod(node.shape)
-    // Every input precedes `t` in topological order, so its index is
-    // already assigned. `encodeForWire` may append more than one wire
-    // node (a multi-axis `reduce` is a chain the addon can parse); the
-    // index it returns is the one this tensor's consumers reference.
+    // Inputs precede `t` topologically, so their indices exist; `encodeForWire` may
+    // append several wire nodes, and the index it returns is the one consumers reference.
     index.set(
       t,
       encodeForWire(
@@ -384,9 +342,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     )
   }
 
-  // Integer leaves are gather/scatter indices only. A compute op that
-  // reads one would either error in candle or silently convert through
-  // the loop evaluator, so reject it up front.
+  // A compute op reading an integer leaf would error in candle or silently convert, so reject it up front.
   for (const node of nodes) {
     if (node.op === "leaf") continue
     const op = node.op as keyof typeof OP_DESC
@@ -437,17 +393,11 @@ type ForcePlan = {
   rootShapes: number[][]
 }
 
-// Prepare-once for the uncompiled path, keyed by the FIRST root tensor
-// (a WeakMap cannot key on a fresh root array). A hit requires the same
-// root list by identity; anything else re-serializes and replaces the
-// plan. Every leaf on this path is an "input" — the tape has no
-// placeholder/captured distinction — so all leaves are re-sent per
-// eval; the win over evalGraph is skipping the JSON round-trip.
+// Prepare-once cache keyed by the FIRST root tensor (a WeakMap cannot key a fresh root array);
+// a hit requires the same root list by identity, otherwise the plan is replaced.
 const forcePlans = new WeakMap<AnyTensor, ForcePlan>()
 
-// When the first root is collected, the JS plan dies with it; without
-// this, the native handle would leak (PLAN_HANDLES is a different,
-// explicit-release map).
+// Frees the native handle when the keyed root is collected (PLAN_HANDLES is the explicit-release map).
 const planRegistry = new FinalizationRegistry<number>(
   handle => nativeBackend.releaseGraphNative(handle),
 )
@@ -474,8 +424,7 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
       serialized.json,
     )
     if (plan) {
-      // Replace-on-miss: free the old handle now, and unregister so
-      // collection of the old plan cannot double-free it.
+      // Free the old handle now; unregister so collection of the old plan cannot double-free.
       planRegistry.unregister(plan)
       nativeBackend.releaseGraphNative(plan.handle)
     }

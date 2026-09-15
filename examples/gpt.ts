@@ -1,35 +1,27 @@
 "use tsover"
 
 /**
- * A typed GPT — §3.7 of the plan, on the pieces that exist today (W5.7b).
+ * A typed GPT on the pieces that exist today.
  *
- * WHY this example exists: an MLP's shapes are a chain of two numbers, and
- * a chain of two numbers proves very little. A transformer is where a
- * shape-typed library either earns its keep or does not — the head split
- * (`D -> H * (D/H)`), the position embedding broadcast (`[B,T,D] + [T,D]`),
- * the weight tie between a `[V,D]` table and a `D -> V` head, and a loss
- * that reads its target shape off the logits (`[B,T,V]` logits want
- * `[B,T]` targets, never `[B,T,V]` and never `[B*T]`). Every one of those
- * is a place where an untyped library lets a wrong tensor through and
- * reports it, if at all, as a wrong number some steps later.
+ * A transformer is where a shape-typed library earns its keep: the head
+ * split (`D -> H * (D/H)`), the position-embedding broadcast
+ * (`[B,T,D] + [T,D]`), the weight tie between a `[V,D]` table and a
+ * `D -> V` head, and a loss that reads its target shape off the logits.
+ * Each is a compile error at the line that causes it.
  *
- * Here every one of them is a compile error at the line that causes it.
  * `forward` is generic in the batch size, so `GPT` is written once and
  * typechecks for every `B`; the only literals in the file are the ones the
- * config actually names. `_compileTimeErrors()` at the bottom is never
- * called — it exists so that four of those mistakes are written down and
- * *proved* to be rejected, since `@ts-expect-error` fails the build when
- * the error stops firing.
+ * config names. `_compileTimeErrors()` at the bottom is never called; it
+ * exists so four mistakes are *proved* rejected, since `@ts-expect-error`
+ * fails the build when the error stops firing.
  *
- * The data is a short passage generated and encoded here, so the example
- * runs offline and a fixed `configure({ seed })` replays the whole loss
- * curve exactly.
+ * The data is generated here, so the example runs offline and a fixed
+ * `configure({ seed })` replays the whole loss curve exactly.
  *
  * The loop is the plain `zeroGrad` / `backward` / `step` triple rather
- * than a compiled step, for `examples/mlp.ts`'s reason: `compile()` bakes
- * the optimizer's `lr` into the traced graph as a constant, and the
- * warmup-cosine schedule below has to move. Nothing else about the model
- * changes with that choice — `compileStep` lands on exactly this `forward`.
+ * than a compiled step: `compile()` bakes the optimizer's `lr` into the
+ * traced graph as a constant, and the warmup-cosine schedule below has to
+ * move.
  */
 
 import {
@@ -52,21 +44,18 @@ import {
   warmupCosine,
 } from "../index.ts"
 
-// ---------------------------------------------------------------------------
 // The model
-// ---------------------------------------------------------------------------
 
 /**
  * `GPT<V, T, D, H>`: vocabulary, context length, model width, heads.
  *
  * All four are type parameters rather than fields-of-type-`number`, so the
  * shapes inside `forward` are the shapes the constructor was given. `H`
- * carries `DimDivCheck<D, H>` on the constructor's own parameter (D20):
- * a head count that does not divide the model width is rejected here, at
- * the construction site, rather than inside `unflatten` at run time — and
- * the check is forwarded to `TransformerBlock` with EXPLICIT type
- * arguments, or inference would re-derive `H` from the intersection and
- * discharge the check against itself.
+ * carries `DimDivCheck<D, H>` on the constructor's own parameter: a head
+ * count that does not divide the model width is rejected at the
+ * construction site. The check is forwarded to `TransformerBlock` with
+ * EXPLICIT type arguments, or inference would re-derive `H` from the
+ * intersection and discharge the check against itself.
  */
 class GPT<
   V extends number,
@@ -102,17 +91,15 @@ class GPT<
     )
     this.lnf = new LayerNorm(d)
     // Weight tying: the head SHARES `wte`'s `[V, D]` buffer and transposes
-    // it in the GEMM. `new Linear(d, vocab)` + `tie(head.weight,
-    // wte.weight)` does NOT typecheck — `[D, V]` is not `[V, D]` — which
-    // is exactly why `TiedLinear.of` exists. `parameters()` reports the
-    // shared table once, so it is updated once per `step()`.
+    // it in the GEMM. `new Linear(d, vocab)` does NOT typecheck (`[D, V]`
+    // is not `[V, D]`), which is why `TiedLinear.of` exists. `parameters()`
+    // reports the shared table once, so it is updated once per `step()`.
     this.head = TiedLinear.of(this.wte)
     this.pos = this.registerBuffer("pos", functional.arangeIndex(block))
-    // GPT-2's own embedding init. `Embedding`'s default is PyTorch's
-    // N(0, 1) per row, which through a TIED head makes the first logits
-    // ~sqrt(D) wide and the first loss an order of magnitude above
-    // ln(V) — the tie is exactly what couples the table's scale to the
-    // output scale, so it is the model, not the layer, that has to say so.
+    // GPT-2's own embedding init. Through a TIED head, `Embedding`'s
+    // default N(0, 1) would make the first logits ~sqrt(D) wide and the
+    // first loss an order of magnitude above ln(V): the tie couples the
+    // table's scale to the output scale.
     init.normal_(this.wte.weight, { std: 0.02 })
     init.normal_(this.wpe.weight, { std: 0.02 })
   }
@@ -125,26 +112,22 @@ class GPT<
    * is a compile error rather than a lookup on `Math.round`ed floats.
    */
   forward<B extends number>(idx: IndexTensor<[B, T]>): Tensor<[B, T, V]> {
-    // `[B, T, D] + [T, D]` — the position embedding broadcasts over the
-    // batch, and the shape algebra says so: no `unsqueeze(0)`, no `expand`,
-    // and a `wpe` built at the wrong width would not broadcast at all.
+    // `[B, T, D] + [T, D]`: the position embedding broadcasts over the
+    // batch, so no `unsqueeze(0)`, no `expand`, and a `wpe` built at the
+    // wrong width would not broadcast at all.
     let h: Tensor<[B, T, D]> = this.wte.forward(idx) + this.wpe.forward(this.pos)
-    // The stack is a plain loop over a `ModuleList`, and the running
-    // tensor keeps its type through every iteration because each block is
-    // an endomorphism on `[B, T, D]`.
+    // The running tensor keeps its type through every iteration because
+    // each block is an endomorphism on `[B, T, D]`.
     for (const block of this.blocks) h = block.forward(h)
     return this.head.forward(this.lnf.forward(h))
   }
 }
 
-// ---------------------------------------------------------------------------
 // The data
-// ---------------------------------------------------------------------------
 // A char-level corpus, written here so the example runs offline. The
 // alphabet is a fixed literal set rather than "whatever characters the
 // text happens to contain", because `V` has to be a literal type for
-// `Embedding<V, D>` to carry it — and a vocabulary that silently changes
-// size with the corpus is how a checkpoint stops loading.
+// `Embedding<V, D>` to carry it.
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz ,.;'\n"
 const VOCAB = 32
@@ -165,13 +148,11 @@ const encoded = [...CORPUS.toLowerCase()].flatMap(c => {
   return code === undefined ? [] : [code]
 })
 
-// ---------------------------------------------------------------------------
 // The configuration
-// ---------------------------------------------------------------------------
 
 const BLOCK = 32 // context length T
 const D_MODEL = 64
-const HEADS = 4 // 64 / 4 = 16 per head — derived, never written down
+const HEADS = 4 // 64 / 4 = 16 per head, derived
 const LAYERS = 2
 const BATCH = 16
 // 20 steps is the run the README quotes; `test/examples-gpt.test.ts`
@@ -193,7 +174,7 @@ const opt = new AdamW(model.parameters(), { lr: 3e-3, weightDecay: 0.1, betas: [
 const schedule = warmupCosine({ base: 3e-3, warmupSteps: 5, totalSteps: STEPS })
 
 /**
- * One `[BATCH, BLOCK]` window of ids and the same window shifted by one —
+ * One `[BATCH, BLOCK]` window of ids and the same window shifted by one:
  * the next-token objective, as two index tensors. Deterministic in `step`
  * so the curve replays.
  */
@@ -216,9 +197,7 @@ function batchAt(step: number): {
   }
 }
 
-// ---------------------------------------------------------------------------
 // The loop
-// ---------------------------------------------------------------------------
 
 const params = model.parameters()
 console.log(
@@ -273,20 +252,15 @@ console.log(
     + `(${elapsed.toFixed(1)}s, eager); held-out ${heldLoss.toFixed(4)}`,
 )
 // Eager mode never serialises a graph, so nothing can have fallen off the
-// native path — printed rather than assumed, because "it is still native"
-// is exactly the claim a silent fallback would make a lie of.
+// native path; printed rather than assumed.
 console.log(`native fallbacks: ${jsCounters().nativeFallbacks}`)
 
-// ---------------------------------------------------------------------------
 // The mistakes, written down
-// ---------------------------------------------------------------------------
-// Never called. Each line below is here to be REJECTED: `@ts-expect-error`
-// fails the build if the error ever stops firing, so these four are a test
-// of the type system that lives in the example it documents. The
-// `// tsc(NNNN):` comment above each one quotes what the compiler actually
-// prints — `test/examples-gpt.test.ts` strips the directives, recompiles
-// this file, and checks the quotes against the real diagnostics, so the
-// messages in the README are the messages a user sees.
+// Never called. Each line below exists to be REJECTED: `@ts-expect-error`
+// fails the build if the error ever stops firing. The `// tsc(NNNN):`
+// comment above each one quotes what the compiler actually prints;
+// `test/examples-gpt.test.ts` strips the directives, recompiles this
+// file, and checks the quotes against the real diagnostics.
 
 function _compileTimeErrors(): void {
   // (1) 4 heads divide a width of 64; 5 do not. Caught at the construction

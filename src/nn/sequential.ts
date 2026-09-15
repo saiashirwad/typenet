@@ -3,70 +3,16 @@ import { type AnyTensor, Tensor } from "../tensor.ts"
 import { Linear } from "./layers/linear.ts"
 import { Module } from "./module.ts"
 
-/**
- * The `nn` shape-effect protocol (W4.9). A layer that declares
- *
- * ```ts
- * declare readonly [SHAPE_EFFECT]: ["mapLast", In, Out]
- * ```
- *
- * tells {@link ApplyLayer} what it does to a shape *directly*, instead of
- * having it inferred by instantiating the layer's `forward` at every shape
- * in the chain. Each of the three reasons that matters is a bug the
- * structural probe cannot fix:
- *
- * 1. **A `forward` that is not a plain `Tensor<S> -> Tensor<R>` does not
- *    probe at all.** `Embedding.forward` takes an `IndexTensor<S>` — a
- *    branded `Tensor`, so `Tensor<S>` is not assignable to it — and the
- *    probe falls through to its `S` fallback, making the layer behave like
- *    the identity inside `sequential`. That silent no-op is the bug this
- *    item exists to fix.
- * 2. **A layer whose stored weight is the transpose of its shape effect**
- *    — `TiedLinear` holds the embedding's `[V, D]` and maps `D -> V` —
- *    cannot be read off its fields, only off a declaration (§3.3).
- * 3. The probe re-instantiates a generic `forward` once per chain step;
- *    matching a declared tuple does not.
- *
- * It lives here, beside the type that consumes it, and not in
- * `src/shape.ts`: this is an `nn` protocol, not shape algebra, and
- * `src/shape.ts` must not gain an `nn` dependency.
- *
- * The symbol is a real runtime `Symbol` rather than the ambient
- * `declare const` a type-only marker would use, because
- * `verbatimModuleSyntax` keeps a layer's `import { SHAPE_EFFECT }` in the
- * emitted module graph — and a computed property name cannot be spelled
- * through `import type`. A binding that existed only in the type world
- * would therefore be a missing export at run time. Nothing ever reads it.
- */
+/** Declares a layer's shape effect so `sequential` need not infer it from `forward`. A runtime Symbol because computed property names cannot be spelled through `import type`. */
 export const SHAPE_EFFECT: unique symbol = Symbol("typenet.nn.SHAPE_EFFECT")
 
-/**
- * What a layer does to a shape, declared rather than inferred.
- *
- * - `"identity"` — shape-preserving *and* width-agnostic: activations,
- *   `Dropout`, anything whose `forward` is `Tensor<S> -> Tensor<S>` for
- *   every `S`.
- * - `["mapLast", In, Out]` — owns the last axis and rewrites it, any batch
- *   prefix riding along: `Linear`, `TiedLinear`, and the norms. A norm
- *   declares `["mapLast", D, D]` and *not* `"identity"`, so that feeding a
- *   `LayerNorm(8)` from a `Linear(4, 4)` is still a width mismatch rather
- *   than a shape the chain quietly accepts.
- * - `["appendDim", D]` — grows the rank by one: `Embedding` turns `[...S]`
- *   indices into `[...S, D]` vectors.
- */
+/** `"identity"` preserves the shape, `["mapLast", In, Out]` rewrites the last axis, `["appendDim", D]` grows the rank by one. */
 export type ShapeEffect =
   | "identity"
   | [effect: "mapLast", In: number, Out: number]
   | [effect: "appendDim", D: number]
 
-/**
- * The declared half of {@link ApplyLayer}. The `number[] extends S` guard
- * is repeated here rather than left to the branch below it because law 1
- * (§2.1) is not negotiable: a fully generic shape must decide nothing.
- * Without it `["appendDim", D]` would turn `number[]` into the strictly
- * narrower `[...number[], D]`, and `["mapLast", In, Out]` would fail its
- * tuple match and collapse the whole chain to `never`.
- */
+/** The declared half of {@link ApplyLayer}. The generic-S guard comes first: a fully generic shape must decide nothing. */
 type ApplyEffect<E extends ShapeEffect, S extends Shape> =
     number[] extends S ? number[]
   : E extends "identity" ? S
@@ -76,21 +22,7 @@ type ApplyEffect<E extends ShapeEffect, S extends Shape> =
   : E extends [effect: "appendDim", D: infer D extends number] ? [...S, D]
   : S
 
-/**
- * What one layer does to a shape, at the type level.
- *
- * A declared {@link SHAPE_EFFECT} wins over everything else. Below it,
- * `Linear` keeps its special case so a chain of Linears stays rank-generic
- * (the last axis is rewritten, any batch prefix rides along), and the
- * structural probe keeps reading an undeclared layer off its `forward`
- * signature. Both are deliberately retained (D24): a third-party layer
- * that declares nothing must compose exactly as it does today, so the
- * protocol is an opt-in refinement and never a migration.
- *
- * Only the last fallback — a "layer" with no `forward` at all, which can
- * never be a layer — is an `ErrorMessage`. A layer that *has* a `forward`
- * the probe cannot read still falls through to `S`, unchanged.
- */
+/** What one layer does to a shape: declared {@link SHAPE_EFFECT} first, then `Linear`'s special case, then a structural probe of `forward`. */
 type ApplyLayer<L, S extends Shape> =
     L extends { readonly [SHAPE_EFFECT]: infer E extends ShapeEffect } ? ApplyEffect<E, S>
   : number[] extends S ? number[]
@@ -111,11 +43,7 @@ type ChainShapeCheck<L extends readonly unknown[], S extends Shape> = [ChainShap
   ? ErrorMessage<`sequential: input shape does not fit the layer chain`>
   : unknown
 
-/**
- * Constructed through {@link sequential} only. Typed as the tuple of its
- * layers, so `forward` composes their shapes: a `Sequential` of Linears
- * maps `Tensor<[B, T, 2]>` to `Tensor<[B, T, 3]>`.
- */
+/** Typed as the tuple of its layers, so `forward` composes their shapes. */
 export class Sequential<
   const L extends readonly unknown[],
 > extends Module {
@@ -135,14 +63,7 @@ export class Sequential<
   }
 }
 
-/**
- * The width a layer demands of the axis it is handed, or `undefined` when
- * it demands nothing. A declared {@link SHAPE_EFFECT} is read first — and
- * only its `mapLast` arm contributes: `"identity"` is width-agnostic by
- * definition, and `appendDim`'s operand is an index tensor whose last axis
- * is not a feature width. The `inFeatures` probe below it is unchanged, so
- * `Linear` and every undeclared third-party layer behave exactly as today.
- */
+/** The width a layer demands of the axis it is handed, or `undefined`; only `mapLast` contributes. */
 type LayerIn<L> =
     L extends { readonly [SHAPE_EFFECT]: [effect: "mapLast", In: infer In extends number, Out: number] } ? In
   : L extends { readonly [SHAPE_EFFECT]: ShapeEffect } ? undefined
@@ -151,12 +72,7 @@ type LayerIn<L> =
     : undefined
   : undefined
 
-/**
- * The width a layer leaves on the last axis, or `undefined` when it leaves
- * whatever it was given. `mapLast` reports its `Out`; `appendDim` reports
- * the axis it appends, which *is* the new last axis; `"identity"` reports
- * nothing so {@link NextDim} carries the previous width through.
- */
+/** The width a layer leaves on the last axis, or `undefined` to carry the previous width through. */
 type LayerOut<L> =
     L extends { readonly [SHAPE_EFFECT]: [effect: "mapLast", In: number, Out: infer Out extends number] } ? Out
   : L extends { readonly [SHAPE_EFFECT]: [effect: "appendDim", D: infer D extends number] } ? D
@@ -183,9 +99,8 @@ type ChainCheck<
     : never
   : unknown
 
-// L is deliberately unconstrained: Tensor is invariant in S, so bounding
-// it to a rank-2 layer type would make `Linear<2, 16>` unassignable and
-// reject every real call. ChainCheck does the real work.
+// L stays unconstrained: Tensor is invariant in S, so bounding it to a
+// rank-2 layer type would reject every real call. ChainCheck does the work.
 export function sequential<
   const L extends readonly unknown[],
 >(

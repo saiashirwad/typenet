@@ -2,8 +2,7 @@ import type { AnyTensor } from "./tensor.ts"
 
 export type DType = "float32" | "float64" | "int32" | "int64"
 
-// Integer dtypes are index-only, so f32/f64 promotion is the only
-// relevant binary case.
+// Integer dtypes are index-only, so f32/f64 promotion is the only binary case.
 export function promoteBinaryDtype(a: DType, b: DType): DType {
   return a === "float64" || b === "float64" ? "float64" : "float32"
 }
@@ -40,11 +39,7 @@ type LazyNodeBody =
     op: "reduce"
     kind: ReduceOp
     /**
-     * Axes to reduce, ascending, normalised against `input`'s rank
-     * (W4.1 step 6). `sumTo` emits ONE of these instead of one node per
-     * axis; the accumulation order is "ascending axis, one axis at a
-     * time", which is exactly the chain the old `sumTo` emitted, so the
-     * rewrite moves no f32 bits (gate C3).
+     * Axes to reduce, ascending, normalized against `input`'s rank.
      */
     dims: number[]
     keepdim: boolean
@@ -83,23 +78,11 @@ type LazyNodeBody =
   | {
     op: "random"
     kind: RandomKind
-    // Identifies this node's own stream, so two random nodes in one
-    // graph never draw the same numbers. Fixed when the node is
-    // built, which keeps a compiled graph's structure stable.
+    // The node's own stream, so two random nodes in one graph never draw the same numbers.
     stream: number
   }
-  // --- W4.1 semantic ops (PLAN-V2 §2.3) ------------------------------------
-  //
-  // Tensor operands keep using the generic slot names `OP_DESC` knows
-  // (`input`/`a`/`b`/`index`/`grad`/`gamma`/`beta`/`mean`/`rstd`/`target`),
-  // so `nodeInputs`, `formatLazyOp` and `serializeNode` stay table-driven —
-  // W4.1 step 5's "no three fifteen-arm switches".
-  //
-  // MULTI-OUTPUT IS A LOWERING CONCEPT, NOT AN IR CONCEPT (step 2). A node
-  // with several outputs produces ONE tensor whose shape is `[total]` — the
-  // outputs' elements concatenated in declaration order — and each real
-  // output is a `pick` node that slices it. Nothing in this file grows
-  // multi-output machinery.
+  // Multi-output is a lowering concept, not an IR concept: a multi-output node yields
+  // one flat [total] tensor, and each real output is a `pick` node slicing it.
   | { op: "gelu"; input: AnyTensor }
   | { op: "geluGrad"; grad: AnyTensor; input: AnyTensor }
   | { op: "silu"; input: AnyTensor }
@@ -172,20 +155,11 @@ type LazyNodeBody =
     index: AnyTensor
   }
   /**
-   * `(y, mask)`. Two outputs, deliberately, and this is a Phase A
-   * deviation from §2.3's `outs: 1` with a named reason: §2.3 assumes a
-   * kernel that can REDRAW the same mask in backward from `(seed, stream)`
-   * inside one program. Today's runtime has no in-program RNG replay — the
-   * eager path has no per-evaluation seed at all — so the only way to
-   * guarantee the backward multiplies by the SAME mask the forward did is
-   * to make the mask an output. W3.4/W4.2 restore `outs: 1`.
+   * `(y, mask)`. The mask is an output so backward multiplies by the same
+   * mask the forward drew (the runtime has no in-program RNG replay).
    */
   | { op: "dropout"; p: number; stream: number; input: AnyTensor }
-  /**
-   * Projection of a multi-output producer. `out` is which output;
-   * `offset` is where it starts in the producer's flat buffer, computed
-   * once at graph-build time so the kernel needs nothing but its operand.
-   */
+  /** One output of a multi-output producer; `offset` into its flat buffer, fixed at graph-build time. */
   | {
     op: "pick"
     out: number
@@ -226,12 +200,7 @@ function arrayCtor(
   }
 }
 
-/**
- * Element data converted to `dtype`'s storage. BigInt boundaries need an
- * explicit map (`BigInt64Array.from` refuses plain numbers, and the
- * reverse refuses bigints); a non-integral value into int64 throws,
- * matching the integer-storage contract.
- */
+/** Element data converted to `dtype`'s storage; BigInt64Array.from needs an explicit bigint map. */
 function convertData(
   data: ArrayLike<number> | ArrayLike<bigint>,
   dtype: DType,

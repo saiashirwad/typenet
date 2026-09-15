@@ -57,10 +57,7 @@ export function nativeDeviceMode(): "cpu" | "gpu" {
   return deviceMode
 }
 
-/**
- * Throws when the addon is not built; run `pnpm build:native` first.
- * Only affects lazy mode — eager execution is unchanged.
- */
+/** Throws when the addon is not built; only affects lazy mode. */
 export function useNative(
   options: { device?: "cpu" | "gpu" } = {},
 ): void {
@@ -70,8 +67,7 @@ export function useNative(
         + "(requires a Rust toolchain) before calling useNative().",
     )
   }
-  // Each call fully specifies the configuration, so a plain useNative()
-  // always means the default device and no earlier choice lingers.
+  // Each call fully specifies the config, so no earlier device choice lingers.
   deviceMode = options.device ?? "cpu"
   nativeEnabled = true
 }
@@ -171,28 +167,17 @@ export function preparedGraphCountNative(): number {
   return withNative(mod => mod.preparedGraphCount(), () => 0)
 }
 
-/**
- * The §2.9 structural counters (`prepares`, `instrs`, `fusedRegions`,
- * `programCacheHits`, ...), parsed from the native addon's JSON. A field
- * this runtime cannot measure yet is `-1`, never `0`. `{}` when the addon
- * is not built.
- */
+/** Structural counters from the addon's JSON; an unmeasured field is -1, never 0. `{}` when the addon is not built. */
 export function nativeCounters(): Record<string, unknown> {
   return withNative(mod => JSON.parse(mod.counters()) as Record<string, unknown>, () => ({}))
 }
 
-/**
- * Device name plus every declared `TYPENET_*` kill switch and whether
- * today's runtime actually honours it. `{}` when the addon is not built.
- */
+/** Device name plus every declared TYPENET_* kill switch and whether it is honoured. `{}` when the addon is not built. */
 export function nativeDeviceInfo(): Record<string, unknown> {
   return withNative(mod => JSON.parse(mod.deviceInfo()) as Record<string, unknown>, () => ({}))
 }
 
-/**
- * Op-kind timings gathered since the last call (`TYPENET_PROFILE=1` only;
- * empty otherwise), as a text table. `""` when the addon is not built.
- */
+/** Op-kind timings since the last call (TYPENET_PROFILE=1 only), as a text table; "" when the addon is not built. */
 export function nativeProfile(): string {
   return withNative(mod => mod.takeProfile(), () => "")
 }

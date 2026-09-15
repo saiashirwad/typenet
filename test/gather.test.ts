@@ -72,12 +72,10 @@ describe("indexSelect", () => {
   it("rejects a fractional index", () => {
     expect(() =>
       rows()
-        // @ts-expect-error indexSelect requires a branded IndexTensor
-        // (OWNER-5, D25); a plain `Tensor<[E]>` — even one that only
-        // LOOKS integral at the type level — is a compile error. The
-        // runtime check this test is actually about (not `toIndex()`'s)
-        // is the one inside `indexSelect` itself, so the code still runs
-        // and the message is unchanged.
+        // @ts-expect-error indexSelect requires a branded IndexTensor;
+        // the check under test here is indexSelect's own runtime one
+        // (not `toIndex()`'s), so the call still runs and the message
+        // is unchanged.
         .indexSelect(tensor([0.5]))
         .toArray()
     ).toThrow(/out of range/)
@@ -423,11 +421,9 @@ describe.skipIf(!isNativeAvailable())(
         const c = 40
         const e = 2048
         const x = Tensor.rand([n, c]) as AnyTensor
-        // Both `x` and the built chain are erased to `AnyTensor` on
-        // purpose — this test is about eager/native numeric agreement at
-        // a candle-sized shape, not about the type-level brand, so the
-        // index is cast at each use exactly like every other shape check
-        // this file already erases with `as any`.
+        // Both `x` and the index are erased to `AnyTensor` on purpose:
+        // this test is about eager/native numeric agreement at a
+        // candle-sized shape, not about the type-level brand.
         const index = Tensor.zeros([e]) as AnyTensor
         for (let i = 0; i < e; i++) {
           ;(index.data as Float32Array)[i] = (i * 7) % n

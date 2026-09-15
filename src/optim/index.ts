@@ -7,9 +7,7 @@ import { type AnyTensor, Tensor } from "../tensor.ts"
 
 export * from "./schedule.ts"
 
-/** Either flavor of numeric backing store optimizer state is read from
- * for `stateDict()` — a plain `Float64Array` (eager) or a graph leaf's
- * own `Float32Array` (compiled/lazy). */
+/** Either numeric backing store optimizer state is read from: a `Float64Array` (eager) or a graph leaf's `Float32Array` (compiled/lazy). */
 type NumericLike = Float64Array | Float32Array
 
 function finishGraphUpdates(
@@ -59,8 +57,7 @@ const nums: Algebra<number> = {
 
 // A file-local untyped algebra over the raw dispatchers: optimizer
 // formulas relate shapes the public BroadcastCheck cannot see, and the
-// step runs under noGrad, so the tape-attaching typed methods buy
-// nothing here.
+// step runs under noGrad.
 const asTensor = (v: AnyTensor | number): AnyTensor => typeof v === "number" ? Tensor.scalar(v) as AnyTensor : v
 
 const tensors: Algebra<AnyTensor> = {
@@ -83,13 +80,6 @@ function clipScale<T>(
   )
 }
 
-// `lr` is `T`, not `number` (W1.10 step 6): the eager path calls this
-// with `nums` and a plain number, the graph path with `tensors` and a
-// hoisted scalar leaf (`tensors.of(this.lr)`) — never a raw number
-// threaded into `A.mul`, so a future live-scalar leaf (A-S1/W3.4) can
-// replace that one call site without touching this formula. `Algebra<T>`
-// itself is untouched (UNDERSTAND §2.3): eager and graph share exactly
-// this arithmetic.
 function sgdUpdate<T>(
   A: Algebra<T>,
   p: T,
@@ -111,13 +101,7 @@ function sgdUpdate<T>(
   return { nextP: A.sub(p, A.mul(grad, lr)), nextV }
 }
 
-/**
- * The shared Adam arithmetic. `decoupled` selects Adam's coupled L2
- * (weight decay folded into the gradient before the moment update, so it
- * rides through `mHat`/`vHat`) vs AdamW's decoupled decay (applied to
- * `p` directly, scaled by `lr`, after the moment-based step) — the only
- * difference between the two optimizers, per Loshchilov & Hutter 2019.
- */
+/** Shared Adam arithmetic. `decoupled` selects coupled L2 (decay folded into the gradient, so it rides through the moments) vs AdamW's decay applied to `p` directly after the moment step. */
 function adamUpdate<T>(
   A: Algebra<T>,
   p: T,
@@ -154,19 +138,7 @@ function adamUpdate<T>(
   return { nextP, nextM, nextV }
 }
 
-/**
- * Scale every gradient down so their combined L2 norm is at most
- * `maxNorm`, leaving them alone when it already is.
- *
- * Call it between `backward()` and `step()`. Gradients are rewritten in
- * place, so a following `step()` sees the clipped values — and in
- * lazy/compiled mode the rewrite is a graph expression, so a compiled
- * training step clips with the rest of the step in one pass.
- *
- * Returns the pre-clipping norm as a scalar tensor: a forced value in
- * eager mode, a graph node on the lazy/compile path — so a compiled
- * step clips in-graph and never forces a JS number. `.item()` reads it.
- */
+/** Scales gradients so their combined L2 norm is at most `maxNorm`; call between `backward()` and `step()`. Returns the pre-clipping norm as a scalar tensor. */
 export function clipGradNorm(
   params: AnyTensor[],
   maxNorm: number,
@@ -207,16 +179,7 @@ export function clipGradNorm(
   return Tensor.scalar(Math.sqrt(total))
 }
 
-/**
- * What an `Optimizer` can be built from: a flat parameter list (today's
- * spelling, still exactly as valid — `net.parameters()` on a hand-rolled
- * fixture, or a manually assembled array), or one or more `Module`s.
- * Passing a `Module` buys two things a flat array cannot: name-keyed
- * `stateDict()`/`loadStateDict()` (§3.3 parity with `Module`'s own), and
- * `parameterEpoch` tracking (W1.10 step 3) — the guard against building
- * an optimizer, then adding a submodule, and silently training a stale
- * parameter set.
- */
+/** A flat parameter list, or one or more `Module`s (which adds name-keyed optimizer state and `parameterEpoch` drift detection). */
 export type OptimizerSource = AnyTensor[] | Module | readonly Module[]
 
 function isModuleArray(v: OptimizerSource): v is readonly Module[] {
@@ -249,12 +212,7 @@ export interface OptimizerStateEntry {
   readonly v?: readonly number[]
 }
 
-/**
- * Name-keyed optimizer state (W1.10 step 5), matching `Module.stateDict()`'s
- * own name-keying so the two travel together in a checkpoint. `step` is
- * Adam/AdamW's global step count (`t`), shared across every parameter —
- * `undefined` for SGD, which has none.
- */
+/** Name-keyed optimizer state matching `Module.stateDict()`'s keying. `step` is Adam/AdamW's global step count, `undefined` for SGD. */
 export interface OptimizerStateDict {
   readonly step?: number
   readonly state: Readonly<Record<string, OptimizerStateEntry>>
@@ -290,15 +248,7 @@ export abstract class Optimizer {
     }
   }
 
-  /**
-   * Throws when a `Module` this optimizer was built from has since
-   * gained or lost a parameter (W1.10 step 3) — training against
-   * `this.params`, a snapshot taken at construction, while the module's
-   * own idea of its parameters has moved on is a silent-corruption bug
-   * (§3.3), so every concrete `step()` calls this before touching a
-   * single gradient. A no-op when the optimizer was built from a plain
-   * array: there is no module to have drifted.
-   */
+  /** Throws when a source `Module` has gained or lost a parameter since this optimizer was constructed. */
   protected checkParameterEpoch(): void {
     if (!this.#modules) return
     this.#modules.forEach((m, i) => {
@@ -334,11 +284,7 @@ export interface SGDOptions {
 }
 
 export class SGD extends Optimizer {
-  /** Public and mutable (W1.10 step 1): `opt.lr = ...` takes effect on
-   * the very next eager `step()`. Under `compile()` the graph path bakes
-   * whatever `this.lr` is *at trace time* into a constant leaf — making
-   * it live there too is A-S1/W3.4's job (`test/optim-graph.test.ts`'s
-   * "lr is live" case names it), not this item's. */
+  /** Public and mutable; takes effect on the next eager `step()`. Under `compile()` the traced value is baked in at trace time. */
   lr: number
   private readonly momentum: number
   private readonly weightDecay: number
@@ -464,25 +410,21 @@ export interface AdamOptions {
 }
 
 export class Adam extends Optimizer {
-  /** Public and mutable (W1.10 step 1) — see the note on {@link SGD.lr}. */
+  /** Public and mutable; see {@link SGD.lr}. */
   lr: number
   protected readonly beta1: number
   protected readonly beta2: number
   protected readonly eps: number
   protected readonly weightDecay: number
-  /** `false` for `Adam` (coupled L2), `true` for `AdamW` (decoupled decay).
-   * The only thing that differs between the two classes — see {@link adamUpdate}. */
+  /** `false` for `Adam` (coupled L2), `true` for `AdamW` (decoupled decay). */
   protected readonly decoupled: boolean
   private t = 0
   private m: Float64Array[] | null
   private v: Float64Array[] | null
   private graphM: AnyTensor[] | null = null
   private graphV: AnyTensor[] | null = null
-  // Step count for the in-graph path. It has to be a graph leaf rather
-  // than the host-side `t`: a compiled step is traced once, so a
-  // trace-time constant would freeze the bias correction at t = 1
-  // forever. As a leaf it is read and rewritten per step like any other
-  // optimizer state, and the correction is computed in the graph.
+  // The in-graph step count must be a leaf, not the host-side `t`: a
+  // traced constant would freeze the bias correction at t = 1.
   private graphT: AnyTensor | null = null
 
   constructor(
@@ -513,10 +455,8 @@ export class Adam extends Optimizer {
     const bc2 = 1 - this.beta2 ** this.t
     const updates: GraphUpdate[] = []
     const grads: AnyTensor[] = []
-    // Bias corrections as graph expressions of the step-count leaf.
-    // beta^t becomes exp(t·ln beta), the only way to raise a constant to
-    // a tensor power with the ops available. Built lazily, and only when
-    // some parameter actually takes the graph path.
+    // Bias corrections as graph expressions of the step-count leaf:
+    // beta^t as exp(t·ln beta), built lazily on first graph-path use.
     let graphBc: { one: AnyTensor; two: AnyTensor } | null = null
     const corrections = () => {
       if (graphBc) return graphBc
@@ -659,25 +599,12 @@ export interface AdamWOptions {
   lr?: number
   betas?: [number, number]
   eps?: number
-  /** Decoupled weight decay (Loshchilov & Hutter 2019), applied to the
-   * parameter directly rather than folded into the gradient. Defaults to
-   * `0.01`, matching PyTorch's `AdamW`. */
+  /** Decoupled weight decay, applied to the parameter directly rather than folded into the gradient. Defaults to `0.01`, matching PyTorch's `AdamW`. */
   weightDecay?: number
   maxGradNorm?: number
 }
 
-/**
- * Adam with decoupled weight decay — **the transformer default**: every
- * example and bench in this repo that trains an attention model
- * (`examples/gpt.ts`, `examples/nanogpt.ts`, the nanoGPT bench) uses
- * `AdamW`, not `Adam`, matching nanoGPT/GPT-2/GPT-3 training recipes.
- * `Adam`'s weight decay is coupled — it rides through the moment
- * estimates and interacts with `lr` adaptively per-parameter, which is
- * the wrong thing for a decay term; `AdamW` fixes that by subtracting
- * `lr * weightDecay * p` directly (§3.4). Everything else — the moment
- * estimates, the bias correction, the graph leaf for `t` — is exactly
- * `Adam`'s, inherited rather than duplicated.
- */
+/** Adam with decoupled weight decay ({@link adamUpdate}): the decay subtracts `lr * weightDecay * p` directly instead of riding through the moment estimates. */
 export class AdamW extends Adam {
   constructor(source: OptimizerSource, options: AdamWOptions = {}) {
     super(

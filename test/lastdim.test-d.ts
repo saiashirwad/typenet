@@ -1,18 +1,9 @@
 /**
- * `LastDimCheck`, against the real export.
- *
- * Checked-in version of `scratchpad/final-verify/lastdim.ts`, reduced to
- * the adopted spelling. The probe compared it against a two-sided tuple
- * escape on `Last<S>`; both pass every case below, and `DimEq` was kept
- * because it is the comparison the rest of `shape.ts` already uses.
- *
- * What must NOT be used is the variadic-infer spelling
- * `S extends [...number[], infer L] ? … : ErrorMessage<…>`
- * (`scratchpad/final-verify/failopen.ts`): it defers on a naked generic
- * `S` with an `ErrorMessage` in reach and rejects every generic caller.
- * The three `naked*` / `generic*` functions below are that regression —
- * they are not decoration, they fail to compile the moment the check is
- * rewritten that way.
+ * `LastDimCheck`, against the real export. The three `naked*` /
+ * `generic*` functions below are a regression trap: they fail to compile
+ * the moment the check is rewritten with the variadic-infer spelling
+ * `S extends [...number[], infer L] ? ... : ErrorMessage<...>`, which
+ * defers on a naked generic `S` and rejects every generic caller.
  */
 import type { LastDimCheck, Shape } from "../src/shape.ts"
 import type { Tensor } from "../src/tensor.ts"

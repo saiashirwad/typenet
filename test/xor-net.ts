@@ -3,11 +3,7 @@ import { Tensor } from "../src/tensor.ts"
 
 type AnyTensor = Tensor<any>
 
-/**
- * A shared 2→4→1 MLP (tanh hidden, sigmoid output) training fixture for
- * the XOR truth table. `params` is `AnyTensor[]` (already requiresGrad'd)
- * so optimizers and `backward()` work against it directly.
- */
+/** Shared 2→4→1 MLP (tanh hidden, sigmoid output) for the XOR truth table. */
 export function makeXorNet() {
   const x = tensor([
     [0, 0],

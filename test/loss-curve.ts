@@ -1,18 +1,12 @@
-// Bit-identical loss-curve harness (PLAN-V2 §4.1/§4.2, W0.7). This is gate
-// C3: a packing or residency bug perturbs a loss curve rather than crashing,
-// and nothing else in the plan catches that. `lossCurve()` trains the frozen
-// `mlp-legacy` model (`bench/models/mlp.ts`, W0.2) for N *compiled* steps at
-// a fixed seed and returns the per-step loss as raw f32 bits — a
-// `Uint32Array`, never a widened `Float64Array`, because widening is exactly
-// the step that would hide a one-ulp difference.
-//
-// A `TYPENET_*` kill switch (§2.9) is read once at native-addon init, so the
-// only way to get a curve produced under a particular switch set is a fresh
-// process with that env — hence the `execFileSync` child-process runner
-// below. This file is deliberately both: the parent-side API (`lossCurve`,
-// `expectIdenticalCurves`) that a test imports, and — when invoked directly
-// under `vite-node` with the `--loss-curve-child` marker — the child runner
-// that actually trains the model and prints its loss curve.
+// Bit-identical loss-curve harness: `lossCurve()` trains the frozen
+// `mlp-legacy` model for N compiled steps at a fixed seed and returns the
+// per-step loss as raw f32 bits (a `Uint32Array`, never a widened
+// `Float64Array`, because widening is the step that would hide a one-ulp
+// difference). A `TYPENET_*` switch is read once at native-addon init, so a
+// curve under a given switch set requires a fresh process; hence the
+// `execFileSync` child runner. This file is both the parent-side API and,
+// when invoked directly under `vite-node` with `--loss-curve-child`, the
+// child runner that trains the model.
 
 import { execFileSync } from "node:child_process"
 import { existsSync } from "node:fs"
@@ -28,13 +22,10 @@ const CHILD_MARKER = "--loss-curve-child"
 const OUTPUT_PREFIX = "LOSS_CURVE_JSON:"
 
 /**
- * The env switches `lossCurve`'s `env` option may set (PLAN-V2 §2.9): every
- * per-pass kill switch, trace/profile flag, budget knob and provenance
- * variable the plan declares, plus `TYPENET_NO_PARALLEL` (already wired in
- * `native/src/lib.rs`). Deliberately an allowlist, not a `TYPENET_` prefix
- * check: a typo'd switch name (`TYPENET_NO_ARENAA`) must fail loudly rather
- * than silently produce a reference curve for the *default* configuration
- * (Accept #3).
+ * The env switches `lossCurve`'s `env` option may set. An allowlist rather
+ * than a `TYPENET_` prefix check: a typo'd switch name (`TYPENET_NO_ARENAA`)
+ * must fail loudly rather than silently produce a reference curve for the
+ * default configuration.
  */
 export const KNOWN_ENV_SWITCHES: ReadonlySet<string> = new Set([
   // per-pass kill switches
@@ -66,28 +57,25 @@ export const KNOWN_ENV_SWITCHES: ReadonlySet<string> = new Set([
   "TYPENET_GIT_DIRTY",
 ])
 
-/** The two modes that actually run a *compiled* step; `eager` never compiles
- * (see `bench/macro-mlp.ts`), so it cannot produce a loss curve here. */
+/** The two modes that run a *compiled* step; `eager` never compiles, so it
+ * cannot produce a loss curve here. */
 export type LossCurveMode = "interp" | "native"
 
 export interface LossCurveOptions {
-  /** Number of compiled training steps to run and record. Default 200 (§4.2). */
+  /** Number of compiled training steps to run and record. */
   steps?: number
-  /** RNG seed for both weight init and the fixed training batch. Default 1234. */
+  /** RNG seed for both weight init and the fixed training batch. */
   seed?: number
-  /** Which compiled backend runs the steps. Default "native". */
+  /** Which compiled backend runs the steps. */
   mode?: LossCurveMode
-  /**
-   * Extra env vars for the child process, e.g. `{ TYPENET_NO_ARENA: "1" }`.
-   * Keys must be in `KNOWN_ENV_SWITCHES` — see that constant's doc comment.
-   */
+  /** Extra env vars for the child process; keys must be in `KNOWN_ENV_SWITCHES`. */
   env?: Readonly<Record<string, string>>
 }
 
 /**
  * Throws unless every key of `env` is in `KNOWN_ENV_SWITCHES`. Split out
- * from `lossCurve` so its validation can be unit-tested directly, without
- * spending a child-process spawn per switch name.
+ * from `lossCurve` so its validation can be unit-tested without a
+ * child-process spawn per switch name.
  */
 export function assertKnownEnvSwitches(env: Readonly<Record<string, string>>): void {
   for (const key of Object.keys(env)) {
@@ -108,11 +96,9 @@ function vitenodeBinary(): string {
 
 /**
  * Trains `bench/models/mlp.ts`'s frozen `mlp-legacy` net for `steps`
- * compiled steps at a fixed seed and fixed (resampled-once) batch, and
- * returns the loss at every step as raw f32 bits.
- *
- * Spawns a fresh `vite-node` child process — required so `env` switches
- * (read once at native-addon init) actually take effect — and throws if
+ * compiled steps at a fixed seed and fixed batch, and returns the loss at
+ * every step as raw f32 bits. Spawns a fresh `vite-node` child process so
+ * `env` switches (read once at native-addon init) take effect; throws if
  * `env` names anything outside `KNOWN_ENV_SWITCHES`, or if `mode: "native"`
  * is requested but the native addon is not built.
  */
@@ -123,9 +109,8 @@ export function lossCurve(opts: LossCurveOptions = {}): Uint32Array {
   const env = opts.env ?? {}
   assertKnownEnvSwitches(env)
   if (mode === "native" && !isNativeAvailable()) {
-    // The child process makes its own `useNative()` call (and would throw
-    // its own, uglier error), but checking here fails fast in the parent
-    // before ever spawning a process.
+    // Fail fast in the parent instead of after spawning a child that would
+    // throw its own, uglier error.
     throw new Error(
       `lossCurve({ mode: "native" }): the native addon is not built — run \`pnpm build:native\` first, `
         + `or pass { mode: "interp" }.`,
@@ -160,9 +145,9 @@ export function lossCurve(opts: LossCurveOptions = {}): Uint32Array {
 }
 
 /**
- * Asserts two loss curves are bit-for-bit identical — `toBe`, never
- * `toBeCloseTo`: any tolerance here would hide exactly the one-ulp
- * divergence this harness exists to catch.
+ * Asserts two loss curves are bit-for-bit identical (`toBe`, never
+ * `toBeCloseTo`: any tolerance would hide the one-ulp divergence this
+ * harness exists to catch).
  */
 export function expectIdenticalCurves(a: Uint32Array, b: Uint32Array, label: string): void {
   expect(a.length, `${label}: curve lengths differ`).toBe(b.length)
@@ -171,12 +156,9 @@ export function expectIdenticalCurves(a: Uint32Array, b: Uint32Array, label: str
   }
 }
 
-// ---------------------------------------------------------------------------
-// Child runner. Only reached when this file is executed directly by
-// `vite-node` with the `--loss-curve-child` marker (see `lossCurve` above),
-// never when imported by a test — so importing this module never trains
-// anything.
-// ---------------------------------------------------------------------------
+// Child runner: only reached when this file is executed directly by
+// `vite-node` with the `--loss-curve-child` marker, never when imported
+// by a test, so importing this module never trains anything.
 
 async function runChild(argJson: string): Promise<void> {
   const { steps, seed, mode } = JSON.parse(argJson) as { steps: number; seed: number; mode: LossCurveMode }
@@ -189,8 +171,8 @@ async function runChild(argJson: string): Promise<void> {
   type AnyTensor = InstanceType<typeof Tensor>
 
   // Seed before any rand() draw: weight init (inside mlpLegacyNet) and the
-  // training batch (mlpLegacyData) both consume the seeded generator in a
-  // fixed order, so seeding once up front reproduces both deterministically.
+  // training batch (mlpLegacyData) consume the seeded generator in a fixed
+  // order, so one up-front seed reproduces both.
   configure({ seed })
   setMode(mode)
 

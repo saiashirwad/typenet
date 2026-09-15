@@ -1,9 +1,7 @@
-// Chains of 1/5/12/24 elementwise ops at n ∈ {4k … 4M}, with and without
-// a transcendental (PLAN-V2 §4.2, W0.3). Sweeps `TYPENET_BLK`,
-// `TYPENET_PARALLEL_MIN`, `TYPENET_CHUNK` when those switches exist
-// (W0.8); probes for them via `nativeDeviceInfo()` and prints a skip line
-// instead of erroring when they are not declared yet — this script does
-// not depend on W0.8 landing first.
+// Chains of 1/5/12/24 elementwise ops at n in {4k...4M}, with and without
+// a transcendental. Probes for the TYPENET_BLK / TYPENET_PARALLEL_MIN /
+// TYPENET_CHUNK switches via `nativeDeviceInfo()` and prints a skip line
+// instead of erroring when they are not declared yet.
 
 import { disableNative, isNativeAvailable, nativeDeviceInfo, useNative } from "../index.ts"
 import { rand } from "../src/factories.ts"
@@ -59,8 +57,7 @@ function setMode(mode: Mode): void {
   }
 }
 
-// §2.9's chunking/threading switches, probed rather than assumed — W0.8
-// may not have landed yet, and this script must still run green.
+// Probed rather than assumed: the switches may not be declared yet.
 const CHUNK_SWITCHES = ["TYPENET_BLK", "TYPENET_PARALLEL_MIN", "TYPENET_CHUNK"] as const
 function declaredSwitches(): ReadonlySet<string> {
   if (!isNativeAvailable()) return new Set()
@@ -77,12 +74,9 @@ async function main(): Promise<void> {
         + "by the native addon yet (W0.8 not landed) — running the plain grid with no sweep.",
     )
   } else {
-    // Each switch is read once behind a Rust `OnceLock` (native/src/lib.rs
-    // `switches()`) and cached for the process's lifetime, so actually
-    // sweeping a value needs one subprocess per value (the way
-    // `micro-threading.ts` sweeps `TYPENET_THREADS`) — not a same-process
-    // env mutation, which would silently no-op. That sweep is added the
-    // wave that wires these switches; for now this is only the probe.
+    // Each switch is read once behind a Rust OnceLock and cached for the
+    // process's lifetime, so sweeping a value would need one subprocess
+    // per value; a same-process env mutation would silently no-op.
     console.log(
       `micro-elementwise: ${present.join(", ")} are declared but a same-process sweep would not `
         + `observe them (cached behind a OnceLock) — running the plain grid only.`,

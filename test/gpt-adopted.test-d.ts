@@ -1,21 +1,9 @@
 /**
- * The §3.7 GPT sample, compiled against the signatures PLAN-V2 adopts
- * (D19 / D20 / D22 / D23 / D25 / D26, `LastDimCheck` form A) and the real
- * `src/shape.ts`. Checked-in version of `scratchpad/review/gpt-adopted.ts`,
- * with the `Embedding` / `crossEntropy` cases from
- * `scratchpad/final-verify/api-forms.ts` ported onto the adopted forms —
- * that probe used the *rejected* variadic `LastDimCheck` spelling and hid
- * the consequence behind an `as never`, so it is not copied as written.
- *
- * The layers that do not exist yet (LayerNorm, Embedding, Dropout, GELU,
- * sdpa, the index-typed crossEntropy) are `declare`d here with exactly
- * the signatures their items will implement; `Linear` and `Module` are
- * the real ones. When those land, this file becomes a straight import —
- * until then it is the proof that the shape algebra in W0.13 is enough to
- * type an attention block end to end.
- *
- * `flatten` / `unflatten` are free-function stand-ins for the `Tensor`
- * methods W1.8 adds, for the same reason (see flatten.test-d.ts).
+ * A GPT-style attention stack checked against the real `src/shape.ts`.
+ * Layers that do not exist yet (LayerNorm, Embedding, Dropout, GELU, sdpa,
+ * the index-typed crossEntropy) are `declare`d here; `Linear` and `Module`
+ * are the real ones. This file is the proof that the shape algebra types
+ * an attention block end to end.
  */
 import { assertChecked } from "../src/cast.ts"
 import { Linear, Module } from "../src/nn.ts"
@@ -67,7 +55,6 @@ declare function sdpa<B extends number, H extends number, T extends number, K ex
 
 declare function crossEntropy<S extends Shape>(logits: Tensor<S>, targets: IndexTensor<Init<S>>): Tensor<[]>
 
-// ---- MHA, exactly as §3.7 prints it ----------------------------------------
 class MultiHeadAttention<D extends number, H extends number> extends Module {
   readonly qkv: Linear<D, DimMul<3, D>>
   readonly proj: Linear<D, D>
@@ -106,7 +93,6 @@ const _mha = new MultiHeadAttention(384, 6)
 // @ts-expect-error 384 heads do not divide into 5
 const _mhaBad = new MultiHeadAttention(384, 5)
 
-// ---- a block, and the Embedding / crossEntropy path ------------------------
 class Block<D extends number, H extends number> extends Module {
   readonly ln1: LayerNorm<D>
   readonly attn: MultiHeadAttention<D, H>

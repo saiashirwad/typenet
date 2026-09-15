@@ -1,6 +1,6 @@
 # typenet
 
-Type-safe tensor arithmetic for TypeScript. Shapes are tracked in the type system — broadcasting, matmul, reshapes and reductions are all checked at compile time.
+Type-safe tensor arithmetic for TypeScript. Shapes are tracked in the type system: broadcasting, matmul, reshapes and reductions are all checked at compile time.
 
 Includes autograd, layers, and optimizers.
 
@@ -24,7 +24,7 @@ const l = ((s - 1) ** 2).mean() // Tensor<[]>
 const m = randn([2, 1]) + randn([1, 3]) // Tensor<[2, 3]>
 ```
 
-`examples/shapes.ts` is a gallery of this — run it with `pnpm example:shapes`, or read it, which is the same thing since it is checked by `tsc` either way.
+`examples/shapes.ts` is a gallery of this. Run it with `pnpm example:shapes`, or read it, which is the same thing since it is checked by `tsc` either way.
 
 ### Shapes compose through layers
 
@@ -50,7 +50,7 @@ function classify<B extends number>(x: Tensor<[B, 784]>): Tensor<[B, 10]> {
 
 ### Dimension arithmetic is a type and a value
 
-`DimAdd`, `DimMul`, `DimSub` and `DimDiv` are each a type _and_ a function of the same name. The type does the arithmetic on the literal dims, the function does it on the numbers, and they are the same symbol — so a derived width is written once and carries its own type:
+`DimAdd`, `DimMul`, `DimSub` and `DimDiv` are each a type _and_ a function of the same name. The type does the arithmetic on the literal dims, the function does it on the numbers, and they are the same symbol, so a derived width is written once and carries its own type:
 
 ```ts
 "use tsover"
@@ -120,7 +120,7 @@ error TS2345: Argument of type 'Tensor<[2, 3]>' is not assignable to parameter o
 'Tensor<[2, 3]> & "matmul: inner dimensions do not match ([2, 3] @ [2, 3])"'.
 ```
 
-The eight cases in `examples/shapes.ts` are checked twice — by `@ts-expect-error`, which fails the build if one stops firing, and by `test/examples.test.ts`, which strips the directives, re-runs `tsc`, and compares what comes back with the message quoted above each case. So these are the messages, not a description of them:
+The eight cases in `examples/shapes.ts` are checked twice: by `@ts-expect-error`, which fails the build if one stops firing, and by `test/examples.test.ts`, which strips the directives, re-runs `tsc`, and compares what comes back with the message quoted above each case. So these are the messages, not a description of them:
 
 | what you wrote                                                          | what `tsc` says                                                                      |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
@@ -192,7 +192,7 @@ for (let epoch = 0; epoch < 1500; epoch++) {
 
 ## A GPT that typechecks
 
-An MLP's shapes are a chain of two numbers, and a chain of two numbers proves very little. A transformer is where a shape-typed library either earns its keep or does not: the head split (`D -> H * (D/H)`), the position-embedding broadcast (`[B, T, D] + [T, D]`), the weight tie between a `[V, D]` token table and a `D -> V` output head, and a loss that reads its target shape off the logits. `examples/gpt.ts` is that model — generic in the batch size, with no casts anywhere in the file:
+An MLP's shapes are a chain of two numbers, and a chain of two numbers proves very little. A transformer is where a shape-typed library either earns its keep or does not: the head split (`D -> H * (D/H)`), the position-embedding broadcast (`[B, T, D] + [T, D]`), the weight tie between a `[V, D]` token table and a `D -> V` output head, and a loss that reads its target shape off the logits. `examples/gpt.ts` is that model, generic in the batch size and with no casts anywhere in the file:
 
 ```ts
 "use tsover"
@@ -255,10 +255,10 @@ class GPT<
 
 Four things there are checked by the compiler and by nothing else:
 
-- **The head width is derived, and divisibility is a precondition.** `H` carries `DimDivCheck<D, H>` on the constructor's own parameter, so `heads: 5` against a width of 64 is rejected at the construction site rather than inside an `unflatten` at run time. The check is forwarded to `TransformerBlock` with _explicit_ type arguments — let inference re-derive `H` from the intersection and it discharges the check against itself, one level above where the widths are actually known.
+- **The head width is derived, and divisibility is a precondition.** `H` carries `DimDivCheck<D, H>` on the constructor's own parameter, so `heads: 5` against a width of 64 is rejected at the construction site rather than inside an `unflatten` at run time. The check is forwarded to `TransformerBlock` with _explicit_ type arguments; let inference re-derive `H` from the intersection and it discharges the check against itself, one level above where the widths are actually known.
 - **The position embedding broadcasts, and the algebra says so.** `[B, T, D] + [T, D]` needs no `unsqueeze(0)` and no `expand`; a `wpe` built at the wrong width does not broadcast at all, and that is a compile error on the `+`.
-- **The tie is object identity, not a runtime alias table.** `TiedLinear.of(this.wte)` stores the embedding's own `Parameter<[V, D]>` and emits `matmul(x, transpose(w))`. `new Linear(d, vocab)` plus `tie(head.weight, wte.weight)` does not typecheck at all — `[D, V]` is not `[V, D]` — which is exactly why `TiedLinear` exists. `parameters()` reports the shared table once, accumulates one `.grad`, and writes one `stateDict` entry.
-- **The loss reads its target shape off the logits.** `crossEntropy` takes `IndexTensor<Init<S>>`: `[B, T, V]` logits want `[B, T]` ids, and flattening either side by hand is not just unnecessary but a compile error.
+- **The tie is object identity, not a runtime alias table.** `TiedLinear.of(this.wte)` stores the embedding's own `Parameter<[V, D]>` and emits `matmul(x, transpose(w))`. `new Linear(d, vocab)` plus `tie(head.weight, wte.weight)` does not typecheck at all (`[D, V]` is not `[V, D]`), which is exactly why `TiedLinear` exists. `parameters()` reports the shared table once, accumulates one `.grad`, and writes one `stateDict` entry.
+- **The loss reads its target shape off the logits.** `crossEntropy` takes `IndexTensor<Init<S>>`: `[B, T, V]` logits want `[B, T]` ids, and flattening either side by hand is unnecessary; doing so is a compile error.
 
 `forward` is generic in `B`, so the model is written once and typechecks for every batch size; `T`, `D`, `V` and `H` are type parameters rather than fields of type `number`, so the shapes inside `forward` are the shapes the constructor was given.
 
@@ -273,7 +273,7 @@ The bottom of `examples/gpt.ts` is a function that is never called, holding four
 | a 64-long window into a 32-long context      | `Type '64' is not assignable to type '32'.`                                                                    |
 | `[16]` targets against `[16, 32, 32]` logits | `Type '[16]' is not assignable to type '[16, 32]'.`                                                            |
 
-The first one is the honest exception, and it is worth naming: `DimDivCheck<64, 5>` _is_ the sentence `"attention: 64 is not divisible by 5"`, but a parameter typed `H & DimDivCheck<D, H>` intersects a numeric literal with a string literal, and that intersection is `never`. The rejection lands on the right line and the sentence shows on hover; unlike the shape checks above — which intersect a message with a `Tensor<...>` object type and so carry it straight into the diagnostic — it cannot reach the error text.
+The first one is the honest exception, and it is worth naming: `DimDivCheck<64, 5>` _is_ the sentence `"attention: 64 is not divisible by 5"`, but a parameter typed `H & DimDivCheck<D, H>` intersects a numeric literal with a string literal, and that intersection is `never`. The rejection lands on the right line and the sentence shows on hover; unlike the shape checks above, which intersect a message with a `Tensor<...>` object type and so carry it straight into the diagnostic, it cannot reach the error text.
 
 ### Running it
 
@@ -285,9 +285,9 @@ TYPENET_EXAMPLE_STEPS=200 pnpm example:gpt    # the full run quoted below
 The example trains a 104,192-parameter GPT (vocab 32, context 32, width 64, 4 heads, 2 layers, tied LM head) on a short passage encoded in the file itself, so it runs offline and a fixed seed replays the curve exactly. Character-level next-token prediction, batch 16, `AdamW` at a warmup-cosine learning rate with gradient clipping.
 
 - **20 steps** (the default): loss **3.4623 -> 2.8026 in 3.6 s** on an Apple M5, eager. `3.4623` is `ln(32)` to three decimals, which is what an untrained model over a 32-symbol alphabet should cost.
-- **200 steps**: loss **3.4623 -> 0.5082 in 35.3 s**, held-out **0.3049**. The passage repeats, so this is memorisation rather than generalisation — which is the point of a 35-second example, and worth saying rather than dressing up.
+- **200 steps**: loss **3.4623 -> 0.5082 in 35.3 s**, held-out **0.3049**. The passage repeats, so this is memorisation rather than generalisation, which is the point of a 35-second example.
 
-Both runs print `native fallbacks: 0` from `jsCounters()`. Eager mode never serialises a graph, so nothing _can_ have fallen off the native path there — the line is printed rather than assumed because "it is still native" is exactly the claim a silent interpreter fallback would make a lie of.
+Both runs print `native fallbacks: 0` from `jsCounters()`. Eager mode never serialises a graph, so nothing _can_ have fallen off the native path there; the line is printed rather than assumed because "it is still native" is exactly the claim a silent interpreter fallback would make a lie of.
 
 Like `example:mlp`, it trains with the plain `zeroGrad` / `backward` / `step` loop rather than `compile()`, for the same reason: a compiled step bakes the optimizer's `lr` into the traced graph as a constant, and the schedule has to move.
 
@@ -302,7 +302,7 @@ pnpm example:spiral   # 3-class spiral, crossEntropy + Adam
 pnpm example:gat      # graph attention network
 ```
 
-`pnpm example:mlp` trains a `sequential(Linear(784, 256), ReLU, Linear(256, 10))` on a synthetic 10-class dataset generated in the example itself (so it runs offline, and a fixed seed replays it exactly): 400 steps of batch 64, `AdamW` at a warmup-cosine learning rate with gradient clipping. It reaches a **training loss of 0.1735 and 87.9% test accuracy in 13-14 s** on an Apple M5, in eager mode. The loss and the accuracy are the same on every run — the seed fixes the data, the init and the shuffle; only the wall time moves.
+`pnpm example:mlp` trains a `sequential(Linear(784, 256), ReLU, Linear(256, 10))` on a synthetic 10-class dataset generated in the example itself (so it runs offline, and a fixed seed replays it exactly): 400 steps of batch 64, `AdamW` at a warmup-cosine learning rate with gradient clipping. It reaches a **training loss of 0.1735 and 87.9% test accuracy in 13-14 s** on an Apple M5, in eager mode. The loss and the accuracy are the same on every run: the seed fixes the data, the init and the shuffle; only the wall time moves.
 
 It trains with the plain `zeroGrad` / `backward` / `step` loop rather than `compile()`, because a compiled step bakes the optimizer's `lr` into the traced graph as a constant, and the schedule has to move.
 
@@ -310,7 +310,7 @@ It trains with the plain `zeroGrad` / `backward` / `step` loop rather than `comp
 
 [tsover](https://tsover.swmansion.com) is a TypeScript fork with operator overloading. It's installed here as the `typescript` package and applied via the vite plugin, covering `vitest` and `vite-node`. Opt in with a `"use tsover"` directive; inside that scope `+ - * / **` work on tensors with full shape inference, including cross-broadcasts like `[2, 1] + [1, 3] -> [2, 3]`.
 
-For editor support, point your editor at the workspace TypeScript — in VS Code:
+For editor support, point your editor at the workspace TypeScript. In VS Code:
 
 ```json
 { "typescript.tsdk": "node_modules/typescript/lib" }
@@ -334,7 +334,7 @@ Gradients flow through arithmetic, `pow`/`exp`/`log`/`sqrt`/`abs`, activations, 
 
 ## Lazy mode
 
-Eager mode, the default, runs every operation immediately. `lazy(fn)` runs `fn` with graph building turned on instead — operations return unevaluated nodes, forced only by `.data`, `.item()`, `.toArray()`, or `compile()`'s serializer — and puts the previous mode back when `fn` returns, even if it throws:
+Eager mode, the default, runs every operation immediately. `lazy(fn)` runs `fn` with graph building turned on instead; operations return unevaluated nodes, forced only by `.data`, `.item()`, `.toArray()`, or `compile()`'s serializer, and it puts the previous mode back when `fn` returns, even if it throws:
 
 ```ts
 "use tsover"
@@ -344,7 +344,7 @@ const out = lazy(() => tensor([1, 2, 3]).add(tensor([10, 20, 30])))
 out.toArray() // [11, 22, 33] — forces the graph
 ```
 
-`configure({ lazy: true })` sets the same flag globally, with no scope of its own — the right tool for a REPL, where there is no enclosing function to scope it to, and the wrong one anywhere else. A script that flips the flag, calls something twice, and flips it back has no `try`/`finally`:
+`configure({ lazy: true })` sets the same flag globally, with no scope of its own: the right tool for a REPL, where there is no enclosing function to scope it to, and the wrong one anywhere else. A script that flips the flag, calls something twice, and flips it back has no `try`/`finally`:
 
 ```ts
 "use tsover"
@@ -358,11 +358,11 @@ run() // if either call throws, lazy mode never gets turned back off
 configure({ lazy: false })
 ```
 
-`lazy(fn)` and its `eager(fn)` counterpart (for forcing eager mode inside an outer lazy scope) are `withContext({ lazy: true }, fn)` / `withContext({ lazy: false }, fn)` under the hood — reach for `configure` only at a REPL prompt.
+`lazy(fn)` and its `eager(fn)` counterpart (for forcing eager mode inside an outer lazy scope) are `withContext({ lazy: true }, fn)` / `withContext({ lazy: false }, fn)` under the hood; reach for `configure` only at a REPL prompt.
 
 ## Compiled training steps
 
-`compile(fn, exampleInputs)` traces `fn` against the examples up front and replays the graph on every call (omitting the examples still traces on the first call, deprecated). Reading a tensor's values inside `fn` (`.data`, `.item()`, ...) throws — the graph is recorded, not run. A whole training step fits inside one — forward, backward, gradient clipping and the optimizer update all evaluated in a single pass, with nothing read back to JavaScript in between:
+`compile(fn, exampleInputs)` traces `fn` against the examples up front and replays the graph on every call (omitting the examples still traces on the first call, deprecated). Reading a tensor's values inside `fn` (`.data`, `.item()`, ...) throws: the graph is recorded, not run. A whole training step fits inside one: forward, backward, gradient clipping and the optimizer update all evaluated in a single pass, with nothing read back to JavaScript in between:
 
 ```ts
 "use tsover"
@@ -387,7 +387,7 @@ const step = compile(
 for (let i = 0; i < 1000; i++) step(X, Y)
 ```
 
-The graph can be deep: a cellular automaton rolled out over dozens of time steps and differentiated end to end is tens of thousands of nodes, which is fine. Two limits follow from tracing once: JavaScript control flow that depends on tensor _values_ cannot be captured (shape-dependent control flow is fine, shapes are known at trace time), and the graph has a fixed depth, so a variable-length loop needs one compiled graph per length. A scalar read from JavaScript at trace time — an optimizer's `lr`, say — is a constant in the traced graph, so a learning-rate schedule belongs in an eager loop for now.
+The graph can be deep: a cellular automaton rolled out over dozens of time steps and differentiated end to end is tens of thousands of nodes, which is fine. Two limits follow from tracing once: JavaScript control flow that depends on tensor _values_ cannot be captured (shape-dependent control flow is fine, shapes are known at trace time), and the graph has a fixed depth, so a variable-length loop needs one compiled graph per length. A scalar read from JavaScript at trace time, an optimizer's `lr` say, is a constant in the traced graph, so a learning-rate schedule belongs in an eager loop for now.
 
 ## API sketch
 
@@ -418,7 +418,7 @@ arange(10)
 scalar(42)
 ```
 
-Math — differentiable and shape-checked:
+Math, differentiable and shape-checked:
 
 ```ts
 "use tsover"
@@ -563,7 +563,7 @@ Index tensors hold integral values, and `indexSelect` / `scatterAdd`
 demand that in the _type_: their index parameter is an `IndexTensor`, not
 a plain `Tensor<[n]>`, so an ordinary tensor in that position is a
 compile error rather than a runtime surprise. There are two ways to make
-one — `Tensor.indices(data, shape)` builds an int32 leaf directly, and
+one: `Tensor.indices(data, shape)` builds an int32 leaf directly, and
 `.toIndex()` brands an existing tensor; both check integrality once, at
 the call. Prefer `int32` / `int64` storage, which is exact across the
 full integer range; `float32` indices remain legal for compatibility, and
@@ -589,7 +589,7 @@ useNative({ device: "gpu" }) // the best accelerator available
 CPU is the default, which is not the obvious choice. Measured on an Apple
 M5, candle's CPU device (Accelerate for matmul) matches Metal on chained
 large matmuls, loses to it by ~1.5x on purely elementwise graphs, and
-beats it by ~7x on the gather/scatter graphs message passing produces —
+beats it by ~7x on the gather/scatter graphs message passing produces:
 Metal's `index_select`/`index_add` kernels are slow and such graphs are
 made of many small dispatches. Reach for `"gpu"` when a workload is
 dominated by large elementwise tensors.
@@ -597,14 +597,14 @@ dominated by large elementwise tensors.
 The native path handles float32 compute with CPU-resident leaves.
 `int32` / `int64` leaves are allowed as gather/scatter indices (read as
 their native width, so they have no f32 mantissa limit). With native
-enabled, a graph with a float64 leaf — or an integer leaf used as a
-compute operand — throws instead of silently falling back to the JS
+enabled, a graph with a float64 leaf, or an integer leaf used as a
+compute operand, throws instead of silently falling back to the JS
 interpreter: keep the graph in float32 or call `disableNative()`.
 Set `TYPENET_CHECK_SHAPES=1` to make the Rust side recompute every node
 shape and assert it matches what JS serialized.
 
 A graph that contains an op the addon has no kernel for runs on the JS
-interpreter instead, and says so — once per op, with a line naming it.
+interpreter instead, and says so, once per op, with a line naming it.
 `jsCounters().nativeFallbacks` counts them and `TYPENET_STRICT_NATIVE=1`
 turns the notice into a throw, which is how a benchmark asserts it is
 measuring the fast path rather than assuming it.
@@ -635,9 +635,9 @@ pnpm check:readme  # every ts block in this file is compiled
 ```
 
 Every TypeScript block in this README is extracted and compiled by
-`scripts/check-readme.mjs`, with `typenet` resolved to this checkout — so
+`scripts/check-readme.mjs`, with `typenet` resolved to this checkout, so
 a block that has gone stale fails a script rather than a reader.
 
 ## Status
 
-Work in progress — the API and type system are still evolving.
+Work in progress: the API and type system are still evolving.

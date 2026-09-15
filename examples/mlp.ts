@@ -1,22 +1,19 @@
 "use tsover"
 
 /**
- * An MLP classifier — §3.6 of the plan, on the pieces that exist today.
- *
- * The point of the example is the shape story, not the dataset: one
+ * An MLP classifier. The point is the shape story, not the dataset: one
  * `sequential` whose widths are checked at construction, a `forward` that
  * infers `[64, 784] -> [64, 10]`, an `AdamW` driven by a warmup-cosine
  * schedule, and gradient clipping between `backward()` and `step()`.
  *
  * The data is synthetic and generated here (ten class prototypes plus
- * Gaussian noise) so that the example runs offline and reproducibly: a
- * fixed `configure({ seed })` makes the prototypes, the noise, the
- * parameter init and therefore the whole loss curve replay exactly.
+ * Gaussian noise) so the example runs offline and reproducibly: a fixed
+ * `configure({ seed })` replays the whole loss curve exactly.
  *
  * The loop is the plain `zeroGrad` / `backward` / `step` triple rather
  * than a compiled step: `compile()` bakes the optimizer's `lr` into the
  * traced graph as a constant, so a schedule that actually moves needs the
- * eager loop today. Everything else here is unchanged by that choice.
+ * eager loop today.
  */
 
 import { AdamW, clipGradNorm, configure, crossEntropy, Linear, randn, ReLU, sequential, Tensor, tensor, warmupCosine } from "../index.ts"
@@ -34,16 +31,16 @@ const STEPS = Number(process.env["TYPENET_EXAMPLE_STEPS"] ?? 400)
 
 configure({ seed: 7 })
 
-// --- the data ------------------------------------------------------------
-// One prototype vector per class; a sample is its class prototype plus
-// noise. Built with the library's own ops, so the shapes are checked the
-// same way the model's are: [N, 10] one-hot @ [10, 784] -> [N, 784].
+// The data: one prototype vector per class; a sample is its class
+// prototype plus noise. Built with the library's own ops, so the shapes
+// are checked the same way the model's are: [N, 10] one-hot @ [10, 784]
+// -> [N, 784].
 
 const prototypes = randn([CLASSES, FEATURES]) * 0.12
 
 // The split size is a runtime quantity, so its dim stays the wildcard
-// `number` — and `narrow` below pins the batch dim to the literal 64 that
-// the model's shapes are actually checked against.
+// `number`; `narrow` below pins the batch dim to the literal 64 the
+// model's shapes are actually checked against.
 function makeSplit(n: number): {
   x: Tensor<[number, typeof FEATURES]>
   labels: number[]
@@ -63,9 +60,8 @@ function makeSplit(n: number): {
 const train = makeSplit(TRAIN)
 const test = makeSplit(TEST)
 
-// --- the model -----------------------------------------------------------
-// The widths are checked where they are written: swapping the 256 in the
-// second Linear for anything else is a compile error, not a runtime one.
+// The model: the widths are checked where they are written. Swapping the
+// 256 in the second Linear for anything else is a compile error.
 
 const model = sequential(
   new Linear(FEATURES, 256),
@@ -76,7 +72,7 @@ const model = sequential(
 const opt = new AdamW(model.parameters(), { lr: 3e-4, weightDecay: 0.01 })
 const schedule = warmupCosine({ base: 3e-4, warmupSteps: 40, totalSteps: STEPS })
 
-// --- the loop ------------------------------------------------------------
+// The loop
 
 const started = performance.now()
 let last = 0
@@ -109,8 +105,6 @@ for (let step = 0; step < STEPS; step++) {
 }
 
 const elapsed = (performance.now() - started) / 1000
-
-// --- what it learned -----------------------------------------------------
 
 const testLogits = model.forward(test.x)
 console.log(

@@ -24,10 +24,8 @@ export function _activeUpdateTrace(): UpdateTrace | null {
 
 type CompiledInput<T extends AnyTensor> = T extends Tensor<infer S> ? Tensor<S> | ArrayLike<number> : never
 
-// Forcing keeps a tensor's identity (its storage is swapped in
-// place), so a name survives materialization; names do NOT cross
-// detach()/clone()/compile() placeholders, which create fresh tensor
-// objects.
+// Forcing swaps storage in place, so a tensor keeps its identity and its name;
+// names do not cross detach()/clone() or compile() placeholders, which make fresh tensors.
 
 const tensorNames = new WeakMap<AnyTensor, string>()
 
@@ -65,26 +63,7 @@ export function printGraph(
 
 export { tensorNames }
 
-/**
- * The first call must pass CPU float32 tensors (their shapes/dtype
- * pin the traced graph); later calls may pass either tensors of the
- * same shape or flat `ArrayLike<number>` buffers of matching length.
- * Calling with a different argument count, shape, or dtype throws —
- * compiled graphs are shape-stable, recompile for a new shape.
- *
- * Tracing always happens under lazy semantics regardless of the
- * global `configure({ lazy })` flag, and the flag is restored
- * afterwards. `fn` must be a pure dataflow function of its inputs
- * with one exception: a full training step — `loss.backward()` plus
- * an optimizer `step()` — is traced into the graph, so a compiled
- * step evaluates forward, backward, and the parameter update in one
- * pass and writes the updated values back into the parameter (and
- * optimizer state) buffers on every call. Other forcing points
- * (`.data`, `.item()`, ...) inside `fn` remain unsupported.
- *
- * Call `.dispose()` when done to free the native prepared-graph handle
- * (no-op on the interpreter path, and safe to call more than once).
- */
+/** Shape-stable compiled function; tracing runs under lazy semantics and covers a full training step (backward + optimizer updates). */
 export type CompiledFn<
   Args extends AnyTensor[],
   R extends AnyTensor | AnyTensor[],
@@ -99,12 +78,7 @@ export function compile<
   R extends AnyTensor | AnyTensor[],
 >(
   fn: (...args: Args) => R,
-  /**
-   * Example inputs to trace against up front. Omitting them falls back
-   * to tracing on the first call.
-   * @deprecated the no-examples overload traces on first call; pass the
-   * tensors you used to pass on the first call instead.
-   */
+  /** Example inputs to trace against up front. @deprecated pass these on the first call instead. */
   exampleInputs?: [...Args],
 ): CompiledFn<Args, R> {
   type State = {
@@ -158,8 +132,7 @@ export function compile<
     updateTrace = traced
     let result: unknown
     try {
-      // Tracing forbids every value read: a `.data` / `.item()` inside
-      // fn would force mid-trace and bake a constant into the graph.
+      // A .data/.item() read inside fn would force mid-trace and bake a constant into the graph.
       result = withContext(
         { lazy: true, tracing: true },
         () => fn(...(placeholders as Args)),
@@ -312,11 +285,8 @@ export function compile<
   const runNative = (state: State): AnyTensor[] => {
     const native = state.native!
     if (native.handle === null) {
-      // Prepare once and pin every leaf. Static captures (edge lists,
-      // targets, degree tables) cross the FFI exactly once, here; only
-      // the dirty set below is re-sent per eval. Mutating a captured
-      // non-parameter leaf after compile() is therefore not seen — the
-      // same "captured leaves stay put" contract as the error above.
+      // Pin every leaf once; only the dirty set is re-sent per eval, so mutating a
+      // captured non-parameter leaf after compile() is not seen.
       native.handle = nativeBackend.prepareGraphNative(
         native.json,
       )
@@ -329,9 +299,7 @@ export function compile<
       )
       const resent = new Set<AnyTensor>([
         ...state.placeholders,
-        // Update targets are JS-authoritative (applyUpdate writes them,
-        // tests and checkpoints mutate them), so their current values
-        // are re-sent every eval.
+        // Update targets are JS-authoritative, so re-send them every eval.
         ...state.updates.map(u => u.target),
       ])
       native.dirty = native.leafTensors.flatMap((t, i) => resent.has(t) ? [i] : [])
@@ -374,8 +342,7 @@ export function compile<
   }
 
   const runInterpreter = (state: State): AnyTensor[] => {
-    // Rewind: drop every materialized value from the previous replay so
-    // the whole graph recomputes against the freshly swapped inputs.
+    // Rewind: drop the previous replay's materialized values so the graph recomputes against fresh inputs.
     for (const t of state.lazy) {
       _internal.resetCpu(t)
     }

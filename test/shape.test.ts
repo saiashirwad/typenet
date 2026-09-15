@@ -139,7 +139,7 @@ describe("runtime shape functions: flatten, unflatten, slice ranges, DimDiv", ()
   // Explicit `<number, number>`: `c.a` and `c.b` are unions of every
   // literal in the table, and letting hotscript's `Div` distribute over
   // that product is a TS2589. The literal arithmetic is asserted row by
-  // row in types.test-d.ts; what this loop checks is the runtime twin.
+  // row in types.test-d.ts; this loop checks the runtime twin.
   it("DimDiv agrees with the table at runtime", () => {
     for (const c of DIM_DIV_CASES) {
       expect(DimDiv<number, number>(c.a, c.b)).toBe(c.out)
@@ -148,13 +148,11 @@ describe("runtime shape functions: flatten, unflatten, slice ranges, DimDiv", ()
 })
 
 describe("conv shapes: the spatial ladder, the wildcards and the truncation trap", () => {
-  // Explicit `<number, number, number, number>` throughout, for the reason
-  // the DimDiv loop above gives: under `it.each` (and under a plain `for`)
-  // `c.h`, `c.k`, `c.s` and `c.p` are unions of every literal in the table,
-  // and letting hotscript's arithmetic distribute over that cross product
-  // costs a quarter of a million instantiations. The literal type arithmetic
-  // is asserted row by row in `types.test-d.ts` and
-  // `conv-shapes.test-d.ts`; what these loops check is the runtime twin.
+  // Explicit `<number, number, number, number>` throughout, for the same
+  // reason as the DimDiv loop above: under `it.each` the case fields are
+  // unions of every literal in the table, and letting hotscript's
+  // arithmetic distribute over that cross product costs a quarter of a
+  // million instantiations.
   it("ConvOut agrees with the table at runtime", () => {
     for (const c of CONV_CASES) {
       expect(ConvOut<number, number, number, number>(c.h, c.k, c.s, c.p)).toBe(c.out)
@@ -176,9 +174,9 @@ describe("conv shapes: the spatial ladder, the wildcards and the truncation trap
     const c = ConvOut(b, 3, 1, 0)
     const d = PoolOut(c, 2, 2)
     expect([a, b, c, d]).toEqual([26, 13, 11, 5])
-    // ...and the head width the Linear after Flatten has to be built with.
-    // The literal type is [64, 400]; `flattenFrom<number[]>` here keeps the
-    // runtime assertion from re-deriving it.
+    // the head width the Linear after Flatten has to be built with;
+    // `flattenFrom<number[]>` keeps the runtime assertion from
+    // re-deriving the literal type.
     expect(flattenFrom<number[]>([64, 16, d, d])).toEqual([64, 400])
   })
 
@@ -188,8 +186,8 @@ describe("conv shapes: the spatial ladder, the wildcards and the truncation trap
     }
   })
 
-  // The reason ConvCheck tests the SPAN and not the quotient: Math.trunc
-  // (and hotscript's Numbers.Div, which the type twin uses) truncate toward
+  // Why ConvCheck tests the SPAN and not the quotient: Math.trunc (and
+  // hotscript's Numbers.Div, which the type twin uses) truncate toward
   // zero, so a kernel that does not fit still reports a plausible output.
   it("a kernel that does not fit still produces a number, which is why ConvCheck tests the span", () => {
     for (const c of CONV_FIT_FAIL_CASES) {

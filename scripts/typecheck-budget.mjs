@@ -1,12 +1,8 @@
 #!/usr/bin/env node
-// W0.10 — typecheck budget script.
-//
-// Measures `tsc -p tsconfig.budget.json --noEmit --extendedDiagnostics` (the
-// budget file set: index.ts + src/**/*.ts + test/**/*.ts — bench/ and
-// examples/ are deliberately excluded, see tsconfig.budget.json) and compares
-// Instantiations / Types against the checked-in typecheck-budget.json
-// baseline. Fails above 1.5x instantiations or 1.4x types; always prints the
-// deltas. `--reseed --reason "<why>"` rewrites the baseline.
+// Typecheck budget: measures Instantiations / Types from
+// `tsc -p tsconfig.budget.json --noEmit --extendedDiagnostics` against the
+// checked-in typecheck-budget.json baseline and fails over the limits in
+// the constants below. `--reseed --reason "<why>"` rewrites the baseline.
 
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
@@ -41,8 +37,7 @@ function tscBinary() {
   return existsSync(local) ? local : "tsc"
 }
 
-// Exported for reuse (e.g. bench/typecheck.ts) so the parsing logic lives in
-// exactly one place.
+// Exported for reuse by bench/typecheck.ts.
 export function parseExtendedDiagnostics(output) {
   const grab = (label) => {
     const re = new RegExp(`^${label}:\\s+([\\d.]+)(?:K|s)?\\s*$`, "m")
@@ -59,8 +54,8 @@ export function parseExtendedDiagnostics(output) {
 }
 
 // Runs tsc over the budget file set and returns the parsed counters. Throws
-// with the raw tsc output attached (as `.output`) on a compile error or on
-// unparseable output — both are real failures, not "no budget data".
+// with the raw tsc output attached as `.output` on a compile error or on
+// unparseable output.
 export function measureBudget() {
   const tsc = tscBinary()
   let output

@@ -41,10 +41,6 @@ describe("named + printGraph", () => {
     expect(printGraph(b)).toBe(out.join("\n"))
   })
 
-  // W4.1 step 6: `reduce` carries `dims`, an array, so `sumTo` can emit
-  // one node for a multi-axis reduction. This block pins the printed text
-  // verbatim, so the rename is asserted here rather than discovered in the
-  // next item.
   it("shows reduce attributes", () => {
     configure({ lazy: true })
     const m = Tensor.rand([2, 3])
@@ -57,8 +53,6 @@ describe("named + printGraph", () => {
     )
   })
 
-  // The `[2,3,4] + [4]` bias backward, which before W4.1 step 6 was two
-  // `reduce` nodes and is now one.
   it("prints a multi-axis reduce as one node", () => {
     configure({ lazy: true })
     const g = Tensor.rand([2, 3, 4])

@@ -1,19 +1,13 @@
 // Run under `runOnSmallStack("deep-chain-20000")`: a standalone re-run of
-// the vitest depth-20000 chain from test/deep.test.ts, on a deliberately
-// small (256 KB) V8 stack. It has no framework to report through, so it
-// asserts directly and lets a thrown AssertionError (or a native stack
-// overflow) fail the process with a non-zero exit code.
+// the depth-20000 chain from test/deep.test.ts on a 256 KB V8 stack. There
+// is no framework to report through, so it asserts directly and lets a
+// thrown AssertionError (or a native stack overflow) fail the process with
+// a non-zero exit code.
 //
-// This deliberately does NOT re-run the `printGraph` assertion from
-// test/deep.test.ts: `printGraph` (src/compile.ts) computes its column
-// width via `Math.max(1, ...entries.map(...))`, and spreading tens of
-// thousands of arguments into one call blows this stack on its own,
-// independent of and at a shallower depth than anything under test here
-// (measured threshold on this stack size: fine at ~10k graph nodes, blown by
-// ~16k, well under this file's 40k-node graph). That is a pre-existing
-// stack-safety bug in a file outside this work item's scope (not
-// test/deep.test.ts, test/small-stack.ts or test/scenarios/*.ts) — flagged
-// separately rather than routed around here.
+// No `printGraph` assertion: its column-width computation spreads the whole
+// graph into one `Math.max(1, ...entries.map(...))` call, which alone blows
+// this stack by ~16k nodes, well under this file's 40k-node graph (a
+// stack-safety bug in src/compile.ts, not what this scenario tests).
 import assert from "node:assert/strict"
 import { compile } from "../../src/compile.ts"
 import { tensor } from "../../src/factories.ts"
@@ -32,7 +26,6 @@ function chain(x: AnyTensor, depth: number): AnyTensor {
 
 const expected = 1.0001 ** DEPTH
 
-// forces a chain far deeper than the JS stack
 {
   configure({ lazy: true })
   const out = chain(tensor([1, 2]), DEPTH)
@@ -40,7 +33,6 @@ const expected = 1.0001 ** DEPTH
   assert.ok(Math.abs(out.get(1) - 2 * expected) < 1e-2, `get(1): ${out.get(1)} vs ${2 * expected}`)
 }
 
-// differentiates a deep chain, lazily
 {
   configure({ lazy: true })
   const x = tensor([1, 2]).requiresGrad()
@@ -48,7 +40,6 @@ const expected = 1.0001 ** DEPTH
   assert.ok(Math.abs(x.grad!.get(0) - expected) < 1e-2, `grad(0): ${x.grad!.get(0)} vs ${expected}`)
 }
 
-// differentiates a deep chain, eagerly
 {
   configure({ lazy: false })
   const x = tensor([1, 2]).requiresGrad()
@@ -56,7 +47,7 @@ const expected = 1.0001 ** DEPTH
   assert.ok(Math.abs(x.grad!.get(0) - expected) < 1e-2, `grad(0): ${x.grad!.get(0)} vs ${expected}`)
 }
 
-// compiles and replays a (shallower) deep chain
+// shallower than the blocks above: compile() materializes the graph eagerly
 {
   configure({ lazy: false })
   const step = compile((x: Tensor<[2]>) => chain(x as AnyTensor, 2000).sum())

@@ -1,15 +1,14 @@
-// PLAN-V2 §4.1/§4.2, W0.7 — gate C3. See `test/loss-curve.ts` for the
-// harness itself; this file only exercises its contract.
+// See `test/loss-curve.ts` for the harness itself; this file only
+// exercises its contract.
 import { describe, expect, it } from "vitest"
 import { isNativeAvailable } from "../src/backends/native.ts"
 import { assertKnownEnvSwitches, expectIdenticalCurves, KNOWN_ENV_SWITCHES, lossCurve } from "./loss-curve.ts"
 
 const available = isNativeAvailable()
 
-// Each `lossCurve()` call spawns a fresh `vite-node` process (required so a
-// `TYPENET_*` switch, read once at addon init, actually takes effect) —
-// module load alone costs several seconds, well past vitest's default 5s
-// test timeout, hence the generous timeouts below.
+// Each `lossCurve()` call spawns a fresh `vite-node` process, and module
+// load alone costs several seconds, well past vitest's default 5s timeout,
+// hence the generous timeouts below.
 const SPAWN_TIMEOUT_MS = 60_000
 
 describe.skipIf(!available)("loss curve", () => {
@@ -34,7 +33,7 @@ describe.skipIf(!available)("loss curve", () => {
   )
 
   it(
-    "runs end to end under a real §2.9 kill switch without throwing",
+    "runs end to end under a real kill switch without throwing",
     () => {
       const curve = lossCurve({ steps: 5, env: { TYPENET_NO_FUSION: "1" } })
       expect(curve.length).toBe(5)

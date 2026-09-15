@@ -1,17 +1,15 @@
 // Run under `runOnSmallStack("deep-chain-4000-mixed")`: a depth-4000 chain
-// that mixes elementwise ops with views (reshape, transpose) and a
-// reduction (sum) on a deliberately small (256 KB) V8 stack, so that graph
-// construction, forcing, backward and printing must all stay iterative for
-// these op kinds too, not just plain elementwise chains.
+// mixing elementwise ops with views (reshape, transpose) and a reduction
+// (sum) on a 256 KB V8 stack, so graph construction, forcing and backward
+// must stay iterative for these op kinds too.
 //
-// Every non-elementwise op here is chosen to be value-preserving (a view
-// round-trip, or a sum over a size-1 axis) so the expected result stays the
-// same closed form as the plain chain — only the graph shape differs.
+// Every non-elementwise op is value-preserving (a view round-trip, or a sum
+// over a size-1 axis), so the expected result keeps the same closed form as
+// the plain chain; only the graph shape differs.
 //
-// No `printGraph` assertion here either, for the same reason spelled out in
-// deep-chain-20000.ts: its column-width computation spreads the whole graph
-// into one `Math.max(...)` call and blows this stack well under this file's
-// ~12k-node graph — a pre-existing bug in src/compile.ts, out of scope here.
+// No `printGraph` assertion, for the reason spelled out in
+// deep-chain-20000.ts: its column-width computation blows this stack well
+// under this file's ~12k-node graph.
 import assert from "node:assert/strict"
 import { tensor } from "../../src/factories.ts"
 import { configure } from "../../src/lazy.ts"
@@ -54,14 +52,12 @@ function checkShapeAndValues(out: AnyTensor) {
   }
 }
 
-// forces the mixed chain, lazily
 {
   configure({ lazy: true })
   const out = mixedChain(tensor([start]), DEPTH)
   checkShapeAndValues(out)
 }
 
-// differentiates the mixed chain, lazily
 {
   configure({ lazy: true })
   const x = tensor([start]).requiresGrad()
@@ -72,7 +68,6 @@ function checkShapeAndValues(out: AnyTensor) {
   }
 }
 
-// differentiates the mixed chain, eagerly
 {
   configure({ lazy: false })
   const x = tensor([start]).requiresGrad()

@@ -2,13 +2,7 @@ import { _nativeState, _setNativeState } from "./backends/native.ts"
 import { isLazyMode, setLazyMode } from "./ir.ts"
 import { rngState, setRngState } from "./kernels.ts"
 
-/**
- * The runtime knobs as one structured view, with save/patch/restore
- * scoping — the same stack pattern as `noGrad` / `eagerly`, not
- * AsyncLocalStorage (the library is synchronous). `configure()` mutates
- * the same underlying state as a script-level default; `withContext`
- * scopes a change to a callback and puts everything back.
- */
+/** Runtime knobs with save/patch/restore scoping; configure() sets the same state as a script-level default. */
 export interface RuntimeContext {
   lazy: boolean
   native: boolean
@@ -71,14 +65,7 @@ export function withContext<T>(
   }
 }
 
-/**
- * Run `fn` with lazy graph building on, restoring whatever the flag
- * was before — even if `fn` throws. Prefer this to a bare
- * `configure({ lazy: true })` outside a REPL: `configure` has no
- * scope, so an exception thrown before the matching `configure({
- * lazy: false })` leaves the flag flipped for every call downstream,
- * silently turning unrelated code lazy.
- */
+/** Runs `fn` with lazy graph building on, restoring the flag even if `fn` throws; unlike configure(), it has a scope. */
 export function lazy<T>(fn: () => T): T {
   return withContext({ lazy: true }, fn)
 }

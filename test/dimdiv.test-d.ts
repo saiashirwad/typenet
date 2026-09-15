@@ -1,20 +1,14 @@
 /**
- * `DimDiv` / `DimDivCheck`, against the real exports.
+ * `DimDiv` / `DimDivCheck`, against the real exports. Nothing here runs:
+ * a `.test-d.ts` is a pure typecheck fixture and the `@ts-expect-error`s
+ * are the assertions.
  *
- * Checked-in version of `scratchpad/final-verify/dimdiv.ts` — the probe
- * that settled how a divisibility precondition survives being forwarded
- * through two layers of constructor. Nothing here runs: vitest collects
- * `*.test.ts`, so a `.test-d.ts` is a pure typecheck fixture, and the
- * `@ts-expect-error`s are the assertions.
+ * Two ways to silently lose the check, both of which compile:
  *
- * The two ways to lose the check are in `final-verify/dimdiv-bad.ts` and
- * are worth repeating here in words, because both compile silently:
- *
- *   1. an intermediate constructor that takes a plain `h: H` instead of
- *      `h: H & DimDivCheck<D, H>` — the inner `new MHA<D, H>(d, h)` is
- *      then checking a precondition nobody upstream ever proved;
+ *   1. an intermediate constructor taking a plain `h: H` instead of
+ *      `h: H & DimDivCheck<D, H>`;
  *   2. a forwarding site written `new MHA(d, h)` without explicit type
- *      arguments — inference re-widens `h` and the check evaporates.
+ *      arguments, letting inference re-widen `h`.
  */
 import { DimDiv, DimMul } from "../src/shape.ts"
 import type { DimDivCheck } from "../src/shape.ts"
@@ -49,7 +43,7 @@ declare class MHA<D extends number, H extends number> {
 }
 
 // The check is carried on the intermediate constructor's own parameter,
-// and the forwarding site names its type arguments.
+// and the forwarding site names its type arguments (see the header).
 class Block<D extends number, H extends number> {
   readonly attn: MHA<D, H>
   constructor(d: D, h: H & DimDivCheck<D, H>) {

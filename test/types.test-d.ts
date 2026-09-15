@@ -160,10 +160,10 @@ type _td1 = Expect<
   >
 >
 
-// Conv / pool spatial arithmetic (W0.16, D35). Same dual-table discipline:
-// every row below is run through the value twins in `shape.test.ts`'s
-// "conv shapes" block. The traps, the wildcards and the layer-shaped
-// assertions live in `conv-shapes.test-d.ts`.
+// Conv / pool spatial arithmetic. Same dual-table discipline: every row
+// below is run through the value twins in `shape.test.ts`'s "conv shapes"
+// block. The traps, the wildcards and the layer-shaped assertions live in
+// `conv-shapes.test-d.ts`.
 type CvCase = typeof CONV_CASES
 type _tcv0 = Expect<
   Equal<ConvOut<CvCase[0]["h"], CvCase[0]["k"], CvCase[0]["s"], CvCase[0]["p"]>, CvCase[0]["out"]>
@@ -180,7 +180,7 @@ type _tcv3 = Expect<
 type _tcv4 = Expect<
   Equal<ConvOut<CvCase[4]["h"], CvCase[4]["k"], CvCase[4]["s"], CvCase[4]["p"]>, CvCase[4]["out"]>
 >
-// every positive row is a kernel that fits, so every row's check is open —
+// every positive row is a kernel that fits, so every row's check is open,
 // including row 4, where the kernel exactly fills the input and the output
 // is 1 (an off-by-one in the span test would reject it)
 type _tcc0 = Expect<
@@ -199,11 +199,11 @@ type _tff1 = Expect<Equal<FlattenFrom<FfCase[1]["s"]>, FfCase[1]["out"]>>
 type _tff2 = Expect<Equal<FlattenFrom<FfCase[2]["s"]>, FfCase[2]["out"]>>
 type _tff3 = Expect<Equal<FlattenFrom<FfCase[3]["s"]>, FfCase[3]["out"]>>
 
-// D22, and conv is its first dependent caller: `FlattenFrom` folds with the
-// reseeded `Prod`, so inside a generic body it is the SAME type as the
-// `DimMul` chain a caller writes by hand — mutually assignable, not merely
-// equal-looking. Seed the fold with `1` instead and both assignments below
-// stop compiling, which is the whole reason the seed is `S[0]`.
+// `FlattenFrom` folds with the reseeded `Prod`, so inside a generic body
+// it is the SAME type as the `DimMul` chain a caller writes by hand:
+// mutually assignable, not merely equal-looking. Seed the fold with `1`
+// instead and both assignments below stop compiling, which is the whole
+// reason the seed is `S[0]`.
 type _ByHand<B extends number, C extends number, H extends number, W extends number> = [B, DimMul<DimMul<C, H>, W>]
 function _flattenFromIsTheHandWrittenProduct<
   B extends number,
@@ -347,8 +347,7 @@ function _nn() {
   const y = nobias.forward(randn([3, 4]))
   type _3 = Expect<Equal<typeof y.shape, [3, 8]>>
 
-  // ...and a biased layer keeps the same guarantee, including the bias-add
-  // path — the branch that previously forced the `as any` erasure.
+  // A biased layer keeps the same guarantee, including the bias-add path.
   const biased = new Linear(8, 16)
   const z = biased.forward(y)
   type _4 = Expect<Equal<typeof z.shape, [3, 16]>>
@@ -396,13 +395,11 @@ function _sequential() {
   net.forward(randn([32, 5]))
 }
 
-// ---- W4.9: the shape-effect protocol ---------------------------------------
-//
-// `LayerNorm` (W5.1-A), `Embedding` (W5.1-A) and `TiedLinear` (W5.10-A) do
-// not exist yet. They are `declare`d here with exactly the `forward`
-// signature *and* the `SHAPE_EFFECT` declaration their own items will carry
-// — the stand-in discipline `test/gpt-adopted.test-d.ts` already uses — so
-// the protocol is proved against the real `sequential`, not a mock of it.
+// The shape-effect protocol. `LayerNorm`, `Embedding` and `TiedLinear` do
+// not exist yet; they are `declare`d here with their `forward` signature
+// and `SHAPE_EFFECT` declaration (the stand-in discipline
+// `test/gpt-adopted.test-d.ts` uses), so the protocol is proved against
+// the real `sequential`, not a mock of it.
 
 declare class LayerNorm<D extends number> {
   // A norm owns the last axis, so it declares `["mapLast", D, D]` and NOT
@@ -424,7 +421,7 @@ declare class Embedding<V extends number, D extends number> {
 }
 
 declare class TiedLinear<D extends number, V extends number> {
-  // §3.3's one layer whose stored weight is the TRANSPOSE of its shape
+  // The one layer whose stored weight is the TRANSPOSE of its shape
   // effect: it holds the embedding's `[V, D]` and maps `D -> V`. No probe
   // over its fields could get this right; the declaration is the only
   // source of truth.
@@ -435,7 +432,8 @@ declare class TiedLinear<D extends number, V extends number> {
 }
 
 function _shapeEffect(table: Embedding<50257, 128>) {
-  // Accept #1: the chain the structural probe got wrong before W4.9.
+  // The chain the structural probe would get wrong without a declared
+  // effect.
   const net = sequential(new Linear(4, 4), new Softmax(-1), new LayerNorm(4))
   const out = net.forward(randn([32, 4]))
   type _1 = Expect<Equal<typeof out.shape, [32, 4]>>
@@ -447,20 +445,20 @@ function _shapeEffect(table: Embedding<50257, 128>) {
   // @ts-expect-error the norm owns the last axis: 4 -> 8 is a width mismatch
   sequential(new Linear(4, 4), new Softmax(-1), new LayerNorm(8))
 
-  // Accept #2: `appendDim` grows the rank by one.
+  // `appendDim` grows the rank by one.
   const embed = sequential(new Linear(4, 8), new Embedding(8, 16))
   const ids = embed.forward(randn([32, 4]))
   type _3 = Expect<Equal<typeof ids.shape, [32, 8, 16]>>
 
-  // Accept #5: `TiedLinear` composes, and its `[V, D]` weight does not
-  // leak into the shape its effect declares.
+  // `TiedLinear` composes, and its `[V, D]` weight does not leak into the
+  // shape its effect declares.
   const head = sequential(new LayerNorm(128), TiedLinear.of(table))
   const logits = head.forward(randn([2, 7, 128]))
   type _4 = Expect<Equal<typeof logits.shape, [2, 7, 50257]>>
   type _5 = Expect<Equal<TiedLinear<128, 50257>["weight"]["shape"], [50257, 128]>>
 }
 
-// Law 1 (§2.1): a declared effect decides nothing on a fully generic shape.
+// A declared effect decides nothing on a fully generic shape.
 function _shapeEffectFailsOpen(x: Tensor<number[]>, table: Embedding<8, 16>) {
   const a = sequential(new LayerNorm(16)).forward(x)
   type _1 = Expect<Equal<typeof a.shape, number[]>>
@@ -469,9 +467,8 @@ function _shapeEffectFailsOpen(x: Tensor<number[]>, table: Embedding<8, 16>) {
   return { a, b }
 }
 
-// Accept #4 (regression, D24): a hand-written layer that declares no marker
-// composes exactly as it did before W4.9 — through the structural probe,
-// including one that changes the rank.
+// A hand-written layer that declares no marker still composes, through
+// the structural probe, including one that changes the rank.
 class Undeclared {
   forward<S extends Shape>(x: Tensor<S>): Tensor<S> {
     return x
@@ -479,10 +476,10 @@ class Undeclared {
 }
 
 // Concrete on purpose. A *generic* `forward<S>(x: Tensor<S>): Tensor<[...S, 1]>`
-// does not probe — TS will not carry the inference through the return type, so
-// `ApplyLayer` falls through to its `S` fallback and the rank change is lost.
-// That is pre-existing behaviour, unchanged by W4.9, and is exactly the hole
-// `SHAPE_EFFECT` exists to let a layer close by declaring what it does.
+// does not probe: TS will not carry the inference through the return type,
+// so `ApplyLayer` falls through to its `S` fallback and the rank change is
+// lost. That is exactly the hole `SHAPE_EFFECT` exists to let a layer
+// close by declaring what it does.
 declare class UndeclaredRankChanger {
   forward(x: Tensor<[32, 4]>): Tensor<[32, 4, 1]>
 }
@@ -498,7 +495,7 @@ function _undeclaredLayersStillCompose(grow: UndeclaredRankChanger) {
   return { grown, out }
 }
 
-// Accept #3: only the "no `forward` at all" fallback is an `ErrorMessage`.
+// Only the "no `forward` at all" fallback is an `ErrorMessage`.
 function _noForwardIsAnErrorMessage() {
   const notALayer = sequential({ label: "not a layer" })
   // @ts-expect-error a value with no forward method cannot be a layer
@@ -582,9 +579,8 @@ function _genericDims<
   return two
 }
 
-// The Broadcast suffix rule: broadcasting a same-generic-dim suffix
-// (the bias of a generic layer) is *syntactically* the identity, so the
-// result keeps unifying with generic parameters downstream with no
+// Adding a bias whose dim is a naked generic is the identity at the type
+// level: the result keeps the generic parameters downstream, with no
 // re-anchoring annotation. This is what lets GraphNCA.forward infer its
 // gate tensor.
 function _genericBias<
@@ -668,9 +664,9 @@ import { accuracy, crossEntropy, mseLoss } from "../src/nn.ts"
 function _noInfer(
   pred: Tensor<[2, 3]>,
   logits: Tensor<[4, 3]>,
-  // Branded (OWNER-5, D25) so the @ts-expect-error below is caught for
-  // its ORIGINAL reason — a batch-size mismatch — and not incidentally
-  // satisfied by the missing-brand check instead.
+  // Branded so the @ts-expect-error below is caught for its real reason
+  // (a batch-size mismatch), not incidentally satisfied by the
+  // missing-brand check instead.
   badTargets: IndexTensor<[5]>,
 ) {
   const ok = mseLoss(
@@ -688,20 +684,19 @@ function _noInfer(
   // @ts-expect-error one target per row: batch is 4, not 5
   crossEntropy(logits, badTargets)
 
-  // @ts-expect-error crossEntropy requires a branded IndexTensor target
-  // (OWNER-5, D26) — no overload, no window: an ordinary tensor, even one
-  // holding integral-looking float values at the right shape, needs
-  // `.toIndex()` or `Tensor.indices()` first
+  // @ts-expect-error crossEntropy requires a branded IndexTensor target:
+  // an ordinary tensor, even one holding integral-looking float values at
+  // the right shape, needs `.toIndex()` or `Tensor.indices()` first
   crossEntropy(logits, zeros([4]))
 
   return ok
 }
 
-// `Init<S>` (everything but the class axis) is the target shape at ANY
+// `Init<S>` (everything but the last axis) is the target shape at ANY
 // rank: a `[B,T,V]` LM head takes a `[B,T]` target with no manual
-// flatten, and a `[B]` target against it is the SAME "wrong batch shape"
-// mistake `_noInfer` above catches at rank 2 — not a new error, and the
-// same accuracy typing rides along for free.
+// flatten, and a `[B]` target against it is the same "wrong batch shape"
+// mistake `_noInfer` above catches at rank 2. The accuracy typing rides
+// along for free.
 function _crossEntropyHigherRank(
   logits3: Tensor<[2, 3, 5]>,
   target2: IndexTensor<[2, 3]>,
@@ -746,9 +741,8 @@ function _gatherScatter<
   // @ts-expect-error dim overload: same length rule, now on the dim form
   gathered.scatterAdd(zeros([8]).toIndex(), 1024, 0)
 
-  // @ts-expect-error indexSelect requires a branded IndexTensor (OWNER-5,
-  // D25) — a plain Tensor<[8]>, unbranded, is a compile error regardless
-  // of its length
+  // @ts-expect-error indexSelect requires a branded IndexTensor: a plain
+  // Tensor<[8]>, unbranded, is a compile error regardless of its length
   nodes.indexSelect(zeros([8]))
 
   const alongDim = channels.scatterAdd(zeros([3]).toIndex(), 7, 1)
@@ -815,13 +809,11 @@ function _scGeneric<N extends number, C extends number>() {
   return [a, b, c, d, e]
 }
 
-// ---------------------------------------------------------------------------
-// W0.13 foundations: the tuple surgery, the division algebra, and the
-// checks that ride on them. The probes these came from are checked in as
+// Tuple surgery, the division algebra, and the checks that ride on them.
+// The dedicated probes are checked in as
 // test/{dimdiv,lastdim,flatten,gpt-adopted}.test-d.ts; what is here is the
 // case-table half (run again through the value twins by shape.test.ts) and
 // the negative cases.
-// ---------------------------------------------------------------------------
 
 import { DimDiv } from "../src/shape.ts"
 import type {
@@ -859,8 +851,8 @@ type _prod2 = Expect<Equal<Prod<[]>, 1>>
 type _prod3 = Expect<Equal<Prod<[7]>, 7>>
 type _prod4 = Expect<Equal<Prod<number[]>, number>>
 
-// D22: the fold is seeded with S[0], so the product of a generic shape is
-// the same type the caller writes by hand — in both directions.
+// The fold is seeded with S[0], so the product of a generic shape is the
+// same type the caller writes by hand, in both directions.
 function _prodReseed<B extends number, T extends number>() {
   const fromAlgebra: DimMul<B, T> = null as any as Prod<[B, T]>
   const byHand: Prod<[B, T]> = null as any as DimMul<B, T>
@@ -896,8 +888,8 @@ type _rd4 = Expect<Equal<ReduceDims<[2, 3, 4], []>, [2, 3, 4]>>
 type _rd5 = Expect<Equal<ReduceDims<number[], [0]>, number[]>>
 
 // The signature shapes these checks are meant to be worn in. `flatten`
-// and `unflatten` become Tensor methods in W1.8; here they stand in as
-// free functions so the checks are exercised against the real exports.
+// and `unflatten` stand in as free functions so the checks are exercised
+// against the real exports.
 declare class LayerNormLike<D extends number> {
   forward<S extends Shape>(x: Tensor<S> & LastDimCheck<S, D>): Tensor<S>
 }
@@ -963,8 +955,8 @@ function _w013Negative(
   return { emb, flat, normed, split, win }
 }
 
-// Law 1, once per new check: a naked generic shape decides nothing, so
-// every one of them has to let the call through.
+// A naked generic shape decides nothing, so every one of the new checks
+// has to let the call through.
 function _w013FailOpen<S extends Shape>(x: Tensor<S>, n: LayerNormLike<16>, len: number) {
   const a = n.forward(x)
   const b = flattenT(x, 0, 1)
@@ -991,14 +983,10 @@ function _w013GenericDims<B extends number, T extends number, H extends number, 
   return { a, b, c, d }
 }
 
-// ---------------------------------------------------------------------------
-// W5.2-A — MultiHeadAttention / TransformerBlock / Residual, at the type level.
-// ---------------------------------------------------------------------------
-
+// MultiHeadAttention / TransformerBlock / Residual at the type level.
 import { assertChecked } from "../src/cast.ts"
-// `LayerNorm` and `Embedding` are already taken in this file by the
-// `declare class` stand-ins above (written before the real layers existed),
-// so the real ones come in under a prefix rather than displacing them.
+// The real `LayerNorm`/`Embedding` names are taken by the `declare class`
+// stand-ins above, so the real ones come in under a prefix.
 import {
   Embedding as NNEmbedding,
   functional,
@@ -1010,17 +998,17 @@ import {
   TransformerBlock,
 } from "../src/nn.ts"
 
-// Accept #2: the divisibility precondition is enforced AT THE CONSTRUCTION
-// SITE, where the two widths are literals — not inside `unflatten`, and not
-// at run time.
+// The divisibility precondition is enforced AT THE CONSTRUCTION SITE,
+// where the two widths are literals, not inside `unflatten` and not at
+// run time.
 const _mhaOk = new MultiHeadAttention(128, 4)
 // @ts-expect-error attention: 130 is not divisible by 4
 const _mhaBad = new MultiHeadAttention(130, 4)
 
-// The Notes' law, stated as a type: the `h` property is the BARE `H`. If
-// the constructor let its parameter type flow into the field, this would be
-// `4 & DimDivCheck<128, 4>` — not identical to `4`, and every downstream use
-// of `this.h` would inherit a check it cannot discharge.
+// Stated as a type: the `h` property is the BARE `H`. If the constructor
+// let its parameter type flow into the field, this would be
+// `4 & DimDivCheck<128, 4>`, not identical to `4`, and every downstream
+// use of `this.h` would inherit a check it cannot discharge.
 type _mhaBareH = Expect<Equal<typeof _mhaOk.h, 4>>
 type _mhaHeadDim = Expect<Equal<typeof _mhaOk.headDim, 32>>
 // ...and generically, which is where an intersection would actually show:
@@ -1049,15 +1037,15 @@ const _ctx4 = functional.sdpa(_q4, _k4, _v4, { causal: true })
 type _sdpaShape = Expect<Equal<typeof _ctx4.shape, [2, 4, 16, 32]>>
 // @ts-expect-error q and k disagree about the head count (8 vs 4)
 functional.sdpa(_q4, _kWrongHeads, _v4)
-// @ts-expect-error k must arrive TRANSPOSED — [B, H, K, T], not [B, H, T, K]
+// @ts-expect-error k must arrive TRANSPOSED ([B, H, K, T], not [B, H, T, K])
 functional.sdpa(_q4, _v4, _v4)
 // @ts-expect-error sdpa is rank 4 only; a [B, T, D] activation is not a score operand
 functional.sdpa(_acts, _k4, _v4)
 
-// Accept #2: the generic `class Block<D, H>` of §3.7 compiles — D20's
-// forwarding discipline, which is what makes the check survive one level of
-// wrapping: the parameter keeps `& DimDivCheck<D, H>`, and the inner
-// construction passes EXPLICIT type arguments.
+// The generic `class Block<D, H>` compiles: forwarding discipline is what
+// makes the check survive a level of wrapping. The parameter keeps
+// `& DimDivCheck<D, H>`, and the inner construction passes EXPLICIT type
+// arguments.
 class Block<D extends number, H extends number> extends NNModule {
   readonly ln: NNLayerNorm<D>
   readonly attn: MultiHeadAttention<D, H>
@@ -1078,9 +1066,9 @@ const _block = new Block(384, 6)
 const _blockBad = new Block(384, 5)
 
 // ...and the companion: an intermediate constructor that DROPS the check
-// from its own parameter (D20's first failure mode) cannot forward at all.
-// The error moves from the user's construction site, where the widths are
-// literals and the message is readable, down into the library.
+// from its own parameter cannot forward at all. The error moves from the
+// user's construction site, where the widths are literals and the message
+// is readable, down into the library.
 class _BlockNoDiscipline<D extends number, H extends number> extends NNModule {
   readonly attn: MultiHeadAttention<D, H>
 
@@ -1107,23 +1095,23 @@ type _tbFc = Expect<Equal<typeof _tb.fc, Linear<128, 512>>>
 // @ts-expect-error attention: 130 is not divisible by 4
 const _tbBad = new TransformerBlock(130, 4)
 
-// Accept #3: a DELIBERATELY WRONG internal cast on the merged context must
-// be caught by the block's own shapes. `assertChecked` is a documented
-// assertion, not a silencer — asserting the merge back to `2*D` makes the
-// output projection's own `MatMulCheck` reject it, one line later.
+// A wrong internal cast on the merged context must be caught by the
+// block's own shapes: `assertChecked` is a documented assertion, not a
+// silencer, so claiming the merge back to `2*D` makes the output
+// projection's own `MatMulCheck` reject it one line later.
 //
 // Stated at a CONCRETE `D` on purpose: with a generic `D`, `DimMul<2, D>`
 // is a deferred multiplication whose constraint is the bare `number`, and
-// law 1 says a check that cannot decide must let the call through. The
-// wrong cast is caught exactly where the widths are known, which is where
-// a real model writes them.
+// a check that cannot decide must let the call through. The wrong cast is
+// caught exactly where the widths are known, which is where a real model
+// writes them.
 function _wrongMergeCast<B extends number, T extends number>(
   ctx: Tensor<[B, 4, T, 32]>,
   proj: Linear<128, 128>,
 ) {
   const merged = assertChecked<[B, T, DimMul<2, 128>]>(ctx.permute(0, 2, 1, 3).flatten(2, 3))
-  // @ts-expect-error matmul: inner dimensions do not match — the merged
-  // context is [B, T, 128], and claiming [B, T, 256] is caught here
+  // @ts-expect-error matmul: inner dimensions do not match (the merged
+  // context is [B, T, 128], and claiming [B, T, 256] is caught here)
   return proj.forward(merged)
 }
 
@@ -1154,8 +1142,8 @@ new Residual(new NNLayerNorm(8)).forward(zeros([2, 4]))
 // @ts-expect-error Residual: the wrapped layer adds an axis
 new Residual(new NNEmbedding(10, 8)).forward(_feat8)
 
-// Law 1 once more: a naked generic shape decides nothing, even through
-// `Residual`'s own check.
+// A naked generic shape decides nothing, even through `Residual`'s own
+// check.
 function _residualFailOpen<S extends Shape>(x: Tensor<S>, r: Residual<NNLayerNorm<16>>) {
   return r.forward(x)
 }
@@ -1167,22 +1155,17 @@ type _stackItem = Expect<Equal<ReturnType<typeof _stack.at>, TransformerBlock<12
 // @ts-expect-error sequential: every layer needs a forward method; this one has none
 sequential(new Linear(4, 128), _stack).forward(zeros([2, 4]))
 
-// ---------------------------------------------------------------------------
-// W5.10-A — weight tying and the transposed LM head.
-// ---------------------------------------------------------------------------
+// Weight tying and the transposed LM head.
 
-// `TiedLinear` is real here (unlike above, where it is a `declare`d
-// stand-in for the shape-effect protocol); aliased for the same reason
-// `Embedding`/`LayerNorm` are — the name is already taken by the stand-in.
+// `TiedLinear` is real here (unlike the `declare`d stand-in above);
+// aliased for the same reason `Embedding`/`LayerNorm` are: the name is
+// already taken by the stand-in.
 import { tie, TiedLinear as NNTiedLinear } from "../src/nn.ts"
 
-// Accept #2, part 1: the bug this item exists to fix (verified during
-// review, `scratchpad/review/gpt-block.ts`). `Linear<D, V>`'s weight is
-// `[D, V]`; `Embedding<V, D>`'s is `[V, D]`. `tie<S>(a: Parameter<S>, b:
-// Parameter<NoInfer<S>>)` can only relate two parameters of the SAME
-// shape, so tying an untied head to its embedding this way is, and must
-// stay, a type error — it is exactly the case `TiedLinear` exists to
-// make unnecessary.
+// The bug `TiedLinear` exists to obviate. `Linear<D, V>`'s weight is
+// `[D, V]`; `Embedding<V, D>`'s is `[V, D]`. `tie<S>` can only relate two
+// parameters of the SAME shape, so tying an untied head to its embedding
+// this way must stay a type error.
 function _tieCannotExpressTheTransposedTying<D extends number, V extends number>(
   head: Linear<D, V>,
   wte: NNEmbedding<V, D>,
@@ -1192,9 +1175,9 @@ function _tieCannotExpressTheTransposedTying<D extends number, V extends number>
   tie(head.weight, wte.weight)
 }
 
-// Accept #2, part 2: §3.7's GPT class, with the actual fix — no `tie()`
-// call at all, because `TiedLinear.of` stores the embedding's own
-// `Parameter` object rather than a second one that would need tying.
+// The GPT class with the fix: no `tie()` call at all, because
+// `TiedLinear.of` stores the embedding's own `Parameter` object rather
+// than a second one that would need tying.
 class GPT<V extends number, D extends number> extends NNModule {
   readonly wte: NNEmbedding<V, D>
   readonly ln: NNLayerNorm<D>

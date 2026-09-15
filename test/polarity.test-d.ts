@@ -1,58 +1,24 @@
 /**
- * Check-polarity survey (W0.14).
+ * Check-polarity survey: every exported `*Check` in `src/shape.ts`,
+ * instantiated inside a generic function body against a naked generic
+ * operand, asserting it does not error. A `*Check` must resolve to
+ * `unknown` while its arguments are still type parameters; nothing stops
+ * a future edit from flipping a polarity and turning a working check
+ * fail-closed with `pnpm typecheck` still green, which is the regression
+ * this file catches. Nothing here runs (vitest only collects `*.test.ts`).
  *
- * Every exported `*Check` in `src/shape.ts`, instantiated once inside a
- * generic function body against a naked generic operand, asserting it
- * does not error. Law 1 (§2.1) says a `*Check` must resolve to `unknown`
- * — never reach its `ErrorMessage` branch — while its arguments are
- * still type parameters rather than literals, and today that is
- * enforced only by convention: nothing stops a future edit from
- * flipping an `extends false` to an `extends true` (or vice versa) and
- * turning a working check fail-closed, silently, with `pnpm typecheck`
- * still green.
- *
- * The pattern is the one already used throughout the test suite
- * (`dimdiv.test-d.ts`, `lastdim.test-d.ts`, `flatten.test-d.ts`): a
- * `declare`d function whose parameter is `Carrier & SomeCheck<...>`, and
- * a second generic function that calls it. If the check can still reach
- * its `ErrorMessage` branch, the intersection stops accepting the
- * argument and the call site fails to compile — that is the regression
- * this file exists to catch.
- *
- * What "naked" means varies per check, and the split is itself a real
- * finding, not a shortcut: `BroadcastCheck`, `BroadcastToCheck`,
- * `LastDimCheck`, `FlattenCheck` and `SliceCheck` stay open for a
- * *fully* unconstrained `S extends Shape` — even paired with an
- * independent, unrelated, fully generic dim parameter — because their
- * guards route every comparison through `IsExact`'s function-type trick
- * (`DimEq`, `DimInRange`, `IsNegativeDim`, …), which TypeScript can
- * still decide under a naked type parameter. The rank/dim-indexing
- * checks (`DimCheck`, `TransposeCheck`, `PermuteCheck`,
- * `SqueezeDimCheck`, `UnsqueezeCheck`, `UnflattenCheck`, `Rank1Check`,
- * `CatCheck`, `CatNCheck`, `MatMulCheck`) are built on raw structural
- * tests instead (`` `${dim}` extends keyof S ``, `A extends []`, plain
- * tuple destructuring) that TypeScript cannot decide against a fully
- * free-floating `S`, and are verified below the way this whole codebase
- * actually uses them: a *known-rank* shape whose ELEMENTS are naked
- * generics (`Tensor<[A, B, C]>`, never `Tensor<S>`), which is exactly
- * how every generic layer in this library is written (see
- * `gpt-adopted.test-d.ts`'s whole attention block: `Tensor<[B, T, D]>`,
- * never a bare `Tensor<S>` for a rank-sensitive op). That is still a
- * genuine, meaningful naked-generic-operand test — the operand being
- * exercised is the tensor's generic dimension *sizes*, which is what
- * every real generic model width/sequence-length varies over — and it
- * still catches a polarity flip: every case below is a value TypeScript
- * must accept regardless of what `A`, `B`, `C`, … turn out to be, so an
- * inverted check (which would reject it) still fails the assertion.
- * `DimDivCheck` shares this same "raw comparison, no `IsExact` escape"
- * shape (see `Mod`) and does not survive a synthetic, freshly-summoned
- * bare value either — its own genuinely naked-generic regression is the
- * forwarding-discipline section below (D20), which exercises it exactly
- * the way `dimdiv.test-d.ts` does: a value declared *with* the brand on
- * its own parameter, forwarded with explicit type arguments.
- *
- * Nothing here runs (vitest only collects `*.test.ts`); this is a pure
- * typecheck fixture.
+ * What "naked" means splits per check. The `IsExact`-guarded checks
+ * (`BroadcastCheck`, `BroadcastToCheck`, `LastDimCheck`, `FlattenCheck`,
+ * `SliceCheck`) stay open for a fully unconstrained `S extends Shape`,
+ * because their guards route every comparison through helpers TypeScript
+ * can still decide under a naked type parameter. The rank/dim-indexing
+ * checks (`DimCheck`, `TransposeCheck`, `PermuteCheck`, `CatCheck`,
+ * `MatMulCheck`, ...) are built on raw structural tests TypeScript cannot
+ * decide against a fully free-floating `S`, so they are verified the way
+ * this codebase actually uses them: a known-rank shape whose elements are
+ * naked generics (`Tensor<[A, B, C]>`, never `Tensor<S>`). That is still a
+ * real polarity test: every case must be accepted whatever `A`, `B`, `C`
+ * turn out to be, so an inverted check fails the assertion.
  */
 import { DimDiv } from "../src/shape.ts"
 import type {
@@ -87,10 +53,8 @@ import type {
 import type { AnyTensor, Tensor } from "../src/tensor.ts"
 import { BROADCAST_TO_CASES, BROADCAST_TO_FAIL_CASES, BROADCAST_TO_TYPE_FAIL_CASES } from "./shape-cases.ts"
 
-// ---------------------------------------------------------------------------
-// Checks that stay open for a FULLY naked `S extends Shape`, paired with
+// Checks that stay open for a fully naked `S extends Shape`, paired with
 // an equally free-floating, unrelated dim parameter.
-// ---------------------------------------------------------------------------
 
 // BroadcastCheck<A, B>
 declare function _broadcastCheck<A extends Shape, B extends Shape>(b: Tensor<B> & BroadcastCheck<A, B>): Tensor<B>
@@ -122,12 +86,9 @@ function _sliceCheckOpen<S extends Shape, Spec extends readonly Slice[]>(spec: S
   return _sliceCheck<S, Spec>(spec)
 }
 
-// ---------------------------------------------------------------------------
-// Rank-sensitive checks: known rank, naked ELEMENTS. Every `A`, `B`, `C`,
-// `M`, `N`, `K` below is a fully generic, unresolved type parameter — only
-// the tuple's LENGTH is fixed, which is how every real generic layer in
-// this codebase already writes a shape (see the module comment above).
-// ---------------------------------------------------------------------------
+// Rank-sensitive checks: known rank, naked elements. Every `A`, `B`, `C`,
+// `M`, `N`, `K` below is a fully generic, unresolved type parameter; only
+// the tuple's length is fixed.
 
 // DimCheck<S, D>
 declare function _dimCheck<S extends Shape, D extends number>(d: D & DimCheck<S, D>): D
@@ -141,12 +102,11 @@ function _matMulCheckOpen<M extends number, K extends number, N extends number>(
   return _matMulCheck<[M, K], [K, N]>(b)
 }
 
-// ViewCheck<S, V> — the guard that stays open under genericity is the
+// ViewCheck<S, V>: the guard that stays open under genericity is the
 // `IsDynamic<S>` wildcard escape (`number extends Prod<S>`), not a
-// known-rank tuple: `view()` needs a LITERAL element count either way
-// (D21 — reshaping a generic-dim shape is `flatten`/`unflatten`'s job,
-// not `view`'s), so the honest naked-generic case for `view` is the
-// truly dynamic `number[]` shape.
+// known-rank tuple: `view()` needs a literal element count either way, so
+// reshaping a generic-dim shape is `flatten`/`unflatten`'s job and the
+// honest naked-generic case for `view` is the truly dynamic `number[]`.
 declare function _viewCheck<S extends Shape, V extends number[]>(v: V & ViewCheck<S, V>): V
 function _viewCheckOpen(shape: number[]) {
   return _viewCheck<number[], [2, 3]>([2, 3])
@@ -186,7 +146,7 @@ function _unsqueezeCheckOpen<A extends number, B extends number>() {
   return _unsqueezeCheck<[A, B], 0>(0)
 }
 
-// Rank1Check<S> — the rank itself (1) is the known part; the one element
+// Rank1Check<S>: the rank itself (1) is the known part; the one element
 // is a naked generic.
 declare function _rank1Check<S extends Shape>(x: Tensor<S> & Rank1Check<S>): Tensor<S>
 function _rank1CheckOpen<A extends number>(x: Tensor<[A]>) {
@@ -209,17 +169,13 @@ function _catNCheckOpen<M extends number, N extends number, K extends number>(t:
   return _catNCheck<[Tensor<[M, K]>, Tensor<[N, K]>], 0>(t)
 }
 
-// ConvCheck<H, K, S, P> — the one check in the survey whose fail-open-ness
-// needs MORE than the right polarity (W0.16, trap (b)). Its deferral
-// bottoms out in `ConvOut`'s `number extends H` rather than in `DimEq`'s
-// distributive `X extends Y ? true : false`, so `ConvFits` has to supply an
-// escape of its own: the four `IsExact<_, number>` guards, which TypeScript
-// decides eagerly even for a naked type parameter. (D35 predicted the
-// `H extends H ?` distribution trigger would be that escape; measured, it is
-// not sufficient on its own. See the measured table below.) The positive row
-// is here; the companion negatives — the same check with the `IsExact` chain
-// deleted, and with both mechanisms deleted, neither of which compiles — are
-// the scratch variants below.
+// ConvCheck<H, K, S, P>: the one check in the survey whose fail-openness
+// needs more than the right polarity. Its deferral bottoms out in
+// `ConvOut`'s `number extends H` rather than in a distributive
+// `X extends Y ? true : false`, so `ConvFits` supplies an escape of its
+// own: the four `IsExact<_, number>` guards, which TypeScript decides
+// eagerly even for a naked type parameter. The companion negatives are the
+// scratch variants in the measured table below.
 declare function _convCheck<H extends number, K extends number, St extends number, P extends number>(
   x: Tensor<[H]> & ConvCheck<H, K, St, P>,
 ): Tensor<[H]>
@@ -235,10 +191,10 @@ function _convCheckOpenAllGeneric<H extends number, K extends number, St extends
   return _convCheck<H, K, St, P>(x)
 }
 
-// IndexCheck<T> — not shape/dim-generic like the rest: the operand under
-// test is a naked `S`, and the value is a genuinely branded
-// `IndexTensor<S>` for it (exactly what every real caller of an
-// index-typed signature has, via `t.toIndex()` or `Tensor.indices()`).
+// IndexCheck<T>: not shape/dim-generic like the rest; the value is a
+// genuinely branded `IndexTensor<S>` for a naked `S` (what every real
+// caller of an index-typed signature has, via `t.toIndex()` or
+// `Tensor.indices()`).
 declare function _indexCheck<S extends Shape>(t: IndexTensor<S> & IndexCheck<IndexTensor<S>>): IndexTensor<S>
 function _indexCheckOpen<S extends Shape>(t: IndexTensor<S>) {
   return _indexCheck(t)
@@ -266,18 +222,13 @@ export {
   _viewCheckOpen,
 }
 
-// ---------------------------------------------------------------------------
-// DimDivCheck forwarding discipline (D20).
+// DimDivCheck forwarding discipline.
 //
-// The check itself is fail-open for the shape it actually supports
-// (proven the same way `dimdiv.test-d.ts` proves it: a value declared
-// WITH the brand on its own parameter, for naked `D`, `H`); this section
-// is the separate, sharper claim that a check carried correctly at one
-// layer stays proven only if every layer between the proof and its use
-// repeats it. `MHA` is the innermost consumer, `Block` is the one
-// intermediate layer, matching the shape of a real `d_model` /
-// `n_heads` constructor chain.
-// ---------------------------------------------------------------------------
+// The check itself is fail-open for the shape it supports (proven in
+// `dimdiv.test-d.ts`); this section is the sharper claim that a check
+// carried correctly at one layer stays proven only if every layer between
+// the proof and its use repeats it. `MHA` is the innermost consumer,
+// `Block` the one intermediate layer.
 
 // The disciplined chain: every constructor that needs the precondition
 // carries its own `H & DimDivCheck<D, H>`, and every forwarding site names
@@ -298,9 +249,9 @@ function _forwardsDisciplined<D extends number, H extends number>(d: D, h: H & D
 }
 const _disciplinedOk = new Block_Disciplined(384, 6)
 
-// Failure mode 1: the intermediate constructor's OWN parameter drops the
+// Failure mode 1: the intermediate constructor's own parameter drops the
 // check (`h: H` instead of `h: H & DimDivCheck<D, H>`). `Block`'s own
-// signature still catches a bad literal at ITS boundary...
+// signature still catches a bad literal at its boundary...
 declare class MHA_NoCheck<D extends number, H extends number> {
   constructor(d: D, h: H)
 }
@@ -310,21 +261,19 @@ class Block_InnerDropsCheck<D extends number, H extends number> {
     this.attn = new MHA_NoCheck<D, H>(d, h)
   }
 }
-// @ts-expect-error 384 is not divisible by 5 — Block's own param has the check
+// @ts-expect-error 384 is not divisible by 5 (Block's own param has the check)
 const _innerDropsCheckCaughtAtBlock = new Block_InnerDropsCheck(384, 5)
 // ...but nothing stops a caller who reaches `MHA_NoCheck` directly: its own
 // parameter never carried the check, so the identical bad literal compiles.
-// There is deliberately no `@ts-expect-error` on this line — the absence of
-// an error IS the bug this failure mode names.
+// No `@ts-expect-error` on this line: the absence of an error is the bug
+// this failure mode names.
 const _innerDropsCheckMissedDirectly = new MHA_NoCheck(384, 5)
 
 // Failure mode 2: a forwarding site that omits explicit type arguments.
-// Unlike failure mode 1, this one is fail-CLOSED outright: inference
-// re-derives the intermediate's own type argument from the caller's
-// ALREADY-checked `h`, so `DimDivCheck` gets applied a second time
-// (`DimDivCheck<D, H & DimDivCheck<D, H>>`) and the two branded types are
-// mutually unassignable — for every `D, H`, not only a bad literal, which
-// is why this fails to compile even with no call site at all.
+// This one is fail-closed outright: inference re-derives the
+// intermediate's own type argument from the caller's already-checked `h`,
+// so `DimDivCheck` is applied a second time and the two branded types are
+// mutually unassignable for every `D, H`, not only a bad literal.
 declare class MHA_ForForwarding<D extends number, H extends number> {
   constructor(d: D, h: H & DimDivCheck<D, H>)
 }
@@ -339,23 +288,15 @@ class Block_ForgotTypeArgs<D extends number, H extends number> {
 
 export { _disciplinedOk, _forwardsDisciplined, Block_Disciplined, Block_ForgotTypeArgs, Block_InnerDropsCheck }
 
-// ---------------------------------------------------------------------------
 // `broadcastTo`'s fail table, given a type-level twin.
 //
-// `shape-cases.ts` used to say (see its own header, before this file
-// existed) that `BROADCAST_TO_*` have no type-level twin — only
-// `shape.test.ts` runs them, through the runtime `broadcastToShape`.
-// `BroadcastToCheck` is the one check in the survey above whose two
-// error branches are genuinely different bugs (see its doc comment in
-// `shape.ts`): a target that cannot broadcast with the source at all
-// (`BROADCAST_TO_TYPE_FAIL_CASES`), and a target that CAN — via the
-// symmetric `CanBroadcast` — but only by shrinking the source, which
+// `BroadcastToCheck`'s two error branches are genuinely different bugs: a
+// target that cannot broadcast with the source at all
+// (`BROADCAST_TO_TYPE_FAIL_CASES`), and a target that can, via the
+// symmetric `CanBroadcast`, but only by shrinking the source, which
 // `broadcastTo` must reject even though plain broadcasting would not
-// (`BROADCAST_TO_FAIL_CASES`, shared with the runtime table in
-// `shape.test.ts`). The second is exactly that asymmetry, and it is the
-// case a polarity slip in `BroadcastToCheck` (or a regression to plain
-// `BroadcastCheck`) would silently let through.
-// ---------------------------------------------------------------------------
+// (`BROADCAST_TO_FAIL_CASES`). The second is the case a polarity slip in
+// `BroadcastToCheck` would silently let through.
 
 type BroadcastToOk = (typeof BROADCAST_TO_CASES)[number]
 
@@ -374,18 +315,13 @@ declare const _bcastFrom1: Tensor<(typeof BROADCAST_TO_FAIL_CASES)[0]["from"]>
 // @ts-expect-error [2, 3] broadcasts against [3], but not down to it
 _bcastFrom1.broadcastTo(BROADCAST_TO_FAIL_CASES[0].to)
 
-// ---------------------------------------------------------------------------
-// `ConvCheck`'s fail-openness, pinned by its negatives (W0.16, trap (b)).
+// `ConvCheck`'s fail-openness, pinned by its negatives.
 //
 // The survey row above proves the adopted `ConvCheck` is open under a naked
-// generic spatial dim. This section proves WHY, by keeping scratch copies of
-// `ConvFits` with one mechanism removed at a time and nothing else changed —
-// same span test, same law-1 polarity (`extends false ? Error : unknown`),
-// same carrier, same call.
-//
-// Measured with the project's own tsc while this item was written
-// (`scratchpad/w016/trig3.ts`), and the result is not what the plan text
-// predicted, so it is recorded here rather than asserted from memory:
+// generic spatial dim. This section proves why, by keeping scratch copies
+// of `ConvFits` with one mechanism removed at a time and nothing else
+// changed (same span test, same polarity, same carrier, same call). The
+// measured result, with the project's own tsc:
 //
 //   IsExact guards + `H extends H ?`  (the adopted ConvFits)  -> OPEN
 //   IsExact guards alone                                      -> OPEN
@@ -396,17 +332,11 @@ _bcastFrom1.broadcastTo(BROADCAST_TO_FAIL_CASES[0].to)
 // number>` is a function-type identity comparison, which TypeScript decides
 // immediately even for a naked type parameter, and deciding it is what gives
 // the rest of the chain somewhere to land. The `H extends H ?` distribution
-// trigger is kept in `src/shape.ts` because D35 specifies it and because it
-// is the documented reading of why the deferral resolves — but on its own it
-// is NOT sufficient, and `_convCheckTriggerAloneIsClosed` below is the proof.
-//
-// The other two negatives are the spellings D35 rejected: a check that
-// decides on the QUOTIENT (`ConvOut`) rather than the span, in both the
-// naive and the law-1 polarity. Both are fail-closed, which is the finding
-// that sent `ConvFits` to the span in the first place, and both stay here so
-// a future "why not just test ConvOut?" is answered by a compiler error
-// rather than by a code review.
-// ---------------------------------------------------------------------------
+// trigger is kept in `src/shape.ts` as the documented reading of why the
+// deferral resolves, but on its own it is not sufficient; see
+// `_convCheckTriggerAloneIsClosed` below. The quotient-based spellings at
+// the end are the rejected alternatives: both fail-closed, which is why
+// `ConvFits` tests the span.
 
 type _IsExact<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
 type _ConvSpan<H extends number, K extends number, P extends number> = DimSub<DimAdd<H, DimMul<2, P>>, K>
@@ -419,9 +349,9 @@ type _FitsTriggerAlone<H extends number, K extends number, P extends number> = H
   : true
 declare function _convTriggerAlone<H extends number>(x: Tensor<[H]> & _Err<_FitsTriggerAlone<H, 3, 0>>): Tensor<[H]>
 function _convCheckTriggerAloneIsClosed<H extends number>(x: Tensor<[H]>) {
-  // @ts-expect-error the distribution trigger WITHOUT the IsExact guard chain
-  // is fail-CLOSED: the identical call the survey row above accepts is
-  // rejected for every generic H
+  // @ts-expect-error the distribution trigger without the IsExact guard
+  // chain is fail-closed: the identical call the survey row above accepts
+  // is rejected for every generic H
   return _convTriggerAlone<H>(x)
 }
 
@@ -434,8 +364,8 @@ function _convCheckNeitherIsClosed<H extends number>(x: Tensor<[H]>) {
   return _convNeither<H>(x)
 }
 
-// The two quotient-based spellings D35 rejected (trap (a) is why they are
-// wrong; this is why they would not even have worked).
+// The quotient-based spellings (why they would not even have worked, on
+// top of trap (a) being why they are wrong).
 type _IsNonPositive<D extends number> =
     number extends D ? false
   : `${D}` extends `-${string}` ? true
@@ -462,8 +392,8 @@ function _convCheckOnQuotientIsClosed<H extends number>(x: Tensor<[H]>) {
 }
 
 // The escape is the whole difference: every spelling above agrees with the
-// real `ConvCheck` on LITERALS, which is why a green literal test suite is
-// not evidence that any of them is safe to adopt.
+// real `ConvCheck` on literals, so a green literal test suite is not
+// evidence that any of them is safe to adopt.
 type _Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 type _Ex<T extends true> = T
 type _sameOnLiterals0 = _Ex<_Eq<_Err<_FitsNeither<28, 3, 0>>, ConvCheck<28, 3, 1, 0>>>

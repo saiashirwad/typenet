@@ -1,13 +1,10 @@
-// JS graph-*build* time only — trace to a lazy graph, no evaluation —
-// for the MLP and for nanoGPT S/M/L (PLAN-V2 §4.2, W0.3). Read by W6.4's
-// acceptance, which does not create it: the `trace-mlp` /
-// `trace-gpt-{s,m,l}` case ids are load-bearing and must not be renamed.
+// JS graph-build time only: trace to a lazy graph, no evaluation, for the
+// MLP and nanoGPT S/M/L. The `trace-mlp` / `trace-gpt-{s,m,l}` case ids
+// are load-bearing; do not rename them.
 //
-// There is no `GPT`/`TransformerBlock` module yet (that lands in a later
-// wave), so the nanoGPT graph here is hand-composed from
-// `bench/models/attention.ts`'s `CausalSelfAttention` plus a GELU MLP —
-// enough to trace a graph of the right shape and depth; forward-pass
-// *correctness* is not what this script measures.
+// No TransformerBlock module exists yet, so the GPT graph is hand-composed
+// from CausalSelfAttention plus a GELU MLP; forward-pass correctness is
+// not what this measures.
 
 import { Linear, Module } from "../index.ts"
 import { rand, randn } from "../src/factories.ts"
@@ -74,7 +71,7 @@ class TraceGpt extends Module {
     this.head = new Linear(nEmbd, vocabSize)
   }
 
-  /** Builds the forward graph only — caller must never force the result. */
+  /** Builds the forward graph only; the caller must never force the result. */
   forward(ids: IndexTensor<[number]>): AnyTensor {
     let x = this.tokEmb.indexSelect(ids, 0).reshape([this.batch, this.seqLen, this.tokEmb.shape[1]!])
     for (const block of this.blocks) x = block.forward(x)
@@ -82,8 +79,8 @@ class TraceGpt extends Module {
   }
 }
 
-/** Branded via `.toIndex()` (OWNER-5, D25) — done here, eagerly, so that
- * nothing inside the traced forward ever has to read `.data`. */
+/** Branded eagerly via `.toIndex()` so nothing inside the traced forward
+ * ever has to read `.data`. */
 function randomIds(count: number, vocabSize: number): IndexTensor<[number]> {
   const data = new Float32Array(count)
   for (let i = 0; i < count; i++) data[i] = Math.floor(Math.random() * vocabSize)
@@ -95,10 +92,8 @@ interface TraceCase extends BenchCaseSpec {
 }
 
 async function main(): Promise<void> {
-  // All setup (random init, module construction) happens once, eagerly,
-  // outside the timed region — only the forward *trace* is timed, and
-  // only under `interp` (lazy, no native): the point is JS graph-build
-  // cost, not evaluation, so `eager`/`native` are not meaningful here.
+  // All setup happens once, eagerly, outside the timed region; only the
+  // forward trace is timed, under interp (lazy, no native).
   configure({ lazy: false })
 
   const smoke = isSmokeRun()
@@ -134,9 +129,8 @@ async function main(): Promise<void> {
 
   await bench("micro-trace", CASES, (kase, mode) => {
     configure({ lazy: mode !== "eager" })
-    // Deliberately never read `.data`/`.item()`/`.backward()` — forcing
-    // would mix evaluation time into what is supposed to be pure graph
-    // construction.
+    // Never force evaluation: it would mix eval time into what is
+    // supposed to be pure graph construction.
     kase.build()
   })
 

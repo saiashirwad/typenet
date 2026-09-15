@@ -1,12 +1,11 @@
-// W5.10-A: weight tying and the transposed LM head.
+// Weight tying and the transposed LM head.
 //
 // `TiedLinear.of(embedding)` exists because plain `tie()` cannot relate an
 // `Embedding<V, D>`'s `[V, D]` weight to a `Linear<D, V>`'s `[D, V]` weight
-// (see the `@ts-expect-error` in test/types.test-d.ts) — the two shapes
-// are transposes of each other, not the same shape `tie<S>` requires.
-// `TiedLinear` sidesteps the problem: it stores the embedding's own
-// `Parameter` object, so the "tie" is object identity, not a runtime
-// alias table, and everything below follows from that.
+// (see the `@ts-expect-error` in test/types.test-d.ts): the two shapes are
+// transposes of each other, not the same shape `tie<S>` requires.
+// `TiedLinear` stores the embedding's own `Parameter` object, so the "tie"
+// is object identity, not a runtime alias table.
 
 import { describe, expect, it } from "vitest"
 import { printGraph } from "../src/compile.ts"
@@ -20,8 +19,7 @@ import { expectClose } from "./helpers.ts"
 const V = 3
 const D = 2
 
-// [V, D] — three rows of two features, deterministic so the two models
-// below start from bit-identical weights.
+// [V, D], deterministic so the two models below start bit-identical.
 const initEmbedding = () =>
   Tensor.of([
     [1, 2],
@@ -46,7 +44,7 @@ class TiedNet extends Module {
 }
 
 /** The untied reference: two independently-owned copies of the same initial
- * values — one used only by the gather, one only by the transposed matmul. */
+ * values, one used only by the gather, one only by the transposed matmul. */
 class UntiedNet extends Module {
   readonly wte: Embedding<typeof V, typeof D>
   readonly head: Linear<typeof D, typeof V>
@@ -95,11 +93,10 @@ describe("weight tying (TiedLinear)", () => {
 
     // `untied.head.weight` is `[D, V]`; its gradient transposed back to
     // `[V, D]` plus `untied.wte.weight`'s own gradient (the gather path)
-    // is exactly what one shared leaf should have accumulated.
+    // is what one shared leaf should have accumulated.
     const byHand = untied.wte.weight.grad!.add(untied.head.weight.grad!.transpose(0, 1))
     expectClose(tied.wte.weight.grad!, byHand, 1e-6)
 
-    // One step() moves the shared buffer by exactly that combined gradient.
     const before = tied.wte.weight.snapshot()
     const opt = new SGD(tied.parameters(), { lr: 0.1 })
     opt.step()
@@ -120,8 +117,6 @@ describe("weight tying (TiedLinear)", () => {
 
     fresh.loadStateDict(dict)
     expectClose(fresh.wte.weight, tied.wte.weight, 1e-6)
-    // Restoring the one entry restores the head's view of it too, since
-    // they are the same object.
     const ids = Tensor.indices([0, 2], [2])
     expectClose(fresh.forward(ids), tied.forward(ids), 1e-6)
   })
@@ -137,14 +132,10 @@ describe("weight tying (TiedLinear)", () => {
         const logits = tied.forward(ids).named("logits")
         const lines = printGraph(logits).split("\n")
 
-        // Exactly one leaf line for the shared weight — not two, which is
-        // what a second, independently-owned `[D, V]` parameter would print.
         const leafLines = lines.filter(l => /^wte\s+= leaf\b/.test(l))
         expect(leafLines).toHaveLength(1)
 
-        // Exactly one permute of it — A-L1/W4.6's zero-copy GEMM lands
-        // later, but the *graph* already proves the tie is real: one
-        // leaf, one transpose, never a second buffer.
+        // one permute of it, never a second buffer
         const permuteLines = lines.filter(l => /= permute\(wte\)/.test(l))
         expect(permuteLines).toHaveLength(1)
       } finally {

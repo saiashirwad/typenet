@@ -161,23 +161,7 @@ export function makeStorage(
 type Dim0<S extends Shape> = S extends [infer A extends number, ...any[]] ? A : never
 type Dim1<S extends Shape> = S extends [any, infer B extends number, ...any[]] ? B : never
 
-/**
- * Exact type equality (the standard "distributes over neither side"
- * trick — two call signatures are mutually assignable only when their
- * `extends` branches agree, which happens only for identical types).
- *
- * `copy_`/`addScaled_` need this rather than {@link BroadcastCheck}
- * because they never broadcast at run time: a `[1,3]` into a `[2,3]`
- * would pass a broadcast check and then throw from `shapesEqual` anyway,
- * which is a worse error than catching it at the call site.
- *
- * The check lives on a *fresh* method type parameter (`S2`), never on
- * `S` directly (`other: Tensor<S>` would make `S` a bare, resolvable
- * type argument to `Tensor` and — this was measured, not guessed — turn
- * the whole class invariant in `S`, breaking every `*Check` call site in
- * the library). Keeping `S` reachable only through a still-generic `S2`
- * is exactly the shape `add`/`sub`/`BroadcastCheck<S, S2>` already use.
- */
+/** Exact equality, no broadcasting: `copy_`/`addScaled_` never broadcast. Typed on a fresh `S2` because `other: Tensor<S>` would resolve `S` and break every `*Check` site. */
 type IsSameType<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
 
 type SameShapeCheck<S extends Shape, S2 extends Shape> =
@@ -186,11 +170,7 @@ type SameShapeCheck<S extends Shape, S2 extends Shape> =
   : IsSameType<S, S2> extends true ? unknown
   : ErrorMessage<"shape does not match the receiver">
 
-/**
- * Friend-module access to the private fields. Populated by a static
- * block inside `Tensor` (the only scope that can reach `#` fields), and
- * imported by the evaluator modules; tests go through `src/testing.ts`.
- */
+/** Populated by a static block inside `Tensor`, the only scope that can reach its `#` fields. */
 export interface TensorInternal {
   sourceOf(t: AnyTensor): TensorStorage
   cpuOf(t: AnyTensor): TypedArray | null
@@ -210,11 +190,7 @@ type StackCheck<T extends readonly AnyTensor[]> = T[number] extends Tensor<Shape
   : ErrorMessage<"stack: all tensors must have the same shape">
 
 export class Tensor<S extends Shape> {
-  /**
-   * Where the value comes from: a CPU buffer or a lazy graph node.
-   * Immutable for the life of the tensor — forcing fills {@link #cpu}
-   * instead of rewriting this field, so a lazy tensor stays lazy.
-   */
+  /** A CPU buffer or a lazy graph node; forcing fills `#cpu` rather than rewriting this. */
   readonly #source: TensorStorage
   /** The materialized CPU buffer; for lazy sources, filled by force. */
   #cpu: TypedArray | null
@@ -224,7 +200,6 @@ export class Tensor<S extends Shape> {
 
   grad: Tensor<S> | null = null
 
-  /** Internal grad-leaf flag; read {@link needsGrad}, set via {@link requiresGrad}. */
   _requiresGrad = false
 
   static {
@@ -279,21 +254,7 @@ export class Tensor<S extends Shape> {
     this.dtype = dtype
   }
 
-  /**
-   * The tensor's own backing buffer — a **live aliased view**, not a copy.
-   * Writing through the returned array mutates this tensor's storage
-   * directly (that is what the `_` mutators do internally), and forcing a
-   * lazy tensor materialises it once and hands back the same buffer on every
-   * later read. Call {@link snapshot} instead when the caller needs bytes
-   * that stay valid across a later `fill_`/`copy_`/`addScaled_`.
-   *
-   * Element type caveat: the declared return type is {@link NumericArray}
-   * (`Float32Array | Float64Array | Int32Array`), but an `int64` tensor's
-   * storage is actually a `BigInt64Array` — indexing it yields a `bigint`,
-   * not a `number`, despite what the type says. Treat `int64` `.data` with
-   * `BigInt64Array` methods (as {@link addScaled_} and {@link toIndex} do
-   * internally), never assume `number` elements from the static type alone.
-   */
+  /** A live aliased view, not a copy; for `int64` the buffer is really a `BigInt64Array` despite the {@link NumericArray} return type. */
   get data(): NumericArray {
     if (isTracing()) {
       const label = tensorNames.get(this as AnyTensor)
@@ -358,12 +319,7 @@ export class Tensor<S extends Shape> {
     return Tensor.full(shape, 1)
   }
 
-  /**
-   * Uniform values in [0, 1), drawn once through the seeded generator —
-   * a plain CPU leaf, unlike `rand(..., { resample: "perCall" })`, whose
-   * graph node redraws per evaluation. `configure({ seed })` makes the
-   * fill reproducible.
-   */
+  /** Uniform values in [0, 1), drawn once. `configure({ seed })` makes the fill reproducible. */
   static rand<const Sh extends Shape>(
     shape: Sh,
   ): Tensor<Sh> {
@@ -421,11 +377,7 @@ export class Tensor<S extends Shape> {
     ) as any
   }
 
-  /**
-   * An {@link IndexTensor} leaf built directly from data, checking
-   * integrality at runtime — the other of the two ways to make one
-   * (see {@link toIndex}).
-   */
+  /** An {@link IndexTensor} leaf built directly from data, checking integrality at runtime. */
   static indices<const Sh extends Shape>(
     data: ArrayLike<number>,
     shape: Sh,
@@ -440,11 +392,7 @@ export class Tensor<S extends Shape> {
     return fromFlat(data, shape, "int32") as unknown as IndexTensor<Sh>
   }
 
-  /**
-   * A new leaf over this tensor's storage with gradients enabled — the
-   * tape starts here. Like {@link detach}, the receiver is untouched:
-   * rebind the result, do not rely on mutation.
-   */
+  /** A new leaf with gradients enabled; like {@link detach}, the receiver is untouched. */
   requiresGrad(): Tensor<S> {
     const leaf = _internal.makeView(
       this as AnyTensor,
@@ -523,23 +471,6 @@ export class Tensor<S extends Shape> {
     return withGrad(t, "clone", [this], g => [g]) as any
   }
 
-  // ---------------------------------------------------------------------
-  // Safe mutation primitives (W1.8).
-  //
-  // typenet has no in-place op API: autograd never sees a mutation, and
-  // none of these are graph nodes. They exist for initialisation and
-  // assignment — filling a freshly created parameter, restoring an
-  // optimizer buffer, applying a gradient step to a leaf — never for
-  // rewriting a value an active computation still depends on. Every one
-  // of them therefore refuses to run while a tape is recording through
-  // this tensor (`taped`) or while `compile()` is tracing (`isTracing()`):
-  // both are moments where "this tensor's bytes" is a promise other code
-  // is relying on staying put, and a silent in-place write would corrupt
-  // the tape or bake a mid-trace value into the recorded graph. Read the
-  // current bytes safely in either situation with `snapshot()`, which
-  // never mutates and never aliases.
-  // ---------------------------------------------------------------------
-
   private assertMutable(method: string): void {
     if (isTracing()) {
       const label = tensorNames.get(this as AnyTensor)
@@ -572,11 +503,7 @@ export class Tensor<S extends Shape> {
     return this
   }
 
-  /**
-   * Overwrite this tensor's bytes with `other`'s, converting dtype if
-   * they differ. Shapes must match exactly — narrowing or broadcasting
-   * a copy_ is a bug at the call site, not a shape this method resolves.
-   */
+  /** Overwrite with `other`'s data, converting dtype if they differ. Shapes must match exactly. */
   copy_<S2 extends Shape>(other: Tensor<S2> & SameShapeCheck<S, S2>): this
   copy_(other: AnyTensor): this {
     this.assertMutable("copy_")
@@ -593,11 +520,7 @@ export class Tensor<S extends Shape> {
     return this
   }
 
-  /**
-   * `this += alpha * other`, elementwise, in place — the fused
-   * multiply-add an optimizer step is built out of (`param.addScaled_(grad,
-   * -lr)`). Shapes must match exactly, same as {@link copy_}.
-   */
+  /** `this += alpha * other` in place. Shapes must match exactly, like {@link copy_}. */
   addScaled_<S2 extends Shape>(other: Tensor<S2> & SameShapeCheck<S, S2>, alpha: number): this
   addScaled_(other: AnyTensor, alpha: number): this {
     this.assertMutable("addScaled_")
@@ -623,24 +546,13 @@ export class Tensor<S extends Shape> {
     return this
   }
 
-  /**
-   * A fresh copy of this tensor's current data. Unlike {@link data}, the
-   * result never aliases this tensor's storage, so it stays valid across
-   * a later `fill_`/`copy_`/`addScaled_` — and unlike `.data`, it is not
-   * blocked by an active `compile()` trace, since copying already-resident
-   * bytes out never reads back into the graph being built.
-   */
+  /** A copy that never aliases this tensor's storage and is allowed during a `compile()` trace. */
   snapshot(): NumericArray {
     force(this as AnyTensor)
     return (this.#cpu as NumericArray).slice() as NumericArray
   }
 
-  /**
-   * Brand this tensor as an {@link IndexTensor}, checking integrality at
-   * runtime: int32/int64 storage always qualifies, a float storage must
-   * hold only integral values. The brand is a compile-time marker only —
-   * this returns the same tensor, not a copy.
-   */
+  /** Brand as an {@link IndexTensor}, checking integrality at runtime; returns the same tensor. */
   toIndex(): IndexTensor<S> {
     if (this.dtype !== "int32" && this.dtype !== "int64") {
       const data = this.data
@@ -656,8 +568,7 @@ export class Tensor<S extends Shape> {
     return this as unknown as IndexTensor<S>
   }
 
-  // Debug label, shown by printGraph(). Metadata only — no effect on
-  // computation, autograd, or graph semantics.
+  // Debug label, shown by printGraph().
   named(name: string): this {
     tensorNames.set(this as AnyTensor, name)
     return this
@@ -762,10 +673,7 @@ export class Tensor<S extends Shape> {
     ])
   }
 
-  /**
-   * Gradient goes wholly to whichever operand won;
-   * ties go to the left one.
-   */
+  /** Gradient goes wholly to the winning operand; ties go to the left one. */
   maximum(other: number): Tensor<S>
   maximum<S2 extends Shape>(
     other: Tensor<S2> & BroadcastCheck<S, S2>,
@@ -805,10 +713,7 @@ export class Tensor<S extends Shape> {
     ])
   }
 
-  /**
-   * Clamp into `[min, max]`; pass `null` for an open end. Gradient is 1
-   * inside the range and 0 outside.
-   */
+  /** Clamp into `[min, max]`; `null` is an open end. Gradient is 1 inside, 0 outside. */
   clamp(
     min: number | null,
     max: number | null = null,
@@ -819,8 +724,7 @@ export class Tensor<S extends Shape> {
     return out as any
   }
 
-  // Comparisons produce 1.0 / 0.0 masks and stop gradients: a step
-  // function has zero derivative wherever it is differentiable.
+  // Comparisons produce 1.0 / 0.0 masks and stop gradients: a step function has zero derivative.
   gt(other: number): Tensor<S>
   gt<S2 extends Shape>(
     other: Tensor<S2> & BroadcastCheck<S, S2>,
@@ -1069,12 +973,7 @@ export class Tensor<S extends Shape> {
     return rawOneHot(this, classes) as any
   }
 
-  /**
-   * Expand-only broadcast to `shape`. Unlike the binary ops, the target
-   * must be *exactly* what broadcasting this tensor against it yields —
-   * `[2, 3].broadcastTo([3])` is rejected even though the two shapes are
-   * mutually broadcastable.
-   */
+  /** Expand-only: `shape` must be exactly what broadcasting this tensor against it yields. */
   broadcastTo<const V extends Shape>(
     shape: V & BroadcastToCheck<S, V>,
   ): Tensor<V> {
@@ -1090,11 +989,7 @@ export class Tensor<S extends Shape> {
     ]) as any
   }
 
-  /**
-   * Multi-axis narrow. Each axis is a `number` (end index, from 0), a
-   * `[start, end]` window, or `null` / `undefined` to keep the dim. The
-   * spec must have one entry per axis.
-   */
+  /** Multi-axis narrow: one {@link Slice} entry per axis. */
   slice<const Spec extends readonly Slice[]>(
     spec: Spec & { length: S["length"] },
   ): Tensor<SliceShape<S, Spec>> {
@@ -1157,15 +1052,7 @@ export class Tensor<S extends Shape> {
     })
   }
 
-  /**
-   * `index` is a rank-1 {@link IndexTensor} of integral values (int32/int64,
-   * or a float32 index for compatibility); its length becomes the size of
-   * `dim`. Gradients flow to the gathered tensor, never to the index.
-   *
-   * The parameter is branded, not a bare `Tensor<[E]>` (OWNER-5, D25): a
-   * plain tensor is a compile-time error here, not a silently-accepted
-   * spelling — call `.toIndex()` or build one with `Tensor.indices()`.
-   */
+  /** `index` is a rank-1 {@link IndexTensor}; its length becomes the size of `dim`. Gradients flow to the gathered tensor, never to the index. */
   indexSelect<E extends number>(
     index: IndexTensor<[E]>,
   ): Tensor<ResizeDim<S, 0, E>>
@@ -1187,15 +1074,7 @@ export class Tensor<S extends Shape> {
     ])
   }
 
-  /**
-   * Scatter-add rows along `dim` into an output of `length` rows: row
-   * `j` of this tensor is *added into* row `index[j]` of the result.
-   * Rows no index points at stay zero. This is `index_add_` on a zero
-   * tensor, and the exact reverse of {@link indexSelect}.
-   *
-   * `index` is branded (OWNER-5, D25) for the same reason as
-   * {@link indexSelect}'s: a bare `Tensor<[E]>` is a compile-time error.
-   */
+  /** Row `j` of this tensor is added into row `index[j]` of a zero-filled output of `length` rows; the reverse of {@link indexSelect}. */
   scatterAdd<L extends number>(
     index: IndexTensor<[Dim0<S>]>,
     length: L,
@@ -1251,14 +1130,7 @@ export class Tensor<S extends Shape> {
     return this.view(shape as any) as any
   }
 
-  /**
-   * Collapse axes `from..to` (inclusive) into one whose extent is their
-   * product — the generic-dim reshape path (D21). `view()` needs the
-   * element count to reduce to a literal, so `[B, T, D] -> [B*T, D]` is
-   * unavailable to it while `B`/`T` are generic; this is pure tuple
-   * surgery and reduces exactly either way. Agrees with `view()` on any
-   * shape where both are legal.
-   */
+  /** Collapse axes `from..to` (inclusive); works on generic dims where `view()` needs a literal element count. */
   flatten<const F extends number, const T extends number>(
     from: F & FlattenCheck<S, F, T>,
     to: T,
@@ -1275,12 +1147,7 @@ export class Tensor<S extends Shape> {
     ]) as any
   }
 
-  /**
-   * Split axis `dim` into `sizes`, whose product must equal that axis's
-   * extent — the inverse of {@link flatten}, and, chained with
-   * {@link permute}, the generic-dim way to split or merge a head
-   * dimension that `view()` cannot express (D21).
-   */
+  /** Split axis `dim` into `sizes`, the inverse of {@link flatten}. */
   unflatten<const D extends number, const Sizes extends number[]>(
     dim: D & UnflattenCheck<S, D, Sizes>,
     sizes: Sizes,
@@ -1435,8 +1302,7 @@ export class Tensor<S extends Shape> {
     b?: any,
     dim?: number,
   ): any {
-    // The n-ary form is pairwise sugar: a fold over the same binary cat
-    // nodes, so the IR, autograd rule and native lowering are untouched.
+    // The n-ary form is a fold over the binary cat.
     if (Array.isArray(a)) {
       const d = (b as number | undefined) ?? 0
       let acc = a[0]! as AnyTensor
@@ -1558,12 +1424,7 @@ export class Tensor<S extends Shape> {
   }
 }
 
-/**
- * `numel` copies of `v`, converted through {@link convertData} so a
- * fill_/zero_ into int32/int64 storage gets exactly the same conversion
- * (and the same integrality error, for int64) as every other dtype
- * boundary in the library.
- */
+/** `numel` copies of `v`, through {@link convertData} so int64 storage gets the same integrality error as every other dtype boundary. */
 function filledData(numel: number, dtype: DType, v: number): TypedArray {
   return convertData(new Array(numel).fill(v), dtype)
 }
@@ -1643,26 +1504,7 @@ function cat2(
   ])
 }
 
-// ---------------------------------------------------------------------------
-// W4.1 semantic ops: the typed entry points, each with its backward rule.
-//
-// Module-level functions rather than `Tensor` methods on purpose. They are
-// the primitives the Wave-5 layer catalog is built out of (`nn.functional.*`
-// re-exports them), and the class already carries every overload set the
-// typecheck budget can pay for — a `Tensor` method costs instantiations at
-// every call site in the library, a free function costs them only at its own.
-//
-// The composed spellings that already exist (`Tensor.softmax`,
-// `nn.crossEntropy`) are deliberately left alone: they are what today's
-// native path runs, and replacing them with a node the addon cannot parse
-// would take every existing model off the native path. W5.1-A/W5.3-A move
-// the layers over, op by op, once A-L1 can lower them.
-// ---------------------------------------------------------------------------
-
-/**
- * GELU, tanh approximation (`src/kernels.ts`'s `gelu` is the numeric spec).
- * One node, not the six a hand-composed `0.5x(1+tanh(...))` costs.
- */
+/** GELU, tanh approximation. */
 export function gelu<S extends Shape>(x: Tensor<S>): Tensor<S> {
   const a = x as AnyTensor
   const out = rawGelu(a)
@@ -1680,16 +1522,7 @@ export function silu<S extends Shape>(x: Tensor<S>): Tensor<S> {
   ]) as Tensor<S>
 }
 
-/**
- * Softmax as a single node, with the backward in closed form over the
- * output (`dx = y*(g - sum(g*y))`) rather than through the four nodes the
- * composed spelling differentiates.
- *
- * `causal: true` folds a decoder's additive mask into the same node —
- * masking is a property of the OP, not a materialised `[T, T]` buffer, which
- * is the thing a generic fuser can never find for itself. It requires the
- * last axis of a rank>=2 score matrix.
- */
+/** Softmax as a single node. `causal: true` folds the decoder mask into the node and requires the last axis of a rank>=2 score matrix. */
 export function softmax<
   S extends Shape,
   const D extends number,
@@ -1706,11 +1539,7 @@ export function softmax<
   ]) as Tensor<S>
 }
 
-/**
- * LayerNorm over the last axis. The node produces `(y, mean, rstd)`; the
- * saved statistics are what makes the backward a closed form instead of a
- * re-derivation, and they never leave the graph.
- */
+/** LayerNorm over the last axis. */
 export function layerNorm<S extends Shape>(
   x: Tensor<S>,
   gamma: Tensor<[Last<S>]>,
@@ -1744,12 +1573,7 @@ export function rmsNorm<S extends Shape>(
   return withGrad(y, "rmsNorm", [a, w], g => rawRmsNormGrad(g, a, w, rstd)) as Tensor<S>
 }
 
-/**
- * Mean cross-entropy of `[N, C]` logits against `[N]` class indices, fused:
- * the node computes the loss and `dlogits` in one pass, so the `[N, C]`
- * one-hot the composed spelling builds never exists and the backward is a
- * multiply rather than a second softmax.
- */
+/** Mean cross-entropy of `[N, C]` logits against `[N]` class indices. */
 export function crossEntropy<
   N extends number,
   C extends number,
@@ -1796,17 +1620,12 @@ export function logSumExp(
   )
   return withGrad(out, "logSumExp", [x], g => {
     const gk = keepdim ? g : reshapeRaw(g, keepShape)
-    // d/dx log-sum-exp is the softmax of the same axis, so the rule
-    // reuses the node rather than a second composed expression.
+    // d/dx log-sum-exp is the softmax of the same axis.
     return [rawBinary(rawSoftmax(x, d, false), gk, "mul")]
   })
 }
 
-/**
- * Rows of `table` addressed by an index of ANY rank — `Embedding` on a
- * `[B, T]` batch of token ids without the flatten/unflatten dance
- * `indexSelect` forces at run time.
- */
+/** Rows of `table` addressed by an index of any rank. */
 export function gatherRows<
   S extends Shape,
   I extends Shape,
@@ -1841,17 +1660,7 @@ export function scatterAddRows<
   ]) as Tensor<[R, ...Drop<S, I["length"] & number>]>
 }
 
-/**
- * Inverted dropout: keep with probability `1-p` and scale the survivors by
- * `1/(1-p)`, so the expectation is the identity and inference needs no
- * rescaling. The node draws its mask once and the backward multiplies by
- * that same mask (see `storage.ts`'s `dropout` for why the mask is a second
- * output on today's runtime).
- *
- * `p` is a trace-time literal in Phase A: training and evaluation are two
- * compiled programs, which is already what D28's train/eval mismatch check
- * requires. W3.4 makes it a runtime scalar and collapses them into one.
- */
+/** Inverted dropout: survivors are scaled by `1/(1-p)` so the expectation is the identity. */
 export function dropout<S extends Shape>(
   x: Tensor<S>,
   p: number,
@@ -1863,11 +1672,7 @@ export function dropout<S extends Shape>(
   ]) as Tensor<S>
 }
 
-/**
- * Explicit materialisation. A no-op on a runtime that materialises every
- * node anyway; it exists so Phase B's layout pass has a node to insert and
- * so a kernel that demands contiguity can say so in the IR today.
- */
+/** Explicit materialisation; a no-op on this runtime. */
 export function contiguous<S extends Shape>(
   x: Tensor<S>,
 ): Tensor<S> {

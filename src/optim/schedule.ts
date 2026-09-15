@@ -1,47 +1,22 @@
-/**
- * Learning-rate schedules (W1.10, §3.4 of PLAN-V2). Every schedule is a
- * plain `(step: number) => number` — no coupling to `Optimizer` at all,
- * so the call site is always the same:
- *
- * ```ts
- * const sched = cosine({ base: 3e-4, steps: 1000 })
- * for (let step = 0; step < 1000; step++) {
- *   opt.lr = sched(step)
- *   ...
- * }
- * ```
- *
- * `step` is 0-indexed (the value the caller is *about to* use), matching
- * the convention every call site above already follows for `opt.step()`
- * counters elsewhere in the optimizer.
- */
+/** A learning-rate schedule: `(step: number) => number`, with `step` 0-indexed. */
 export type Schedule = (step: number) => number
 
-/** Clamp `step` into `[0, steps]` — every schedule below holds its
- * boundary value forever outside its declared horizon rather than
- * extrapolating past it (a training loop that overruns its own step
- * budget should not silently get a negative or runaway lr). */
+/** Clamps `step` into `[0, steps]`, so every schedule holds its boundary value past its horizon. */
 function clampStep(step: number, steps: number): number {
   return Math.min(Math.max(step, 0), steps)
 }
 
-/** Cosine interpolation from `from` (t=0) to `to` (t=1); `t` need not be
- * clamped by the caller — the two schedules below already clamp before
- * calling it. */
+/** Cosine interpolation from `from` (t=0) to `to` (t=1). */
 function cosineBetween(t: number, from: number, to: number): number {
   return to + (from - to) * 0.5 * (1 + Math.cos(Math.PI * t))
 }
 
-/** Always `lr`, every step. The trivial schedule, useful as `inner` for
- * {@link warmup} when only the ramp-up matters. */
+/** Always `lr`; useful as `inner` for {@link warmup}. */
 export function constant(lr: number): Schedule {
   return () => lr
 }
 
-/**
- * Cosine anneal from `base` at step 0 down to `min` (default 0) at
- * `steps`, then hold at `min`.
- */
+/** Cosine anneal from `base` at step 0 down to `min` (default 0) at `steps`, then hold. */
 export function cosine(
   o: { base: number; steps: number; min?: number },
 ): Schedule {
@@ -49,10 +24,7 @@ export function cosine(
   return step => cosineBetween(clampStep(step, o.steps) / o.steps, o.base, min)
 }
 
-/**
- * Straight-line decay from `base` at step 0 to `min` (default 0) at
- * `steps`, then hold at `min`.
- */
+/** Straight-line decay from `base` at step 0 to `min` (default 0) at `steps`, then hold. */
 export function linearDecay(
   o: { base: number; steps: number; min?: number },
 ): Schedule {
@@ -63,11 +35,7 @@ export function linearDecay(
   }
 }
 
-/**
- * Multiplies `base` by `gamma` every `every` steps: `base * gamma **
- * floor(step / every)`. The classic "drop the lr by 10x every N epochs"
- * schedule.
- */
+/** Multiplies `base` by `gamma` every `every` steps. */
 export function stepDecay(
   o: { base: number; every: number; gamma: number },
 ): Schedule {
@@ -77,27 +45,14 @@ export function stepDecay(
   return step => o.base * o.gamma ** Math.floor(Math.max(step, 0) / o.every)
 }
 
-/**
- * Wraps `inner` with a linear ramp: for the first `steps` calls, ramps
- * from 0 up to `inner(0)` (the value `inner` would have produced at its
- * own step 0); from `steps` on, defers to `inner(step - steps)` — so
- * `inner` runs its own horizon starting the moment warmup ends, and
- * `warmupCosine`/`warmup(linearDecay(...), n)` compose for free.
- */
+/** Linear ramp from 0 to `inner(0)` over the first `steps` calls, then defers to `inner(step - steps)`. */
 export function warmup(inner: Schedule, steps: number): Schedule {
   if (steps <= 0) return step => inner(step)
   const target = inner(0)
   return step => step < steps ? target * (step + 1) / steps : inner(step - steps)
 }
 
-/**
- * `warmup` fused with `cosine`: ramps 0 → `base` over `warmupSteps`, then
- * cosine-anneals `base` → `min` (default 0) over the remaining
- * `totalSteps - warmupSteps`. Equivalent to
- * `warmup(cosine({ base, steps: totalSteps - warmupSteps, min }), warmupSteps)`,
- * spelled out because it is the single most common schedule for
- * transformer training (§3.7's GPT example, §4.2's nanoGPT bench).
- */
+/** `warmup` fused with `cosine`: ramp 0 to `base` over `warmupSteps`, then cosine-anneal `base` to `min` (default 0) over the rest. */
 export function warmupCosine(
   o: { base: number; warmupSteps: number; totalSteps: number; min?: number },
 ): Schedule {
@@ -105,13 +60,7 @@ export function warmupCosine(
   return warmup(cosine({ base: o.base, steps: decaySteps, min: o.min }), o.warmupSteps)
 }
 
-/**
- * The 1-cycle policy (Smith 2018): cosine-anneal *up* from `base /
- * divFactor` to `base` over the first `pctStart` fraction of `steps`,
- * then cosine-anneal *down* from `base` to `base / (divFactor *
- * finalDivFactor)` over the rest. Defaults match PyTorch's
- * `OneCycleLR(..., anneal_strategy="cos")`.
- */
+/** The 1-cycle policy (Smith 2018): cosine-anneal up from `base / divFactor` to `base`, then down to `base / (divFactor * finalDivFactor)`. Defaults match PyTorch's `OneCycleLR`. */
 export function oneCycle(
   o: {
     base: number

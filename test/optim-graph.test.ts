@@ -190,8 +190,8 @@ describe("compiled training step (forward + backward + optimizer)", () => {
   // Adam's bias correction depends on the step count, which a graph
   // traced once cannot hold as a constant. It rides along as a leaf
   // instead, so a compiled Adam step has to advance in lockstep with an
-  // eager one — including over the first few steps, where the
-  // corrections are furthest from 1.
+  // eager one, including over the first few steps where the corrections
+  // are furthest from 1.
   it("tracks eager Adam step by step when compiled", () => {
     const reference = makeXorNet()
     const compiled = makeXorNet()
@@ -236,7 +236,7 @@ describe("compiled training step (forward + backward + optimizer)", () => {
   it("clips gradients inside a compiled step", () => {
     // A loss scaled up hard produces gradients far above the clip, so
     // every step is clipped and the parameter moves by exactly
-    // lr * maxNorm / ||g|| along the gradient — matching eager.
+    // lr * maxNorm / ||g|| along the gradient, matching eager.
     const reference = makeXorNet()
     const compiled = makeXorNet()
     const refOpt = new SGD(reference.params, { lr: 0.1 })
@@ -433,18 +433,11 @@ describe.skipIf(!available)(
 )
 
 describe("scalar optimizer options inside a compiled step", () => {
-  // Expected red, still: W1.10 makes `SGD.lr`/`Adam.lr` a public mutable
-  // field (no more `private readonly`, no more cast needed to reach it —
-  // see the plain `opt.lr = ...` below), but that alone does not make it
-  // *live* under `compile()`. The graph path reads `this.lr` once, at
-  // trace time, and bakes it into a constant leaf; a compiled step is
-  // traced only on its first call, so reassigning `opt.lr` afterward
-  // changes nothing about later calls to the same compiled function — a
-  // live correctness bug today, untested only because every other case
-  // in this file uses a fixed lr. That is A-S1's job (PLAN-V2 §5A.2b: a
-  // rebindable scalar carried as an always-dirty leaf), parked by the
-  // showcase cut (§5A.9) alongside the rest of A-S1; W3.4 turns this
-  // green for good once A-S1 is unparked.
+  // Expected red, on purpose: the graph path reads `this.lr` once at
+  // trace time and bakes it into a constant leaf, so reassigning `opt.lr`
+  // after the first call changes nothing about later calls to the same
+  // compiled function. A live correctness bug, tracked as a rebindable
+  // always-dirty scalar leaf.
   it.fails("lr is live: opt.lr takes effect on the next compiled step", () => {
     const net = makeXorNet()
     const opt = new SGD(net.params, { lr: 1e-3 })

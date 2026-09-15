@@ -1,7 +1,5 @@
-// `indexSelect` / `scatterAdd` at embedding scale (PLAN-V2 §4.2, W0.3) —
-// the raw ops macro-embedding.ts composes into a model; here they run
-// directly, with no autograd graph, at V ∈ {65, 4096, 50257} and
-// batch×block = 16 384 ids.
+// indexSelect / scatterAdd run directly, with no autograd graph, at
+// embedding scale.
 
 import { disableNative, useNative } from "../index.ts"
 import { rand } from "../src/factories.ts"
@@ -27,9 +25,9 @@ const CASES: readonly GatherScatterCase[] = SIZE_CONFIG.vocabs.flatMap(vocabSize
   { id: `scatterAdd-v${vocabSize}`, kind: "scatterAdd" as const, vocabSize },
 ])
 
-/** Branded via `.toIndex()` (OWNER-5, D25): `indexSelect`/`scatterAdd`
- * take an `IndexTensor`, never a bare tensor. The brand check is a
- * one-time integrality scan here, outside every timed region. */
+/** Branded via `.toIndex()`: `indexSelect`/`scatterAdd` take an
+ * `IndexTensor`, never a bare tensor. The brand check is a one-time
+ * integrality scan here, outside every timed region. */
 function randomIds(vocabSize: number, count: number): IndexTensor<[number]> {
   const data = new Float32Array(count)
   for (let i = 0; i < count; i++) data[i] = Math.floor(Math.random() * vocabSize)

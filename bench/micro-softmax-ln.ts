@@ -1,11 +1,7 @@
-// softmax (causal and not) and layer norm at [N,C], C ∈ {64,128,384,1024},
-// plus cross-entropy fwd+bwd at [16384,65] (PLAN-V2 §4.2, W0.3). Neither
-// softmax nor layer norm has a fused row-wise kernel yet (D8 is a later
-// wave) — softmax uses the builtin `.softmax()` (itself composed from
-// max/sub/exp/div, see `tensor.ts`'s `softmaxShift`), and layer norm is
-// hand-composed here from `mean`/`sub`/`pow`/`sqrt`/`div`.
-//
-// `ce-16384x65` is load-bearing: G4.3 reads it.
+// softmax (causal and not) and layer norm at [N,C], plus cross-entropy
+// fwd+bwd. Neither softmax nor layer norm has a fused row-wise kernel:
+// softmax uses the builtin `.softmax()` and layer norm is hand-composed
+// here. The `ce-16384x65` id is load-bearing; do not rename it.
 
 import { crossEntropy, disableNative, useNative } from "../index.ts"
 import { rand, randn } from "../src/factories.ts"
@@ -32,8 +28,7 @@ const CASES: readonly SoftmaxLnCase[] = [
   // Causal softmax only makes sense on a square score-like matrix.
   ...WIDTHS.map(c => ({ id: `softmax-causal-${c}`, kind: "softmax-causal" as const, rows: c, cols: c })),
   ...WIDTHS.map(c => ({ id: `layernorm-${c}`, kind: "layernorm" as const, rows: ROWS, cols: c })),
-  // Load-bearing (full only): G4.3 reads this exact id at 16384x65 —
-  // `ce-smoke` is a smoke-only stand-in, never read by that gate.
+  // Full-only id is load-bearing; the smoke stand-in is never read by tooling.
   {
     id: SMOKE ? "ce-smoke" : `ce-${CE_ROWS}x${CE_COLS}`,
     kind: "cross-entropy" as const,
@@ -50,8 +45,7 @@ function causalMask(n: number): AnyTensor {
   return fromFlat(data, [n, n])
 }
 
-/** Hand-composed layer norm over the last axis, with affine parameters —
- * no `LayerNorm` module exists in `src/nn.ts` yet. */
+/** Hand-composed layer norm over the last axis; no LayerNorm module exists yet. */
 function layerNorm(x: AnyTensor, gamma: AnyTensor, beta: AnyTensor, eps = 1e-5): AnyTensor {
   const mean = x.mean(1, true)
   const centered = x.sub(mean)
@@ -118,9 +112,7 @@ async function main(): Promise<void> {
       case "cross-entropy": {
         let t = targets.get(kase.rows)
         if (!t) {
-          // `crossEntropy` takes a branded `IndexTensor` (OWNER-5, D26);
-          // built once per size, outside the timed op, like the masks and
-          // affine params above.
+          // Branded index, built once per size outside the timed op.
           t = Tensor.indices(
             Array.from({ length: kase.rows }, () => Math.floor(Math.random() * kase.cols)),
             [kase.rows],

@@ -22,10 +22,7 @@ export function noGrad<T>(fn: () => T): T {
   }
 }
 
-/**
- * Iterative for the same reason as `topoOrder` — the tape
- * behind a long rollout is thousands of nodes deep.
- */
+/** Iterative, not recursive: a long rollout's tape is thousands of nodes deep. */
 function tapeOrder(root: AnyTensor): AnyTensor[] {
   const topo: AnyTensor[] = []
   const seen = new Set<AnyTensor>()
@@ -69,10 +66,7 @@ function withGrad(
   return result
 }
 
-/**
- * Reverse-mode sweep from `root`. The implementation lives here rather
- * than on the class body; `Tensor.backward` delegates.
- */
+/** Reverse-mode sweep from `root`; `Tensor.backward` delegates here. */
 function runBackward(
   root: AnyTensor,
   gradient: AnyTensor | undefined,
@@ -141,15 +135,8 @@ function runBackward(
 
   if (lazyPath) {
     walk()
-    // Materialize the whole forward topo plus every parameter grad
-    // in a single multi-root forcing point (one native FFI hop when
-    // native is enabled). The forward tensors are forced too so that
-    // values read after an in-place optimizer step (which mutates
-    // the leaf parameter data) still see pre-step values, matching
-    // eager and phase-1 lazy semantics. During a compile() trace the
-    // forcing is deferred: the lazy grads stay graph expressions and
-    // the traced optimizer updates (plus the grads themselves) become
-    // extra roots of the compiled graph, materialized on replay.
+    // One multi-root forcing point (one FFI hop); forward tensors are forced too
+    // so post-optimizer-step reads still see pre-step values.
     if (!activeTrace()) {
       forceMany([
         ...topo,

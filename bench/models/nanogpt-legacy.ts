@@ -1,16 +1,10 @@
 "use tsover"
 
-// nanoGPT written against **today's API only** (PLAN-V2 §4.2, W0.12): hand-
-// rolled causal attention in the style of `examples/gat.ts`, softmax and
-// layernorm composed from primitive ops (there is no `LayerNorm` in `nn.ts`
-// yet), `indexSelect`-based token/position embedding, and
-// `crossEntropy(logits, number[])` for the loss. This is a *baseline* — the
-// "naive composition on today's runtime" row of §6.2 — not a preview of the
-// layer catalog Wave 5 adds.
-//
-// W5.7 rewrites this model against the new API and must reproduce
-// `bench/macro-nanogpt.ts`'s 50-step loss curve to 1e-6 (that file documents
-// the exact seed / data / hyperparameters the reproduction depends on).
+// nanoGPT written against today's API only: hand-rolled causal attention,
+// softmax and layernorm composed from primitives, indexSelect-based token
+// and position embeddings, crossEntropy(logits, number[]) for the loss.
+// This is the naive-composition baseline, not a preview of the layer
+// catalog.
 
 import { crossEntropy, fromFlat, Linear, Module, ones, rand, Tensor, zeros } from "../../index.ts"
 import type { IndexTensor } from "../../src/shape.ts"
@@ -26,17 +20,14 @@ export interface NanoGptConfig {
   readonly vocabSize: number
 }
 
-/**
- * GELU (tanh approximation, Hendrycks & Gimpel) composed from today's API —
- * there is no built-in `gelu`.
- */
+/** GELU (tanh approximation) composed from primitives; no built-in `gelu`. */
 function gelu(x: AnyTensor): AnyTensor {
   const c = Math.sqrt(2 / Math.PI)
   const inner = x.add(x.pow(3).mul(0.044715)).mul(c)
   return x.mul(0.5).mul(inner.tanh().add(1))
 }
 
-/** Composed from `mean`/`sub`/`sqrt` — there is no built-in `LayerNorm`. */
+/** No built-in LayerNorm, so composed from primitives. */
 class LayerNorm extends Module {
   readonly gamma: AnyTensor
   readonly beta: AnyTensor
@@ -59,11 +50,9 @@ class LayerNorm extends Module {
 }
 
 /**
- * Hand-rolled causal multi-head self-attention, in the style of
- * `examples/gat.ts`'s hand-rolled attention head: one fused QKV projection,
- * split into heads via `view` + `permute`, a precomputed additive causal
- * mask (`-1e9` above the diagonal, the same convention `gat.ts` uses for
- * "no edge"), and `softmax` on the last axis.
+ * Hand-rolled causal multi-head self-attention: one fused QKV projection,
+ * heads split via `view` + `permute`, a precomputed additive causal mask,
+ * softmax on the last axis.
  */
 class CausalSelfAttention extends Module {
   readonly qkv: Linear<number, number>
@@ -100,16 +89,11 @@ class CausalSelfAttention extends Module {
     const k = qkv.narrow(-1, C!, C!)
     const v = qkv.narrow(-1, 2 * C!, C!)
 
-    // The extra `.view()` after `.permute()` is a same-shape reshape, a
-    // no-op in eager JS — but a `View` node's *native* evaluator always
-    // materializes a contiguous copy first (`get(input)?.contiguous()?`,
-    // `native/src/lib.rs`), which this needs before the result becomes a
-    // matmul operand: candle's native matmul supports a plain last-two-dims
-    // transpose directly but rejects this permute's "swap the middle two
-    // axes" stride pattern as an operand (`MatMulUnexpectedStriding`,
-    // `"non-contiguous lhs"`) — a pre-existing native-backend gap (no
-    // general strided-GEMM support yet, PLAN-V2 §2.9's `_NO_STRIDED_GEMM`),
-    // not something fixable from here.
+    // The second `.view()` is a same-shape no-op in eager JS, but the
+    // native evaluator materializes a contiguous copy there, which this
+    // needs before the result becomes a matmul operand: candle's matmul
+    // rejects this permute's swap-the-middle-two-axes stride pattern
+    // (MatMulUnexpectedStriding, "non-contiguous lhs").
     const splitHeads = (t: AnyTensor): AnyTensor =>
       t.view([B!, T!, this.nHead, this.headDim])
         .permute(0, 2, 1, 3)
@@ -162,10 +146,10 @@ class Block extends Module {
 }
 
 /**
- * nanoGPT (Karpathy's `model.py` shape) built entirely from today's public
- * API: `indexSelect`-based token + learned position embedding, `nLayer`
- * pre-norm transformer blocks, a final `LayerNorm`, and an untied `Linear`
- * output head (weight tying is a Wave 5 concern, not a baseline one).
+ * nanoGPT (Karpathy's `model.py` shape) built entirely from the public API:
+ * `indexSelect`-based token + learned position embedding, `nLayer` pre-norm
+ * transformer blocks, a final `LayerNorm`, and an untied `Linear` output
+ * head.
  */
 export class NanoGptLegacy extends Module {
   readonly wte: AnyTensor
@@ -186,8 +170,7 @@ export class NanoGptLegacy extends Module {
     this.blocks = Array.from({ length: cfg.nLayer }, () => new Block(cfg))
     this.lnF = new LayerNorm(cfg.nEmbd)
     this.head = new Linear(cfg.nEmbd, cfg.vocabSize)
-    // `.toIndex()` brands it for `indexSelect` (OWNER-5, D25). Done in
-    // the constructor, eagerly: the brand check reads `.data`, which
+    // Branded eagerly in the constructor: `.toIndex()` reads `.data`, which
     // would force the graph if it happened inside `forward` under
     // `compile()`.
     this.posIndex = fromFlat(
@@ -199,11 +182,10 @@ export class NanoGptLegacy extends Module {
   /** `idx`: `[B, T]` float32 token ids (T must equal `cfg.blockSize`). Returns `[B, T, vocabSize]` logits. */
   forward(idx: AnyTensor): AnyTensor {
     const [B, T] = idx.shape as number[]
-    // `view` does not carry the index brand forward, and re-branding with
-    // `.toIndex()` would read `.data` — fatal here, because `forward` runs
-    // inside `compile()`'s trace where `idx` is a placeholder. The ids
-    // `generateBatch` produced are integral by construction, so the brand
-    // is asserted rather than re-checked.
+    // `view` does not carry the index brand, and re-branding with
+    // `.toIndex()` would read `.data` (an error inside `compile()`'s
+    // trace, where `idx` is a placeholder). The ids are integral by
+    // construction, so the brand is asserted rather than re-checked.
     const flatIdx = idx.view([B! * T!]) as unknown as IndexTensor<[number]>
     const tok = this.wte.indexSelect(flatIdx).view([B!, T!, this.cfg.nEmbd])
     const pos = this.wpe.indexSelect(this.posIndex) // [T, C], broadcasts over batch
@@ -216,20 +198,15 @@ export class NanoGptLegacy extends Module {
 
 /** `logits`: `[B, T, V]`; `targets`: `B * T` next-token ids, row-major.
  *
- * `crossEntropy` takes a branded `IndexTensor` (OWNER-5, D26), so the
- * plain array is wrapped here. It is deliberately a **float32** leaf
- * (`fromFlat` + `.toIndex()`, not `Tensor.indices`, which builds int32):
- * the loss reaches the ids through `oneHot`, and `serializeLazyGraph`
- * only lets an integer leaf feed a gather/scatter index — an int32 leaf
- * into `oneHot` is rejected when this model is traced by `compile()`.
- * float32 is also the dtype the pre-D26 array path used, so the loss
- * curve this baseline pins is bit-for-bit what it was. */
+ * The ids are wrapped as a **float32** leaf (`fromFlat` + `.toIndex()`, not
+ * `Tensor.indices`, which builds int32): the loss reaches them through
+ * `oneHot`, and the tracer only lets an integer leaf feed a gather/scatter
+ * index, so an int32 leaf into `oneHot` is rejected under `compile()`. */
 export function nanoGptCrossEntropy(logits: AnyTensor, targets: readonly number[]): AnyTensor {
   const [B, T, V] = logits.shape as number[]
-  // The brand is asserted, not checked: `.toIndex()` reads `.data`, and
-  // this runs inside `compile()`'s trace, where reading a tensor's values
-  // is an error. `generateBatch` floors every target into `[0, vocabSize)`,
-  // so integrality holds by construction.
+  // Asserted, not checked: `.toIndex()` reads `.data`, which is an error
+  // inside `compile()`'s trace. `generateBatch` floors every target into
+  // `[0, vocabSize)`, so integrality holds by construction.
   const ids = fromFlat(Float32Array.from(targets), [targets.length]) as unknown as IndexTensor<
     [number]
   >
@@ -237,13 +214,10 @@ export function nanoGptCrossEntropy(logits: AnyTensor, targets: readonly number[
 }
 
 /**
- * A deterministic synthetic next-token batch — there is no dataset here,
- * only what pins the loss curve numerically. Draws `batch * (blockSize +
- * 1)` uniform values through the shared seeded generator (`configure({
- * seed })` in `src/lazy.ts` — the same stream `Tensor.rand`/`Tensor.randn`
- * draw from) and floors them into ids in `[0, vocabSize)`. Row `b`'s first
- * `blockSize` ids are the input; the same row shifted one position over is
- * the next-token target.
+ * Deterministic synthetic next-token batch: draws `batch * (blockSize + 1)`
+ * uniforms from the shared seeded generator and floors them into ids in
+ * `[0, vocabSize)`. Row `b`'s first `blockSize` ids are the input; the same
+ * row shifted one position over is the next-token target.
  */
 export function generateBatch(cfg: NanoGptConfig): { idx: AnyTensor; targets: number[] } {
   const { batch, blockSize, vocabSize } = cfg

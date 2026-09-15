@@ -1,17 +1,11 @@
-// Sweeps `TYPENET_THREADS=1..10` × `{add, mul-chain, gelu-composed,
-// sum-last-axis}` × `n ∈ {1k,4k,16k,64k,256k,1M,4M}` and writes the raw
-// grid — the input to W6.7's measured constant table (PLAN-V2 §4.2,
-// W0.3).
+// Sweeps `TYPENET_THREADS=1..10` x ops x sizes and writes the raw grid.
 //
-// `TYPENET_THREADS` is read once behind a Rust `OnceLock`
-// (`native/src/lib.rs`'s `switches()`), so a same-process env mutation
-// between samples would silently never be observed. This driver instead
-// spawns one subprocess per thread count, with the env var set *before*
-// that process's native addon ever loads; each subprocess (the "worker")
-// runs the full op × size grid for its one fixed thread count and
-// appends its own JSONL rows directly, via the same `bench()` harness
-// (which reads `--only`/`--mode`/`--device`/`--tag` from its own argv,
-// forwarded unchanged from the driver).
+// `TYPENET_THREADS` is read once behind a Rust OnceLock, so a same-process
+// env mutation between samples would silently never be observed. The
+// driver instead spawns one subprocess per thread count, with the env var
+// set before that process's native addon loads; each worker runs the full
+// op x size grid and appends its own JSONL rows via the shared `bench()`
+// harness (flags forwarded unchanged from the driver).
 
 import { spawnSync } from "node:child_process"
 import { disableNative, isNativeAvailable, useNative } from "../index.ts"
@@ -21,8 +15,7 @@ import type { AnyTensor } from "../src/tensor.ts"
 import { bench, type BenchCaseSpec, isSmokeRun } from "./lib/harness.ts"
 import { THREADING_FULL, THREADING_SMOKE } from "./lib/sizes.ts"
 
-// `--full` (forwarded to every spawned worker below) is what each
-// subprocess re-reads to pick the same config the driver used.
+// `--full` is forwarded to every spawned worker, which re-reads it.
 const SIZE_CONFIG = isSmokeRun() ? THREADING_SMOKE : THREADING_FULL
 const THREAD_COUNTS = SIZE_CONFIG.threadCounts
 const SIZES = SIZE_CONFIG.sizes
@@ -34,9 +27,7 @@ const OPS: readonly Op[] = ["add", "mul-chain", "gelu-composed", "sum-last-axis"
 const WORKER_MARKER = "TN_THREADING_WORKER"
 
 function gelu(x: AnyTensor): AnyTensor {
-  // tanh-approximate GELU: 0.5x(1 + tanh(sqrt(2/pi)(x + 0.044715x^3))) —
-  // the D10-weighted "8" transcendental op, hand-composed (no fused GELU
-  // kernel exists yet).
+  // Tanh-approximate GELU, hand-composed (no fused kernel exists yet).
   const c = Math.sqrt(2 / Math.PI)
   const inner = x.add(x.pow(3).mul(0.044715)).mul(c)
   return x.mul(0.5).mul(inner.tanh().add(1))
@@ -82,10 +73,8 @@ async function runWorker(threads: number): Promise<void> {
       const out = applyOp(x, kase.op)
       out.data // force materialization
     },
-    // Halved from the harness default (still floored at 3/10 there) —
-    // 10 thread counts × 4 ops × 7 sizes already means 280 grid points;
-    // the point of this script is the *shape* of the threading curve,
-    // not tight percentiles on each cell.
+    // Halved from the harness default: 280 grid points already, and the
+    // point is the shape of the threading curve, not tight percentiles.
     { warmup: 3, samples: 10 },
   )
 }
@@ -99,17 +88,11 @@ async function runDriver(): Promise<void> {
     return
   }
 
-  // `TYPENET_THREADS` is only ever *read* (behind that `OnceLock`) once an
-  // actual native op runs — `isNativeAvailable()` above only `require()`s
-  // the addon, it never touches switches() — so with exactly one thread
-  // count to run (the smoke default; see `THREADING_SMOKE` in
-  // bench/lib/sizes.ts) there is nothing to isolate a subprocess against:
-  // setting the env var here and calling `runWorker` in-process gets the
-  // identical result for a fraction of the cost of a second `vite-node`
-  // startup, which is what pushed this script's smoke run over the 30s
-  // budget. Sweeping more than one count still needs one subprocess per
-  // value, since the first real op in *this* process would freeze the
-  // OnceLock for the rest of its lifetime.
+  // With exactly one thread count there is nothing to isolate a subprocess
+  // against: the OnceLock only freezes once a real native op runs, so
+  // setting the env var and running in-process gives the identical result
+  // for a fraction of the cost of a second vite-node startup. Sweeping
+  // more than one count still needs one subprocess per value.
   if (THREAD_COUNTS.length === 1) {
     const threads = THREAD_COUNTS[0]!
     console.log(`micro-threading: TYPENET_THREADS=${threads} (in-process — only one count to run)`)

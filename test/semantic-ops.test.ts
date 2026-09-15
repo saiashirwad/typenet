@@ -25,7 +25,7 @@ import { bothWays, expectClose } from "./helpers.ts"
 
 type AnyTensor = Tensor<any>
 
-/** Exact equality, element for element — `expectClose` is strictly `<`. */
+/** Exact equality, element for element; `expectClose` is strictly `<`. */
 function expectExact(a: AnyTensor, b: AnyTensor): void {
   expect(b.shape).toEqual(a.shape)
   expect(Array.from(b.data)).toEqual(Array.from(a.data))
@@ -36,14 +36,9 @@ afterEach(() => {
   disableNative()
 })
 
-// ---------------------------------------------------------------------------
-// 1. Each semantic kernel against the composition it replaces.
-//
-// This is the Phase A form of "the kernel is right": §5A.2a pins each node's
-// arithmetic to one written-out composition of primitives, so the honest
-// check is against that composition written independently here, not against
-// a magic constant nobody can re-derive.
-// ---------------------------------------------------------------------------
+// Each semantic kernel against the composition it replaces: the honest
+// check is against that composition written independently here, not
+// against a magic constant nobody can re-derive.
 
 const sample = (n: number, shape: number[]): AnyTensor =>
   fromFlat(
@@ -133,9 +128,8 @@ describe("semantic ops match the composition they replace", () => {
 
   it("crossEntropy == the logSoftmax/one-hot composition", () => {
     const logits = sample(12, [4, 3])
-    // `nn.crossEntropy` takes a branded `IndexTensor` (OWNER-5, D26), so
-    // the target ids are built once and shared with the tensor-level
-    // `crossEntropy` below rather than passed as a plain array.
+    // `nn.crossEntropy` takes a branded `IndexTensor`, so the target ids
+    // are built once and shared with the tensor-level `crossEntropy` below.
     const targets = Tensor.indices([2, 0, 1, 2], [4])
     expectClose(
       crossEntropy(
@@ -177,10 +171,8 @@ describe("semantic ops match the composition they replace", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 2. Eager and the lazy interpreter run the same kernel, so they agree to
-//    the last bit — not to a tolerance.
-// ---------------------------------------------------------------------------
+// Eager and the lazy interpreter run the same kernel, so they agree bit
+// for bit, not to a tolerance.
 
 describe("eager and lazy agree bit for bit", () => {
   const bits = (t: AnyTensor): Uint32Array =>
@@ -255,10 +247,7 @@ describe("eager and lazy agree bit for bit", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 3. Causal softmax: the mask is the node's, not a buffer's.
-// ---------------------------------------------------------------------------
-
+// Causal softmax: the mask is the node's, not a buffer's.
 describe("softmax{causal}", () => {
   it("zeroes the strict upper triangle exactly and keeps rows summing to 1", () => {
     const scores = sample(18, [2, 3, 3])
@@ -283,10 +272,7 @@ describe("softmax{causal}", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 4. Dropout: one draw, shared by the forward and the backward.
-// ---------------------------------------------------------------------------
-
+// Dropout: one draw, shared by the forward and the backward.
 describe("dropout", () => {
   it("p = 0 is exactly the identity", () => {
     const x = sample(16, [4, 4])
@@ -317,23 +303,19 @@ describe("dropout", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 5. W4.1 step 6 / accept #3: the node count of a broadcast backward.
-// ---------------------------------------------------------------------------
-
 describe("sumTo emits one reduce, not one per axis", () => {
   const nodeLines = (t: AnyTensor): string[] => printGraph(t).split("\n")
 
   beforeEach(() => configure({ lazy: true }))
 
-  it("[2,3,4] -> [4] is leaf + ONE reduce (was leaf + two)", () => {
+  it("[2,3,4] -> [4] is leaf + one reduce", () => {
     const lines = nodeLines(sumTo(sample(24, [2, 3, 4]), [4]))
     expect(lines).toHaveLength(2)
     expect(lines[1]).toContain("reduce.sum")
     expect(lines[1]).toContain("dims=[0, 1]")
   })
 
-  it("[2,3,4] -> [] is leaf + ONE reduce (was leaf + three)", () => {
+  it("[2,3,4] -> [] is leaf + one reduce", () => {
     const lines = nodeLines(sumTo(sample(24, [2, 3, 4]), []))
     expect(lines).toHaveLength(2)
     expect(lines[1]).toContain("dims=[0, 1, 2]")
@@ -359,10 +341,6 @@ describe("sumTo emits one reduce, not one per axis", () => {
     expect(lines[1]).toContain("dims=[0]")
   })
 })
-
-// ---------------------------------------------------------------------------
-// 6. The wire encoding of `reduce{dims}`.
-// ---------------------------------------------------------------------------
 
 describe("reduce{dims} on the wire", () => {
   beforeEach(() => configure({ lazy: true }))
@@ -408,16 +386,9 @@ describe("reduce{dims} on the wire", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 7. W4.1 step 8 / accept #5: the eager matmul is bit-identical to the
-//    pre-item implementation.
-//
-// The reference below is a verbatim copy of `evalMatmulEager`'s inner loop
-// as it stood before W4.1. It is not a "nicer" matmul: it is THE one the
-// recorded loss curve (gate C3) was produced with, and any change to the
-// per-output accumulation order invalidates that curve.
-// ---------------------------------------------------------------------------
-
+// The reference below is a verbatim copy of `evalMatmulEager`'s inner
+// loop: it is the loop the recorded loss curves were produced with, and
+// any change to the per-output accumulation order invalidates them.
 function referenceMatmul(
   a: Float32Array,
   b: Float32Array,
@@ -438,7 +409,7 @@ function referenceMatmul(
   return out
 }
 
-describe("eager matmul is bit-identical to the pre-W4.1 implementation", () => {
+describe("eager matmul is bit-identical to the reference loop", () => {
   const SHAPES: [number, number, number][] = [
     [3, 5, 7],
     [16, 16, 16],
@@ -474,10 +445,6 @@ describe("eager matmul is bit-identical to the pre-W4.1 implementation", () => {
     ).toEqual(Array.from(new Uint32Array(want.buffer)))
   })
 })
-
-// ---------------------------------------------------------------------------
-// 8. The loud fallback (PLAN-V2 §5A.9's W4.1-A delta).
-// ---------------------------------------------------------------------------
 
 describe("graphs the addon cannot parse fall back, loudly", () => {
   beforeEach(() => {

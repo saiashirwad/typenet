@@ -47,14 +47,6 @@ import {
 } from "./storage.ts"
 import { _internal, type AnyTensor, makeStorage } from "./tensor.ts"
 
-// ---------------------------------------------------------------------------
-// The IR: one node constructor, one description table, and the raw*
-// dispatchers every typed method calls. A dispatcher computes the
-// output shape, then either records a node (lazy) or runs the eager
-// kernel — the kernels never see the mode flag, and the lazy evaluator
-// replays them through the same table.
-// ---------------------------------------------------------------------------
-
 let lazyMode = false
 
 export function isLazyMode(): boolean {
@@ -88,9 +80,7 @@ type TensorField =
   | "b"
   | "input"
   | "index"
-  // W4.1's semantic ops have named operands; keeping them in the same
-  // table-driven slot vocabulary is what lets `nodeInputs`,
-  // `formatLazyOp` and `serializeNode` stay generic (step 5).
+  // Named operands keep `nodeInputs` / `formatLazyOp` / `serializeNode` generic.
   | "grad"
   | "gamma"
   | "beta"
@@ -221,7 +211,6 @@ export const OP_DESC: Record<LazyNode["op"], OpDesc> = {
     printAttrs: [{ key: "stream" }],
   },
 
-  // --- W4.1 semantic ops ---------------------------------------------------
   gelu: {
     tensors: ["input"],
     json: ["input", "shape"],
@@ -322,8 +311,7 @@ export const OP_DESC: Record<LazyNode["op"], OpDesc> = {
     tensors: ["input"],
     json: ["out", "offset", "input", "shape"],
     printName: "op",
-    // `offset` is a build-time convenience for the kernel, not part of
-    // how a reader understands the graph, so it stays out of the print.
+    // `offset` is kernel plumbing; it stays out of the print.
     printAttrs: [{ key: "out" }],
   },
   contiguous: {
@@ -399,17 +387,7 @@ export function serializeNode(
   return out
 }
 
-/**
- * Post-order traversal of the lazy graph reachable from `roots`: every
- * tensor appears after all of its inputs, each exactly once. Leaves
- * (non-lazy or already-materialized tensors) are included, with no
- * inputs of their own.
- *
- * Iterative on purpose. A compiled training step for a cellular
- * automaton rolls the update rule out over dozens of time steps and
- * then differentiates it, which is a graph thousands of nodes deep —
- * far past what recursion survives.
- */
+/** Post-order over the lazy graph reachable from `roots`; iterative because real graphs run thousands of nodes deep. */
 export function topoOrder(
   roots: readonly AnyTensor[],
 ): AnyTensor[] {
@@ -426,8 +404,7 @@ export function topoOrder(
     const source = _internal.sourceOf(t)
     stack.push({
       t,
-      // A materialized lazy tensor is a leaf: its value is frozen, so
-      // nothing below it is walked (or re-randomized) again.
+      // A materialized lazy tensor is a leaf: its value is frozen.
       inputs: source.kind === "lazy" && !_internal.hasValue(t)
         ? nodeInputs(source.node)
         : [],
@@ -448,10 +425,6 @@ export function topoOrder(
   }
   return order
 }
-
-// ---------------------------------------------------------------------------
-// Dispatchers.
-// ---------------------------------------------------------------------------
 
 export function rawBinary(
   a: AnyTensor,
@@ -514,15 +487,7 @@ function reduceDimsShape(
     : shape.filter((_, i) => !dims.includes(i))
 }
 
-/**
- * A reduction over one *or several* axes (W4.1 step 6). One node, not one
- * per axis: `sumTo` below is the reason the multi-axis form exists, and it
- * runs in every broadcast backward rule in the library.
- *
- * `dims` is normalised, de-duplicated and sorted ascending here, so the
- * node's attribute is canonical and two structurally identical graphs
- * serialise identically.
- */
+/** `dims` is normalised, de-duplicated and sorted ascending, so two structurally identical graphs serialise identically. */
 export function rawReduceDims(
   a: AnyTensor,
   dims: readonly number[],
@@ -718,18 +683,7 @@ export function reshapeRaw(
   return _internal.makeView(t, shape)
 }
 
-/**
- * Sum `t` down to `shape` — the reverse of broadcasting, and the closing
- * move of every broadcast backward rule in the library.
- *
- * Before W4.1 this emitted one `reduce` node per reduced axis, so a
- * `[B, T, D] + [D]` bias backward cost two nodes and a `[B, T, D] * scalar`
- * backward cost three. It now emits **one** `reduce{dims}` plus, only when
- * the reduced shape is neither the keepdim nor the dropped form, one
- * `view`. The axes are reduced ascending, one at a time, which is exactly
- * the chain the old code emitted — so this is a node-count change and not a
- * numeric one (gate C3).
- */
+/** Sum `t` down to `shape`, the reverse of broadcasting. */
 export function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
   if (shapesEqual(t.shape, shape)) return t
   const offset = t.shape.length - shape.length
@@ -740,9 +694,7 @@ export function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
       dims.push(offset + i)
     }
   }
-  // Nothing to reduce: the two shapes are already broadcast-compatible in
-  // the only direction that matters. The pre-W4.1 loop returned `t`
-  // unchanged here too.
+  // Already broadcast-compatible: nothing to reduce.
   if (dims.length === 0) return t
   if (shapesEqual(reduceDimsShape(t.shape, dims, false), shape)) {
     return rawReduceDims(t, dims, false, "sum")
@@ -753,18 +705,8 @@ export function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
     : reshapeRaw(reduced, shape)
 }
 
-// ---------------------------------------------------------------------------
-// W4.1 semantic dispatchers.
-//
-// Each validates at GRAPH-BUILD time and names the shapes it rejected: a
-// wrong-shaped `gamma` is a user mistake, and finding it three nodes later
-// inside a kernel would name the wrong thing.
-//
-// Multi-output ops return a tensor ARRAY. In lazy mode that is one producer
-// node of shape `[total]` plus one `pick` per output; in eager mode it is
-// the kernel's flat result, sliced by the same arithmetic. Neither path adds
-// multi-output machinery to `storage.ts` (W4.1 step 2).
-// ---------------------------------------------------------------------------
+// Multi-output ops: lazy mode is one producer node plus one `pick` per
+// output; eager mode slices the kernel's flat result by the same arithmetic.
 
 function splitFlat(
   flat: AnyTensor,
@@ -857,9 +799,7 @@ export function rawSoftmax(
   requireFloat(a, "softmax")
   const d = normalizeDim(dim, a.shape.length)
   if (causal) {
-    // The mask is a property of the NODE, not a materialised `[T, T]`
-    // buffer — but it only means anything when the softmax runs over the
-    // key axis of a `[..., q, k]` score matrix.
+    // The mask lives in the node, not a materialised `[T, T]` buffer.
     if (a.shape.length < 2 || d !== a.shape.length - 1) {
       throw new Error(
         `softmax{causal}: needs the last axis of a rank>=2 score matrix; got dim ${d} of ${showShape(a.shape)}`,
@@ -1100,11 +1040,7 @@ export function rawScatterAddRows(
   return evalScatterAddRowsEager(src, index, rows)
 }
 
-/**
- * `(y, mask)`. The `stream` is fixed at graph-build time so a compiled
- * program's structure is stable across steps; the *seed* varies per
- * evaluation, which is what makes the mask resample.
- */
+/** `(y, mask)`. `stream` is fixed at build time so the graph structure is stable; the per-evaluation seed is what makes the mask resample. */
 export function rawDropout(
   x: AnyTensor,
   p: number,
@@ -1124,8 +1060,7 @@ export function rawDropout(
       x.dtype,
     )
   }
-  // Eager has no per-evaluation seed of its own: one is drawn here, so
-  // two eager `dropout` calls never share a mask.
+  // Eager draws its own seed so two calls never share a mask.
   return splitFlat(
     evalDropoutEager(x, p, stream, nextSeed()),
     outShapes,

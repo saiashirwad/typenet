@@ -1,12 +1,8 @@
-// The `mlp-legacy` macro benchmark (PLAN-V2 §4.2, W0.2): one full
-// zeroGrad + forward + mseLoss + backward + Adam.step() training step, at
-// batch 64 and 512, across all three modes. §0's baseline numbers —
-// eager 31.26 ms, interpreter 49.47 ms, native 1.50 ms at batch 64; native
-// 2.13 ms at batch 512 — are what `pnpm bench:macro` should reproduce
-// within ±10%.
-//
-// `mlp-legacy-*`'s shape, loss, and optimizer are frozen (`bench/models/mlp.ts`);
-// this file only drives it through the three modes and times one step.
+// `mlp-legacy` macro benchmark: one full zeroGrad + forward + mseLoss +
+// backward + Adam.step() training step at batch 64 and 512, across all
+// three modes. Baselines to reproduce with `pnpm bench:macro` within ±10%:
+// eager 31.26 ms, interp 49.47 ms, native 1.50 ms at batch 64; native
+// 2.13 ms at batch 512.
 
 import { compile, mseLoss, Tensor } from "../index.ts"
 import type { CompiledFn } from "../index.ts"
@@ -21,7 +17,7 @@ interface CaseState {
   x: AnyTensor
   y: AnyTensor
   optim: ReturnType<typeof mlpLegacyOptim>
-  /** Only built for `interp`/`native` — `eager` runs uncompiled every step. */
+  /** Only built for interp/native; eager runs uncompiled every step. */
   step: (CompiledFn<[AnyTensor, AnyTensor], AnyTensor> & { dispose(): void }) | null
 }
 

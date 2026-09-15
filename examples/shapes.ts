@@ -2,29 +2,20 @@
 
 /**
  * The type showcase: everything in this file is checked by `tsc`, and the
- * eight negative cases below are checked *twice* — once by `@ts-expect-error`
- * (which fails the build if the error stops firing) and once by
- * `test/examples.test.ts`, which strips the directives, re-runs `tsc`, and
- * compares the message it gets against the `// tsc(NNNN):` comment quoted
- * above each case. So the messages printed in the README are the messages a
- * user actually sees, not prose about them.
- *
- * WHY a whole file for this: the library's claim is that shapes are a
- * compile-time property. A claim like that is only worth as much as its
- * error messages, and an error message is the one part of a type system
- * that no test of the happy path ever exercises.
+ * eight negative cases below are checked *twice*: once by
+ * `@ts-expect-error` (which fails the build if the error stops firing) and
+ * once by `test/examples.test.ts`, which strips the directives, re-runs
+ * `tsc`, and compares the message against the `// tsc(NNNN):` comment
+ * quoted above each case.
  *
  * Running it (`pnpm example:shapes`) prints the runtime shape beside each
- * inferred type, which is the other half of the claim: the value twins
- * (`DimAdd`, `DimMul`) compute at run time exactly what their type twins
- * compute at compile time.
+ * inferred type: the value twins (`DimAdd`, `DimMul`) compute at run time
+ * exactly what their type twins compute at compile time.
  */
 
 import { cat, DimAdd, DimMul, Linear, Module, randn, ReLU, sequential, Tensor } from "../index.ts"
 
-// ---------------------------------------------------------------------------
 // 1. Shape inference through `sequential`
-// ---------------------------------------------------------------------------
 // `sequential` is typed as the *tuple* of its layers, so `forward` composes
 // their shape effects instead of collapsing to a bare `Tensor<number[]>`.
 // The width chain (784 -> 256 -> 256 -> 10) is checked at construction; the
@@ -48,13 +39,11 @@ function classify<B extends number>(x: Tensor<[B, 784]>): Tensor<[B, 10]> {
 
 const batch32: Tensor<[32, 10]> = classify(randn([32, 784]))
 
-// ---------------------------------------------------------------------------
 // 2. A generic `forward<B, T>`, with `DimMul` carrying the widths
-// ---------------------------------------------------------------------------
 // `DimMul` is a type *and* a value: the type multiplies the literal dims,
-// the function multiplies the numbers, and they are the same symbol — so
-// `new Linear(d, DimMul(4, d))` is a `Linear<D, DimMul<4, D>>` with nothing
-// written down twice and nothing forced.
+// the function multiplies the numbers, and they are the same symbol, so
+// `new Linear(d, DimMul(4, d))` is a `Linear<D, DimMul<4, D>>` with
+// nothing written down twice and nothing forced.
 
 class FeedForward<D extends number> extends Module {
   readonly up: Linear<D, DimMul<4, D>>
@@ -68,7 +57,7 @@ class FeedForward<D extends number> extends Module {
   }
 
   // Rank 3 in, rank 3 out, for every batch `B` and every sequence length
-  // `T` — `Linear` owns the last axis and lets any prefix ride along.
+  // `T`: `Linear` owns the last axis and lets any prefix ride along.
   forward<B extends number, T extends number>(x: Tensor<[B, T, D]>): Tensor<[B, T, D]> {
     return x + this.down.forward(this.act.forward(this.up.forward(x)))
   }
@@ -80,9 +69,7 @@ const mixed: Tensor<[2, 5, 16]> = ff.forward(randn([2, 5, 16]))
 // declared by the programmer.
 const hidden: Tensor<[16, 64]> = ff.up.weight
 
-// ---------------------------------------------------------------------------
 // 3. `DimAdd` in a concatenation
-// ---------------------------------------------------------------------------
 // Concatenation adds the widths. The signature says so, so the caller's
 // downstream `Linear` can be sized off the sum with no arithmetic of its own.
 
@@ -95,9 +82,7 @@ function concatFeatures<B extends number, L extends number, R extends number>(
 
 const joined: Tensor<[8, 20]> = concatFeatures(randn([8, 12]), randn([8, 8]))
 
-// ---------------------------------------------------------------------------
 // 4. `DimMul` in a head split, and the `flatten`/`unflatten` round trip
-// ---------------------------------------------------------------------------
 // Splitting `[B, T, H*Dh]` into `[B, T, H, Dh]` is the move every attention
 // implementation makes. Here the input width is *stated* as `DimMul<H, Dh>`,
 // so the split is checked rather than trusted, and `flatten` puts it back.
@@ -118,9 +103,7 @@ function splitHeads<
 const heads: Tensor<[2, 5, 4, 8]> = splitHeads(randn([2, 5, 32]), 4, 8)
 const merged: Tensor<[2, 5, 32]> = heads.flatten(2, 3)
 
-// ---------------------------------------------------------------------------
 // The eight compile-time errors
-// ---------------------------------------------------------------------------
 // Each case quotes the message `tsc` prints for it. `test/examples.test.ts`
 // re-derives every one of them from the compiler and fails if a single
 // character has drifted.
@@ -132,10 +115,9 @@ const merged: Tensor<[2, 5, 32]> = heads.flatten(2, 3)
 // comparing.
 //
 // Seven of them live inside a function that is never called, and the eighth
-// in a `forward` that is never called, for the reason the last line of this
-// file demonstrates: each is *also* a runtime error, raised with the same
-// sentence by the same shape algebra. Nothing here is a type-level fiction
-// that the kernels would have let through.
+// in a `forward` that is never called: each is *also* a runtime error,
+// raised with the same sentence by the same shape algebra, as the last
+// lines of this file demonstrate.
 
 function theEightErrors(): void {
   // (1) matmul checks the inner dimensions, and names both operands.
@@ -145,7 +127,7 @@ function theEightErrors(): void {
   // @ts-expect-error
   randn([2, 3]).matmul(randn([2, 3]))
 
-  // (2) The tsover operators are shape-checked too — `[2, 3]` and `[4]` have
+  // (2) The tsover operators are shape-checked too: `[2, 3]` and `[4]` have
   //     no common broadcast, so `+` does not apply.
   //
   // tsc(2365): Operator '+' cannot be applied to types 'Tensor<[2, 3]>' and 'Tensor<[4]>'.
@@ -175,7 +157,7 @@ function theEightErrors(): void {
   cat(randn([2, 3]), randn([2, 4]), 0)
 
   // (6) A width mismatch between two layers of a chain, caught at
-  //     construction — before any tensor exists, and naming both widths.
+  //     construction, before any tensor exists, and naming both widths.
   //
   // tsc(2345): Argument of type '[Linear<2, 8>, ReLU, Linear<16, 3>]' is not assignable to parameter of type
   // tsc(2345): 'readonly [Linear<2, 8>, ReLU, Linear<16, 3>] & "sequential: layer expects 16 input features but the previous layer outputs 8"'.
@@ -209,9 +191,7 @@ class Broken<D extends number> extends Module {
   }
 }
 
-// ---------------------------------------------------------------------------
 // What it looks like at run time
-// ---------------------------------------------------------------------------
 
 const shown: [string, readonly number[], string][] = [
   ["mlp.forward([64, 784])", logits.shape, "Tensor<[64, 10]>"],

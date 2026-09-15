@@ -1,23 +1,8 @@
-// W5.7b — `examples/gpt.ts`, the typed GPT.
-//
-// Three claims are made about that file, and each one is only worth as
-// much as a test of it:
-//
-//   1. it RUNS — 20 steps of a real training loop, with a loss that
-//      actually falls and `jsCounters().nativeFallbacks === 0`;
-//   2. it is CAST-FREE — no `as any`/`as unknown`/`as never`, no
-//      `assertChecked`, no `AnyTensor`. A showcase whose shapes are
-//      asserted rather than inferred demonstrates nothing;
-//   3. its four `@ts-expect-error` cases fail for the REASON quoted above
-//      them. `pnpm typecheck` proves each directive fires; only
-//      recompiling the file without them proves *which* error fired, and
-//      that is the half the README quotes.
-//
-// Plus the README's own GPT block, checked against the file line by line —
-// see the `check-readme: skip` on it. That block cannot be compiled by
-// `scripts/check-readme.mjs` (the layers it names are not re-exported from
-// the package root yet, so the `"typenet"` spelling a reader would copy
-// does not resolve to them), so the drift check has to come from here.
+// Tests for `examples/gpt.ts`, the typed GPT: it runs (20 steps, falling
+// loss, no native fallbacks), it is cast-free, and its four
+// `@ts-expect-error` cases fail for the reason quoted above them (only
+// recompiling without the directives proves which error fired). Also
+// checks the README's GPT block against the file line by line.
 
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -50,24 +35,17 @@ function run(command: string, args: string[], env: Record<string, string> = {}):
   }
 }
 
-// ---------------------------------------------------------------------------
-// 1. It runs
-// ---------------------------------------------------------------------------
-
 /**
- * The example's output, run once and shared by the cases below.
- *
- * Run lazily from inside a test rather than at collection time: it is a
- * ~15 s child process, and a collection-time cost is one no test timeout
- * covers.
+ * The example's output, run once and shared by the cases below. Run lazily
+ * from inside a test rather than at collection time: it is a ~15 s child
+ * process, and a collection-time cost is one no test timeout covers.
  */
 let cachedRun: { out: string; losses: number[] } | null = null
 
 function trainingRun(): { out: string; losses: number[] } {
   if (cachedRun) return cachedRun
-  // The example's own default is 20 steps; passing it explicitly makes the
-  // acceptance criterion ("20 steps with a decreasing loss") the thing this
-  // test measures rather than whatever the default happens to be.
+  // Steps passed explicitly so "20 steps with a decreasing loss" is what
+  // this test measures rather than whatever the default happens to be.
   const out = run(bin("vite-node"), ["examples/gpt.ts"], { TYPENET_EXAMPLE_STEPS: "20" })
   const losses = [...out.matchAll(/^step\s+\d+\s+lr \S+\s+loss (\d+\.\d+)$/gm)]
     .map(m => Number(m[1]))
@@ -83,13 +61,13 @@ describe("examples/gpt.ts", () => {
   it("starts at ln(V) and the loss falls", () => {
     const { losses } = trainingRun()
     // An untrained model over a 32-symbol alphabet costs ln(32) = 3.4657
-    // per token. Starting anywhere else means the init or the tie is
-    // wrong, which is a bug a merely-decreasing curve would hide.
+    // per token; starting anywhere else means the init or the tie is wrong,
+    // which a merely-decreasing curve would hide.
     expect(losses[0]!).toBeGreaterThan(3.3)
     expect(losses[0]!).toBeLessThan(3.6)
     expect(losses.at(-1)!).toBeLessThan(losses[0]!)
-    // Not just the endpoints: the second half is below the first, so a
-    // curve that dips once and then diverges does not pass.
+    // Not just the endpoints: the second half must be below the first, so
+    // a curve that dips once and then diverges does not pass.
     const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length
     expect(mean(losses.slice(10))).toBeLessThan(mean(losses.slice(0, 10)))
   }, 300_000)
@@ -102,31 +80,20 @@ describe("examples/gpt.ts", () => {
   }, 300_000)
 
   it("never falls off the native path", () => {
-    // Eager mode serialises no graph at all, so this is the trivially-true
-    // case — which is exactly why it is asserted rather than assumed: the
-    // day the example moves to `compile()`, this line stops being trivial
-    // and starts being the gate.
+    // Eager mode serialises no graph, so this is trivially true today;
+    // asserted anyway so it fails loudly if the example moves to compile().
     expect(trainingRun().out).toContain("native fallbacks: 0")
   }, 300_000)
 })
 
-// ---------------------------------------------------------------------------
-// 2. It is cast-free
-// ---------------------------------------------------------------------------
-
 describe("examples/gpt.ts is cast-free", () => {
   it("no escape hatch appears in the example", () => {
-    // W5.7b's acceptance grep, as a test.
     const banned = /\bas (any|unknown|never)\b|assertChecked|AnyTensor/
     exampleSource.split("\n").forEach((line, i) => {
       expect(banned.test(line), `examples/gpt.ts:${i + 1}: ${line.trim()}`).toBe(false)
     })
   })
 })
-
-// ---------------------------------------------------------------------------
-// 3. The four compile errors, checked against the compiler
-// ---------------------------------------------------------------------------
 
 type ErrorCase = {
   /** The TS error code the case claims, e.g. 2345. */
@@ -146,7 +113,7 @@ function normalize(text: string): string {
 }
 
 /** A quoted diagnostic split into its first line and each indented
- * elaboration under it — `tsc` prints them as separate lines, so they are
+ * elaboration under it; `tsc` prints them as separate lines, so they are
  * compared as separate fragments. */
 function fragmentsOf(quoted: string): string[] {
   return quoted.split(/(?<=\.)\s+(?=[A-Z])/).filter(f => f.trim() !== "")
@@ -181,17 +148,15 @@ type Diagnostic = { line: number; code: number; message: string }
 
 /**
  * Compiles the example with every `@ts-expect-error` removed, in a temp
- * directory so the project's own typecheck is untouched.
- *
- * Every `from "../…"` is re-pointed at this checkout, since the copy no
- * longer sits next to `examples/`. The directives are replaced by a
- * comment rather than deleted so the reported line numbers still line up
- * with the real file.
+ * directory so the project's own typecheck is untouched. Every
+ * `from "../…"` is re-pointed at this checkout since the copy no longer
+ * sits next to `examples/`; the directives are replaced by a comment
+ * rather than deleted so reported line numbers still line up.
  *
  * `raw` is the whole compiler output: `tsc` prints a diagnostic's
  * elaboration ("Type '64' is not assignable to type '32'.") on its own
  * indented line with no file anchor, so the anchored `diagnostics` list
- * below cannot be what the quoted messages are matched against.
+ * cannot be what the quoted messages are matched against.
  */
 function compileWithoutDirectives(): { diagnostics: Diagnostic[]; raw: string } {
   const dir = mkdtempSync(resolve(tmpdir(), "typenet-gpt-"))
@@ -271,10 +236,6 @@ describe("examples/gpt.ts's compile errors", () => {
   )
 })
 
-// ---------------------------------------------------------------------------
-// 4. The README's GPT block has not drifted from the file
-// ---------------------------------------------------------------------------
-
 const readme = readFileSync(resolve(root, "README.md"), "utf8")
 
 /** The one ```ts block under the `## A GPT that typechecks` heading. */
@@ -290,11 +251,9 @@ function readmeGptBlock(): string[] {
 
 describe("the README's GPT walkthrough", () => {
   it("quotes the model out of examples/gpt.ts, line for line", () => {
-    // Matched against the file with its whitespace collapsed, not line by
-    // line: `dprint` formats TypeScript inside a markdown fence at its own
-    // line width, so a long expression can be wrapped in the README and
-    // not in the file. Collapsing whitespace makes the check about the
-    // code and not about where the formatter chose to break it.
+    // Matched with whitespace collapsed, not line by line: dprint formats
+    // TypeScript inside a markdown fence at its own line width, so a long
+    // expression can be wrapped in the README and not in the file.
     const flat = normalize(exampleSource)
     const block = readmeGptBlock()
     expect(block.length).toBeGreaterThan(20)
@@ -313,15 +272,14 @@ describe("the README's GPT walkthrough", () => {
   it("is compiled by check-readme (no skip marker)", () => {
     // The block imports from "typenet", which scripts/check-readme.mjs
     // rewrites to index.ts, so the package root must export every layer
-    // the block names — that is the whole point of checking it.
+    // the block names; that is the whole point of checking it.
     expect(readme).not.toMatch(/check-readme: skip — this block is examples\/gpt\.ts/)
   })
 
   it("quotes every compiler message the example claims", () => {
     const normalized = normalize(readme)
     for (const testCase of parseCases(exampleSource)) {
-      // The table quotes the sentence the type error turns on — the last
-      // fragment of the diagnostic, which is the one that names the two
+      // The last fragment of the diagnostic is the one that names the two
       // shapes (or the missing brand) rather than restating the call.
       const sentence = normalize(fragmentsOf(testCase.quoted).at(-1)!)
       expect(normalized, `README.md does not quote: ${sentence}`).toContain(sentence)

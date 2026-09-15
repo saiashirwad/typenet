@@ -27,12 +27,8 @@ const sample = (n: number, shape: number[]): AnyTensor =>
   ) as AnyTensor
 
 describe("layers", () => {
-  // ---------------------------------------------------------------------------
-  // Embedding
-  // ---------------------------------------------------------------------------
-
   describe("Embedding", () => {
-    it("gathers rows and matches gatherRows across eager/lazy/native (gate C2)", () => {
+    it("gathers rows and matches gatherRows across eager/lazy/native", () => {
       const table = new Embedding(6, 4)
       const ids = Tensor.indices([0, 2, 5, 1], [2, 2])
       expectAgreeStrict(() => table.forward(ids) as AnyTensor)
@@ -62,9 +58,8 @@ describe("layers", () => {
     })
 
     it("a non-integral / non-index tensor is a compile error", () => {
-      // Wrapped in an uncalled function so the expected-error line below is
-      // type-checked by `tsc` but never runs — the same discipline
-      // test/operators.test.ts uses for its own negative-shape cases.
+      // Uncalled function: the line below is type-checked by `tsc`
+      // but never runs.
       function _typeOnly(table: Embedding<10, 3>, x: Tensor<[4]>) {
         // @ts-expect-error a plain (non-index) Tensor is not an IndexTensor
         table.forward(x)
@@ -74,20 +69,14 @@ describe("layers", () => {
 
     it("its shape effect (appendDim) composes with a mapLast layer inside sequential", () => {
       // Embedding first (a real IndexTensor input), then a norm that owns
-      // the appended axis — exercises `appendDim` followed by `mapLast` in
-      // one chain, and actually runs (unlike the type-only stand-in in
-      // test/types.test-d.ts, which chains Embedding directly after a
-      // Linear's float output purely to prove the TYPE composes).
+      // the appended axis: appendDim followed by mapLast, in a chain that
+      // actually runs.
       const net = sequential(new Embedding(8, 5), new LayerNorm(5))
       const out = net.forward(Tensor.indices([0, 1, 2, 3], [1, 4]))
       type _1 = Expect<Equal<typeof out.shape, [1, 4, 5]>>
       expect(out.shape).toEqual([1, 4, 5])
     })
   })
-
-  // ---------------------------------------------------------------------------
-  // LayerNorm / RMSNorm
-  // ---------------------------------------------------------------------------
 
   describe("LayerNorm", () => {
     it("normalises the last axis to mean 0 / variance 1 before the affine, matches eager/lazy/native", () => {
@@ -146,12 +135,8 @@ describe("layers", () => {
     })
   })
 
-  // ---------------------------------------------------------------------------
-  // Dropout
-  // ---------------------------------------------------------------------------
-
   describe("Dropout", () => {
-    it("eval() is bit-identical to the identity — same object, no node at all", () => {
+    it("eval() is bit-identical to the identity: same object, no node at all", () => {
       const layer = new Dropout(0.5)
       layer.eval()
       const x = sample(16, [4, 4]).requiresGrad() as AnyTensor
@@ -213,10 +198,6 @@ describe("layers", () => {
     })
   })
 
-  // ---------------------------------------------------------------------------
-  // GELU / SiLU
-  // ---------------------------------------------------------------------------
-
   describe("GELU", () => {
     it("matches the tanh approximation and eager/lazy/native agree", () => {
       const layer = new GELU()
@@ -239,11 +220,8 @@ describe("layers", () => {
     })
   })
 
-  // ---------------------------------------------------------------------------
-  // nn.functional — same semantics as the layers, so a hand-rolled block
+  // nn.functional: same semantics as the layers, so a hand-rolled block
   // gets the fused kernels too.
-  // ---------------------------------------------------------------------------
-
   describe("nn.functional", () => {
     it("gelu/silu are the exact functions GELU/SiLU are built out of", () => {
       const x = sample(24, [4, 6])
@@ -271,12 +249,9 @@ describe("layers", () => {
     })
 
     it("softmax is the fused node — agrees with, but is not the composed spelling `Softmax` still uses", () => {
-      // `Softmax` (activation.ts) deliberately keeps the composed
-      // `Tensor.prototype.softmax` spelling so it stays on today's native
-      // path (W4.1's own note: a node the addon cannot parse would take
-      // every model using it off the fast path until A-L1 lowers it) — so
-      // this is `expectClose` at the same 1e-6 semantic-ops.test.ts uses,
-      // not `expectExact`.
+      // The `Softmax` layer keeps the composed `Tensor.prototype.softmax`
+      // spelling so it stays on the native fast path, so this is
+      // `expectClose` at 1e-6, not `expectExact`.
       const x = sample(24, [4, 6])
       expectClose(
         functional.softmax(x, -1) as AnyTensor,
