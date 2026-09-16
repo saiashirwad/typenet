@@ -2,11 +2,7 @@
 
 A tensor library for TypeScript with compile-time shape checking. `Tensor<[2, 3]>` times `Tensor<[3, 4]>` is `Tensor<[2, 4]>`, and mismatched inner dimensions fail the build. It runs eagerly or lazily, differentiates in reverse mode, and has an optional Rust backend for CPU or Metal. Arithmetic operators are checked the same way, with [tsover](https://tsover.swmansion.com).
 
-Pre-alpha. There are no releases yet, and the API changes between commits without a deprecation window.
-
-## Shapes are types
-
-A tensor's type carries its shape as a tuple of literal numbers.
+Pre-alpha. No releases yet, and the API changes between commits.
 
 ```ts
 "use tsover"
@@ -23,17 +19,13 @@ const loss: Tensor<[]> = ((h - 1) ** 2).mean()
 a.matmul(randn([2, 3]))
 ```
 
-A size that isn't fixed yet is `number`, and it stays a wildcard.
-
 ```ts
 import { Linear, randn, Tensor } from "typenet"
 
 const layer = new Linear(784, 128)
-const batch: Tensor<[number, 784]> = randn([8, 784])
+const batch: Tensor<[number, 784]> = randn([8, 784]) // number stays a wildcard
 const out: Tensor<[number, 128]> = layer.forward(batch)
 ```
-
-`DimAdd`, `DimMul`, `DimSub` and `DimDiv` are each a type and a function. The type computes on literal sizes, and the function computes on numbers.
 
 ```ts
 "use tsover"
@@ -46,7 +38,7 @@ class FeedForward<D extends number> extends Module {
 
   constructor(d: D) {
     super()
-    this.up = new Linear(d, DimMul(4, d))
+    this.up = new Linear(d, DimMul(4, d)) // the type and the value do the same arithmetic
     this.down = new Linear(DimMul(4, d), d)
   }
 
@@ -58,7 +50,7 @@ class FeedForward<D extends number> extends Module {
 }
 
 const ff = new FeedForward(16)
-const hidden: Tensor<[16, 64]> = ff.up.weight // DimMul<4, 16> = 64
+const hidden: Tensor<[16, 64]> = ff.up.weight // DimMul<4, 16>
 const joined: Tensor<[8, 20]> = cat(randn([8, 12]), randn([8, 8]), 1)
 ```
 
@@ -70,14 +62,14 @@ import { arange, eye, ones, randn, tensor, zeros } from "typenet"
 import { AdamW, clipGradNorm, crossEntropy, mseLoss } from "typenet"
 import { Linear, ReLU, sequential, Tensor } from "typenet"
 
-// the argument is the shape, and the literal comes back as a type
+// creation
 tensor([[1, 2], [3, 4]]) // Tensor<[2, 2]>
 zeros([2, 3]) // Tensor<[2, 3]>
 ones([4]) // Tensor<[4]>
 arange(10) // Tensor<[10]>
 eye(3) // Tensor<[3, 3]>
 
-// math is differentiable and shape-checked
+// math
 const a = randn([2, 3])
 const w = randn([3, 4])
 a.matmul(w) // Tensor<[2, 4]>
@@ -85,18 +77,18 @@ a.add(randn([3])) // broadcast -> Tensor<[2, 3]>
 a.relu().softmax(1) // Tensor<[2, 3]>
 a.pow(2).mean() // Tensor<[]>
 
-// reductions and views carry their shape through
+// reductions and views
 a.sum() // Tensor<[]>
 a.sum(1) // Tensor<[2]>
 a.sum(-1, true) // Tensor<[2, 1]>
 randn([2, 3, 4]).permute(2, 0, 1) // Tensor<[4, 2, 3]>
 a.view([3, 2]).T // Tensor<[2, 3]>
 
-// widths are checked where they are written
+// layers
 const net = sequential(new Linear(4, 8), new ReLU(), new Linear(8, 10))
 net.forward(randn([16, 4])) // Tensor<[16, 10]>
 
-// a loss reads its target shape off the logits
+// training
 const opt = new AdamW(net.parameters(), { lr: 3e-4, weightDecay: 0.01 })
 const loss = mseLoss(net.forward(randn([16, 4])), randn([16, 10]))
 opt.zeroGrad()
@@ -104,7 +96,7 @@ loss.backward()
 clipGradNorm(net.parameters(), 1)
 opt.step()
 
-// crossEntropy takes class ids one rank below the logits
+// class ids are one rank below the logits
 crossEntropy(
   net.forward(randn([16, 4])),
   Tensor.indices(Array(16).fill(0), [16]),
@@ -112,8 +104,6 @@ crossEntropy(
 ```
 
 ## A character-level GPT
-
-`examples/gpt.ts` trains a small GPT on a passage encoded in the file. The output head is tied. `TiedLinear.of(this.wte)` reuses the `[V, D]` token table instead of allocating a second matrix, so `parameters()` reports it once.
 
 ```ts
 "use tsover"
@@ -151,12 +141,11 @@ class GPT<
       () => new TransformerBlock<D, H>(d, h, { causal: true }),
     )
     this.lnf = new LayerNorm(d)
-    this.head = TiedLinear.of(this.wte)
+    this.head = TiedLinear.of(this.wte) // shares the [V, D] token table
     this.pos = this.registerBuffer("pos", functional.arangeIndex(block))
   }
 
   forward<B extends number>(idx: IndexTensor<[B, T]>): Tensor<[B, T, V]> {
-    // the position table broadcasts over the batch, and each block returns [B, T, D]
     const { wte, wpe, pos } = this
     let h: Tensor<[B, T, D]> = wte.forward(idx) + wpe.forward(pos)
     for (const block of this.blocks) h = block.forward(h)
