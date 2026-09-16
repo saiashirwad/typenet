@@ -54,6 +54,48 @@ describe("examples", () => {
     expect(losses.at(-1)!).toBeLessThan(losses[0]!)
     expect(out).toContain("test accuracy")
   }, 120_000)
+
+  it("example:char-rnn trains, samples, and hands the sample to example:char-rnn:generate", () => {
+    // A temp checkpoint, so a developer's own char-rnn.json is neither read nor overwritten.
+    const checkpoint = resolve(mkdtempSync(resolve(tmpdir(), "typenet-rnn-")), "char-rnn.json")
+    const length = 60
+    const env = {
+      TYPENET_RNN_STEPS: "40",
+      TYPENET_RNN_SEED: "1234",
+      TYPENET_RNN_CHECKPOINT: checkpoint,
+      TYPENET_RNN_TEXT: resolve(root, "examples/char-rnn/data/essay.txt"),
+    }
+    try {
+      const trained = run(bin("vite-node"), ["examples/char-rnn/train.ts"], env)
+      const losses = [...trained.matchAll(/^step\s+\d+\s+loss (\d+\.\d+)$/gm)].map(m => Number(m[1]))
+      expect(losses.length).toBeGreaterThan(1)
+      expect(losses.at(-1)!).toBeLessThan(losses[0]!)
+      // The committed corpus holds 30 distinct symbols, so an untrained model costs ln(30) =
+      // 3.4012 per character and nothing else. Starting anywhere else means the loss, the target
+      // or the alphabet is wrong.
+      expect(trained).toContain("an untrained model costs ln(30) = 3.4012")
+      expect(losses[0]!).toBeGreaterThan(3.3)
+      expect(losses[0]!).toBeLessThan(3.6)
+      // The sample the training run prints itself, before any checkpoint is involved.
+      expect(trained).toContain("sample at temperature 0.6:")
+
+      // And the second entry point, reading that checkpoint back through stateDict().
+      const generated = run(bin("vite-node"), ["examples/char-rnn/generate.ts"], {
+        ...env,
+        TYPENET_RNN_LENGTH: String(length),
+      })
+      expect(generated).toContain("loaded")
+      expect(generated).toContain("trained at seed 1234")
+      // Everything after the header is the sampled sequence; the header itself names the
+      // temperature, and the prompt too when the generator was given one.
+      const header = generated.indexOf("temperature 0.6")
+      expect(header).toBeGreaterThan(-1)
+      const printed = generated.slice(generated.indexOf("\n\n", header) + 2)
+      expect(printed.length).toBeGreaterThanOrEqual(length)
+    } finally {
+      rmSync(dirname(checkpoint), { recursive: true, force: true })
+    }
+  }, 120_000)
 })
 
 // pnpm typecheck proves every @ts-expect-error fires, not that the quoted message is the message
@@ -184,13 +226,20 @@ describe("examples/shapes.ts", () => {
 
 describe("examples are cast-free", () => {
   it("no example reaches for an escape hatch", () => {
-    // Shapes must be inferred rather than asserted, or the example proves nothing.
+    // Shapes must be inferred rather than asserted, or the example proves nothing. Comments are
+    // skipped because the char RNN example explains in prose which casts it does not need.
     const banned = /\bas (any|unknown|never)\b|assertChecked|AnyTensor/
-    const files = ["examples/shapes.ts", "examples/mlp.ts"]
+    const strip = (line: string) => line.replace(/\/\/.*$/, "")
+    const files = [
+      "examples/shapes.ts",
+      "examples/mlp.ts",
+      "examples/char-rnn/train.ts",
+      "examples/char-rnn/generate.ts",
+    ]
     for (const file of files) {
       const source = readFileSync(resolve(root, file), "utf8")
       source.split("\n").forEach((line, i) => {
-        expect(banned.test(line), `${file}:${i + 1}: ${line.trim()}`).toBe(false)
+        expect(banned.test(strip(line)), `${file}:${i + 1}: ${line.trim()}`).toBe(false)
       })
     }
   })

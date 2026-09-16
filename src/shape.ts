@@ -585,6 +585,24 @@ export type NarrowCheck<S extends Shape, D extends number, Start extends number,
   : FitsWithin<DimAdd<Start, L>, DimAt<S, D>> extends false ? ErrorMessage<`narrow(${D}, ${Start}, ${L}) is out of range for ${ShowShape<S>}`>
   : unknown
 
+/** `select(dim, i)` is `[B, T, E] -> [B, E]`: the selected axis is gone, the others keep their order. */
+export type SelectShape<S extends Shape, D extends number> =
+    IsDynamic<S> extends true ? Shape
+  : NormalizeDim<S, D> extends infer I extends number ?
+      number extends I ? Shape
+    : RemoveAt<S, I>
+  : never
+
+/** The value twin rejects the same index, so a selection that compiles cannot be out of range at run time. */
+export type SelectCheck<S extends Shape, D extends number, I extends number> =
+    IsDynamic<S> extends true ? unknown
+  : IsExact<D, number> extends true ? unknown
+  : IsExact<I, number> extends true ? unknown
+  : DimInRange<S, D> extends false ? ErrorMessage<`Dimension ${D} is out of range for shape ${ShowShape<S>}`>
+  : IsNegativeDim<I> extends true ? ErrorMessage<`select: index ${I} is negative`>
+  : FitsWithin<I, DimAt<S, D>> extends false ? ErrorMessage<`select(${D}, ${I}) is out of range for ${ShowShape<S>}`>
+  : unknown
+
 export type Stack<S extends Shape, N extends number, D extends number> =
     IsDynamic<S> extends true ? number[]
   : NormalizeUnsqueezeDim<S, D> extends infer I extends number ?

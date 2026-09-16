@@ -1,0 +1,24 @@
+the tensor knows its shape before it knows its values.
+a character rnn reads one letter at a time and keeps a little state.
+the state is a vector of numbers, and tanh keeps it in a range it can hold.
+every step reuses the same weights, so a whole sequence folds into one small net.
+read the corpus, predict the next character, measure the surprise, step downhill.
+the gradient flows back through time, one addition at a time, never a derivative more.
+the compiler counts the axes; the kernel only moves the bytes.
+what cannot be written down cannot be run, and what can be run was written down first.
+a name is a promise that the same value means the same thing in two places.
+a tuple of literals is a shape, and a shape is a plan the type checker can read.
+the hidden state is memory with no address, a summary that forgets the oldest word first.
+long dependencies fade, and the loss curve says so before the sample does.
+at the start the net is uniform and the loss is the log of the vocabulary.
+each step it is a little less wrong about one letter at a time.
+temperature sharpens the draw or flattens it, and both are the same weights.
+a small model on a small text can memorize it, which is a lovely party trick.
+the point is not the text, the point is that every shape was known in advance.
+the sequence length is a loop; the width is a type; the batch is a number.
+attention came later and looks at everything at once, and this one looks behind.
+but a loop is enough to show what a state is, and what a state is enough for.
+write a window, shift it by one, and the answer is the same text one step ahead.
+sample one character, append it, and feed the result back in forever.
+that is the whole trick, and it has been the whole trick since the beginning.
+the same weights, the same shape, a different letter, and a story that drifts.

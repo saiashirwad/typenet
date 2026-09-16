@@ -66,7 +66,7 @@ const joined = cat(randn([8, 12]), randn([8, 8]), 1) // Tensor<[8, 20]>
 "use tsover"
 import { arange, eye, ones, randn, tensor, zeros } from "typenet"
 import { AdamW, clipGradNorm, crossEntropy, mseLoss } from "typenet"
-import { Linear, ReLU, sequential, Tensor } from "typenet"
+import { Linear, ReLU, Rnn, scan, sequential, Tensor } from "typenet"
 
 // creation
 tensor([[1, 2], [3, 4]]) // Tensor<[2, 2]>
@@ -89,10 +89,25 @@ a.sum(1) // Tensor<[2]>
 a.sum(-1, true) // Tensor<[2, 1]>
 randn([2, 3, 4]).permute(2, 0, 1) // Tensor<[4, 2, 3]>
 a.view([3, 2]).T // Tensor<[2, 3]>
+randn([2, 3, 4]).select(1, 0) // Tensor<[2, 4]>, one position of an axis
 
 // layers
 const net = sequential(new Linear(4, 8), new ReLU(), new Linear(8, 10))
 net.forward(randn([16, 4])) // Tensor<[16, 10]>
+
+// a recurrent layer is stepped, so the caller owns the loop and the state is always [B, H]
+const rnn = new Rnn(4, 6)
+let state = rnn.zeroState(16) // Tensor<[16, 6]>
+for (let t = 0; t < 5; t++) state = rnn.forward(randn([16, 4]), { state })
+state // Tensor<[16, 6]> after five steps
+
+// scan runs a fixed-length recurrence: state in, outputs and the final state out
+const run = scan<16, [16, 6], [16, 1]>(rnn.zeroState(16), 5, (hidden, t) => {
+  const next = rnn.forward(randn([16, 4]), { state: hidden })
+  return { output: next.select(1, t % 6).unsqueeze(1), state: next }
+})
+run.outputs // Tensor<[16, 5, 1]>
+run.state // Tensor<[16, 6]>
 
 // training
 const opt = new AdamW(net.parameters(), { lr: 3e-4, weightDecay: 0.01 })
@@ -178,4 +193,4 @@ pnpm format            # dprint
 pnpm build:native      # the Rust addon
 ```
 
-`examples/` holds five runnable models: `pnpm example:shapes`, `example:mlp`, `example:gpt`, `example:xor`, `example:spiral`.
+`examples/` holds seven runnable models: `pnpm example:shapes`, `example:mlp`, `example:gpt`, `example:xor`, `example:spiral`, and the character RNN, which trains with `example:char-rnn` and samples from the checkpoint it writes with `example:char-rnn:generate`.

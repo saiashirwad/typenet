@@ -29,6 +29,7 @@ import {
   rawSiluGrad,
   rawSoftmax,
   rawSoftmaxGrad,
+  rawStackList,
   rawSum,
   rawUnary,
   reshapeRaw,
@@ -67,6 +68,8 @@ import {
   type ReduceDim,
   type ResizeDim,
   type ResolveView,
+  type SelectCheck,
+  type SelectShape,
   type Shape,
   type Slice,
   type SliceCheck,
@@ -1036,6 +1039,32 @@ export class Tensor<S extends Shape> {
     })
   }
 
+  /**
+   * One position along `dim`, taken out: `[B, T, E].select(1, t)` is `[B, E]`. This is
+   * `narrow(dim, i, 1).squeeze(dim)` spelled once, which is what a hand-written sequence loop
+   * wants at every step; gradients flow to the selected slice like any other view.
+   */
+  select<D extends number, I extends number>(
+    dim: D & DimCheck<S, D> & SelectCheck<S, D, I>,
+    index: I,
+  ): Tensor<SelectShape<S, D>> {
+    const d = normalizeDim(dim, this.shape.length)
+    if (!Number.isInteger(index)) {
+      throw new Error(`select() requires an integer index, got ${index}`)
+    }
+    // `narrow` takes a non-negative start only, so `select(0, -1)` resolves its own index first.
+    const at = normalizeDim(index, this.shape[d]!)
+    // Composed from the two views that already exist, so the tape stays the ordinary chain of
+    // `narrow` and `squeeze` nodes: one view keeps the index's gradient, the other drops the
+    // axis. Both casts bridge generic deferral, as in `Linear.forward`: with `S` still generic,
+    // tsc cannot reduce `NarrowCheck`/`SqueezeDimCheck` against it, though `SelectCheck` above
+    // has already proved the same relation for the concrete shape the caller passes.
+    const window = (this as AnyTensor).narrow(d, at, 1) as Tensor<
+      ResizeDim<S, D, 1>
+    >
+    return (window as AnyTensor).squeeze(d) as Tensor<SelectShape<S, D>>
+  }
+
   /** Gradients flow to the gathered tensor, never to the index. */
   indexSelect<E extends number>(
     index: IndexTensor<[E]>,
@@ -1227,25 +1256,23 @@ export class Tensor<S extends Shape> {
   ): Tensor<
     Stack<ShapeOf<T[0]>, T["length"], D>
   > {
-    const ts = tensors as readonly AnyTensor[]
-    const first = ts[0]!
-    for (const t of ts) {
-      if (!shapesEqual(t.shape, first.shape)) {
-        throw new Error(
-          `stack: all tensors must share a shape (${showShape(first.shape)} vs ${showShape(t.shape)})`,
-        )
-      }
-    }
-    const unsqueezed = ts.map(t => t.unsqueeze((dim ?? 0) as any))
-    let acc = unsqueezed[0]!
-    for (let i = 1; i < unsqueezed.length; i++) {
-      acc = Tensor.cat(
-        acc as any,
-        unsqueezed[i]! as any,
-        (dim ?? 0) as any,
-      ) as AnyTensor
-    }
-    return acc as any
+    return rawStackList(tensors as readonly AnyTensor[], dim ?? 0) as any
+  }
+
+  /**
+   * Stacks a list of tensors whose length is only known at run time: `Tensor.stack` takes a tuple,
+   * because its result's shape is derived from the tuple's length, but a loop that pushes one
+   * tensor per step has a list and cannot call it at all.
+   *
+   * The result is `Tensor<Shape>`, since a runtime count cannot appear in the type. This is also
+   * the cheap path for a tuple: one node and one pass, where `stack` used to fold a left-to-right
+   * `cat` that copied the accumulated tensor once per input.
+   */
+  static stackList(
+    tensors: readonly AnyTensor[],
+    dim = 0,
+  ): Tensor<Shape> {
+    return rawStackList(tensors, dim) as Tensor<Shape>
   }
 
   static cat<

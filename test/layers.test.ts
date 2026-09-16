@@ -1,7 +1,22 @@
 import { describe, expect, it } from "vitest"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { Dropout, Embedding, functional, GELU, LayerNorm, Linear, RMSNorm, sequential, SiLU, Softmax } from "../src/nn/index.ts"
+import {
+  Dropout,
+  Embedding,
+  functional,
+  GELU,
+  LayerNorm,
+  Linear,
+  RMSNorm,
+  Rnn,
+  scan,
+  Sequence,
+  sequential,
+  SiLU,
+  Softmax,
+  stepUnbatched,
+} from "../src/nn/index.ts"
 import { type AnyTensor, fromFlat, Tensor } from "../src/tensor.ts"
 import { expectAgreeStrict, expectClose } from "./helpers.ts"
 
@@ -214,6 +229,183 @@ describe("layers", () => {
       const x = sample(24, [4, 6])
       expectClose(layer.forward(x) as AnyTensor, x.mul(x.sigmoid()) as AnyTensor, 1e-6)
       expectAgreeStrict(() => layer.forward(x) as AnyTensor)
+    })
+  })
+
+  describe("Rnn", () => {
+    it("a step maps [B, In] and a [B, H] state to [B, H]", () => {
+      const layer = new Rnn(4, 3)
+      const x = sample(8, [2, 4])
+      const state = sample(6, [2, 3])
+      const out = layer.forward(x, { state })
+      // H is inferred from the layer and lands in the type; B widens, since a generic `Tensor`
+      // parameter is not something tsc will read a literal out of.
+      type _1 = Expect<Equal<typeof out.shape[1], 3>>
+      expect(out.shape).toEqual([2, 3])
+      expectAgreeStrict(() => layer.forward(x, { state }) as AnyTensor)
+    })
+
+    it("{ batch } starts from the zero state, which is what it returns", () => {
+      const layer = new Rnn(4, 3)
+      const x = sample(8, [2, 4])
+      const fromZero = layer.forward(x, { batch: 2 })
+      expectExact(fromZero as AnyTensor, layer.forward(x, { state: layer.zeroState(2) }) as AnyTensor)
+      // A biasless layer with zeroed weights has nothing but the state to contribute, so its
+      // output is tanh(0) = 0 and the state really did start at zero.
+      const biasless = new Rnn(4, 3, { bias: false })
+      biasless.weightIH.zero_()
+      biasless.weightHH.zero_()
+      expectExact(biasless.forward(x, { batch: 2 }) as AnyTensor, Tensor.zeros([2, 3]) as AnyTensor)
+    })
+
+    it("is tanh(x @ weightIH + state @ weightHH + b_ih + b_hh), spelled out", () => {
+      const layer = new Rnn(4, 3)
+      const x = sample(8, [2, 4])
+      const state = sample(6, [2, 3])
+      const reference = (x as AnyTensor)
+        .matmul(layer.weightIH as AnyTensor)
+        .add((state as AnyTensor).matmul(layer.weightHH as AnyTensor))
+        .add(layer.biasIH as AnyTensor)
+        .add(layer.biasHH as AnyTensor)
+        .tanh()
+      expectClose(layer.forward(x, { state }) as AnyTensor, reference, 1e-6)
+    })
+
+    it("carries memory forward: the same input gives different outputs from different states", () => {
+      const layer = new Rnn(3, 5)
+      const x = (sample(3, [1, 3]) as AnyTensor).view([1, 3])
+      const a = layer.forward(x, { state: layer.zeroState(1) })
+      const b = layer.forward(x, { state: (a.mul(2) as AnyTensor).view([1, 5]) })
+      expect(Array.from(a.data)).not.toEqual(Array.from(b.data))
+    })
+
+    it("stepUnbatched agrees with the batched step", () => {
+      const layer = new Rnn(4, 3)
+      const x = Tensor.zeros<[4]>([4])
+      const state = Tensor.zeros<[3]>([3])
+      const batched = layer.forward(Tensor.zeros<[1, 4]>([1, 4]), {
+        state: Tensor.zeros<[1, 3]>([1, 3]),
+      })
+      expectClose(stepUnbatched(layer, x, state) as AnyTensor, (batched as AnyTensor).squeeze(0), 1e-6)
+    })
+
+    it("initialises every weight and bias in U(-1/sqrt(H), 1/sqrt(H))", () => {
+      const layer = new Rnn(64, 16)
+      const k = 1 / Math.sqrt(16)
+      for (const p of layer.parameters()) {
+        expect(p.shape.length).toBeGreaterThan(0)
+        for (const v of p.data) {
+          expect(Math.abs(Number(v))).toBeLessThanOrEqual(k + 1e-6)
+        }
+      }
+      // The recurrent bound tracks H, not In: with In = 64 a fan-based draw would be far smaller.
+      const values = Array.from(layer.weightHH.data, Number)
+      expect(Math.max(...values.map(Math.abs))).toBeGreaterThan(0.05)
+    })
+
+    it("two projections are one parameter each, and stateDict names both", () => {
+      const layer = new Rnn(4, 3)
+      const names = [...layer.namedParameters().keys()].sort()
+      expect(names).toEqual(["biasHH", "biasIH", "weightHH", "weightIH"])
+    })
+
+    it("a recurrent layer can be unrolled by hand and backprops through the chain", () => {
+      const layer = new Rnn(4, 3)
+      const x = sample(8, [2, 4])
+      let state = layer.zeroState(2)
+      let total = (state as AnyTensor).sum()
+      // Two steps of the same input, so the second depends on the first through weightHH.
+      for (let t = 0; t < 2; t++) {
+        state = layer.forward(x, { state })
+        total = (total as AnyTensor).add((state as AnyTensor).sum()) as typeof total
+      }
+      total.backward()
+      const grad = layer.weightHH.grad
+      expect(grad).not.toBeNull()
+      expect(Array.from(grad!.data).some(v => v !== 0)).toBe(true)
+    })
+  })
+
+  describe("scan", () => {
+    it("collects every step's output and the final state", () => {
+      const init = Tensor.zeros<[2, 3]>([2, 3])
+      const run = scan<2, [2, 3], [2, 4]>(init, 5, (state, t) => ({
+        output: Tensor.cat(state, Tensor.full<[2, 1]>([2, 1], t), 1),
+        state: state.add(1),
+      }))
+      type _1 = Expect<Equal<typeof run.outputs.shape, [2, number, 4]>>
+      expect(run.outputs.shape).toEqual([2, 5, 4])
+      expect(run.state.shape).toEqual([2, 3])
+      expectClose(run.state as AnyTensor, Tensor.full<[2, 3]>([2, 3], 5) as AnyTensor, 1e-6)
+      // Step t's output carries t in its last column, so the order is the loop's own.
+      for (let t = 0; t < 5; t++) {
+        expect(run.outputs.select(1, t).get(0, 3)).toBe(t)
+      }
+    })
+
+    it("the state that comes out is the one the last step returned", () => {
+      const run = scan<1, [1, 2], [1, 2]>(Tensor.zeros<[1, 2]>([1, 2]), 3, state => ({
+        output: state.mul(2),
+        state: state.add(1),
+      }))
+      // state goes 0 -> 1 -> 2 -> 3 while the outputs are 0, 2, 4.
+      expectClose(run.state as AnyTensor, Tensor.full<[1, 2]>([1, 2], 3) as AnyTensor, 1e-6)
+      expect(run.outputs.select(1, 2).get(0, 0)).toBe(4)
+    })
+
+    it("backprops through the whole chain to the initial state", () => {
+      const init = Tensor.zeros<[1, 2]>([1, 2]).requiresGrad()
+      const run = scan<1, [1, 2], [1, 2]>(init, 4, state => ({
+        output: state.mul(2),
+        state: state.add(1),
+      }))
+      run.outputs.sum().backward()
+      // Each of the four outputs is `2 * (x + t)`, so every one contributes a 2: 8 per element.
+      expect(Array.from(init.grad!.data)).toEqual([8, 8])
+    })
+
+    it("rejects a step that changes the batch", () => {
+      // The batch is generic, so a runtime one is the only kind that can disagree: for a literal
+      // batch, tsc rejects the step outright.
+      const mismatched = <B extends number>(state: Tensor<[B, 2]>): { output: Tensor<[B, 2]>; state: Tensor<[B, 2]> } => {
+        const smaller = 0.5 * state.shape[0]!
+        return { output: state, state: state.narrow(0, 0, smaller as B) }
+      }
+      expect(() => scan<4, [4, 2], [4, 2]>(Tensor.zeros<[4, 2]>([4, 2]), 2, mismatched)).toThrow(/batched 4/)
+    })
+
+    it("rejects a negative step count", () => {
+      expect(() => scan<1, [1, 2], [1, 2]>(Tensor.zeros<[1, 2]>([1, 2]), -1, state => ({ output: state, state }))).toThrow(/non-negative integer/)
+    })
+
+    it("steps = 0 has no output, and says so", () => {
+      expect(() => scan<1, [1, 2], [1, 2]>(Tensor.zeros<[1, 2]>([1, 2]), 0, state => ({ output: state, state }))).toThrow(/steps was 0/)
+    })
+  })
+
+  describe("Sequence", () => {
+    it("steps for an unbounded run and concatenates what it recorded", () => {
+      const run = Sequence.of<2, [2, 3]>(Tensor.zeros<[2, 3]>([2, 3]))
+      for (let i = 0; i < 4; i++) {
+        run.step(Tensor.full<[2, 1]>([2, 1], i), Tensor.full<[2, 3]>([2, 3], i))
+      }
+      expect(run.length).toBe(4)
+      expect(run.outputs<[2, 1]>().shape).toEqual([2, 4, 1])
+      expect(run.state.get(0, 0)).toBe(3)
+    })
+
+    it("advance moves the state without recording anything", () => {
+      const run = Sequence.of<1, [1, 2]>(Tensor.zeros<[1, 2]>([1, 2]))
+      run.advance(Tensor.full<[1, 2]>([1, 2], 7))
+      expect(run.length).toBe(0)
+      expect(run.state.get(0, 0)).toBe(7)
+      expect(() => run.outputs()).toThrow(/nothing has been stepped/)
+    })
+
+    it("a step that changes the batch is rejected", () => {
+      const run = Sequence.of<2, [2, 3]>(Tensor.zeros<[2, 3]>([2, 3]))
+      const halved = <B extends number>(state: Tensor<[B, 3]>): Tensor<[B, 3]> => state.narrow(0, 0, (0.5 * state.shape[0]!) as B)
+      expect(() => run.step(Tensor.zeros<[2, 1]>([2, 1]), halved(run.state))).toThrow(/does not match the state's 2/)
     })
   })
 

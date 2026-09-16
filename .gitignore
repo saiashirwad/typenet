@@ -23,3 +23,8 @@ native/index.d.ts
 # python bytecode caches
 __pycache__/
 *.pyc
+
+# written by `pnpm example:char-rnn`, read back by `pnpm example:char-rnn:generate`
+char-rnn.json
+# fetched by `pnpm fetch:corpus`; 1.1 MB of text does not belong in git (data/essay.txt is committed)
+examples/char-rnn/data/tiny-shakespeare.txt

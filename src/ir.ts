@@ -44,7 +44,7 @@ import {
   shapesEqual,
   showShape,
 } from "./storage.ts"
-import { _internal, type AnyTensor, makeStorage } from "./tensor.ts"
+import { _internal, type AnyTensor, makeStorage, Tensor } from "./tensor.ts"
 
 let lazyMode = false
 
@@ -574,6 +574,46 @@ export function rawNarrow(
     )
   }
   return evalNarrowEager(a, d, start, length)
+}
+
+/**
+ * Stacks `tensors` along a new axis at `dim`, as a balanced tree of `cat` nodes over `unsqueeze`.
+ *
+ * `Tensor.stack` folds a left-to-right `cat`, which copies the accumulated tensor once per input
+ * and so is quadratic in the number of inputs. A loop that stacks one output per timestep hits
+ * that directly. Pairing the inputs up instead keeps the copy count linear and the graph shallow,
+ * and it is built only from `unsqueeze` and `cat`, so it lowers to the native backend exactly as
+ * those two do.
+ */
+export function rawStackList(
+  tensors: readonly AnyTensor[],
+  dim: number,
+): AnyTensor {
+  if (tensors.length === 0) {
+    throw new Error("stack: needs at least one tensor")
+  }
+  const first = tensors[0]!
+  for (const t of tensors) {
+    if (!shapesEqual(t.shape, first.shape)) {
+      throw new Error(
+        `stack: all tensors must share a shape (${showShape(first.shape)} vs ${showShape(t.shape)})`,
+      )
+    }
+  }
+  const d = normalizeDim(dim, first.shape.length + 1)
+  // Every input gains the new axis at `d`, which is what turns a stack into a concatenation.
+  let level = tensors.map(t => t.unsqueeze(d))
+  while (level.length > 1) {
+    const next: AnyTensor[] = []
+    for (let i = 0; i < level.length; i += 2) {
+      const a = level[i]!
+      const b = level[i + 1]
+      // `Tensor.cat` on the class, not the raw form: the raw form omits the tape entry.
+      next.push(b === undefined ? a : (Tensor.cat as (x: AnyTensor, y: AnyTensor, dim: number) => AnyTensor)(a, b, d))
+    }
+    level = next
+  }
+  return level[0]!
 }
 
 export function rawCat(

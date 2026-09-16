@@ -14,8 +14,11 @@
     "example:gpt": "vite-node examples/gpt.ts",
     "example:xor": "vite-node examples/xor.ts",
     "example:spiral": "vite-node examples/spiral.ts",
+    "example:char-rnn": "vite-node examples/char-rnn/train.ts",
+    "example:char-rnn:generate": "vite-node examples/char-rnn/generate.ts",
     "typecheck:budget": "node scripts/typecheck-budget.mjs",
     "check:readme": "node scripts/check-readme.mjs",
+    "fetch:corpus": "node scripts/fetch-corpus.mjs",
     "test:ci": "pnpm test && pnpm typecheck && pnpm typecheck:budget && cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings"
   },
   "dependencies": {
