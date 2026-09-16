@@ -10,8 +10,8 @@
 // model leave uniform noise within a minute.
 //
 // For a sample that reads like language, train on Tiny Shakespeare, the corpus the original
-// char-rnn post uses. This configuration reached a loss of 1.50 in 3,000 steps (about half an
-// hour) and samples words, character names and blank-verse line breaks:
+// char-rnn post uses. This configuration reached a loss of 1.50 in 3,000 steps (31 minutes) and
+// samples words, character-name-shaped inventions and blank-verse line breaks:
 //
 //   pnpm fetch:corpus
 //   TYPENET_RNN_TEXT=examples/char-rnn/data/tiny-shakespeare.txt \
