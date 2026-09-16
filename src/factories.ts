@@ -50,23 +50,16 @@ export function randn<const Sh extends Shape>(
 }
 
 export interface CategoricalOptions {
-  /**
-   * `1` (default) samples the row as given. Other values raise or lower the weights to the power
-   * `1/temperature`, which is the same as scaling logits when the row is a softmax output.
-   */
+  /** `1` (default) samples the row as given; other values raise the weights to the power `1/temperature`. */
   temperature?: number
   /** A uniform draw in `[0, 1)` per row. Pass one to make a sample replay; the default draws. */
   rng?: () => number
 }
 
 /**
- * Draws one index per row of `probabilities` and returns them as an `IndexTensor<[N]>`, which
- * `Embedding` and `indexSelect` accept directly.
- *
- * `probabilities` is a rank-2 `[N, C]` of non-negative weights, which need not sum to one, so
- * sampling a softmax's output and sampling its logits with a temperature are the same call. The
- * draw is a cumulative sum, so it never builds an `[N, C]` uniform tensor to compare against, and
- * it reads values rather than joining the tape: a sample is not differentiable.
+ * Draws one index per row of a rank-2 `[N, C]` of non-negative weights, which need not sum to one,
+ * and returns them as an `IndexTensor<[N]>`. Reads values rather than joining the tape, so a sample
+ * is not differentiable.
  */
 export function categorical(
   probabilities: AnyTensor,

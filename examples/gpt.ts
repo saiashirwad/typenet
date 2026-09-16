@@ -1,8 +1,5 @@
 "use tsover"
 
-// A typed GPT built from the library's own layers. The four cases in `_compileTimeErrors()`
-// are never run; each quotes `tsc`, and `test/examples-gpt.test.ts` recompiles to check the quotes.
-
 import {
   AdamW,
   clipGradNorm,
@@ -97,8 +94,7 @@ const D_MODEL = 64
 const HEADS = 4
 const LAYERS = 2
 const BATCH = 16
-// 20 steps is the run the README quotes; the tests override it.
-const STEPS = Number(process.env["TYPENET_EXAMPLE_STEPS"] ?? 20)
+const STEPS = 20
 
 configure({ seed: 1234 })
 
@@ -149,8 +145,7 @@ let last = 0
 for (let step = 0; step < STEPS; step++) {
   const { x, y } = batchAt(step)
 
-  const logits = model.forward(x)
-  const loss = crossEntropy(logits, y)
+  const loss = crossEntropy(model.forward(x), y)
 
   opt.lr = schedule(step)
   opt.zeroGrad()
@@ -160,12 +155,9 @@ for (let step = 0; step < STEPS; step++) {
 
   last = loss.item()
   if (step === 0) first = last
-  const every = STEPS <= 25 ? 1 : 10
-  if (step % every === 0 || step === STEPS - 1) {
-    console.log(
-      `step ${String(step).padStart(3)}  lr ${opt.lr.toExponential(2)}  loss ${last.toFixed(4)}`,
-    )
-  }
+  console.log(
+    `step ${String(step).padStart(3)}  lr ${opt.lr.toExponential(2)}  loss ${last.toFixed(4)}`,
+  )
 }
 
 const elapsed = (performance.now() - started) / 1000
@@ -180,25 +172,21 @@ console.log(
 )
 console.log(`native fallbacks: ${jsCounters().nativeFallbacks}`)
 
-function _compileTimeErrors(): void {
-  // tsc(2322): Type 'number' is not assignable to type 'never'.
+/** Four rejections, never run: `pnpm typecheck` is what executes them. */
+export function compileTimeErrors(): void {
+  // 5 does not divide dModel 64
   // @ts-expect-error
   new GPT({ vocab: VOCAB, block: BLOCK, dModel: 64, heads: 5, layers: 2 })
 
-  // tsc(2345): Argument of type 'Tensor<[16, 32]>' is not assignable to parameter of type 'IndexTensor<[16, 32]>'.
-  // tsc(2345): Property '[INDEX]' is missing in type 'Tensor<[16, 32]>' but required in type '{ readonly [INDEX]: true; }'.
+  // floats where the embedding wants indices
   // @ts-expect-error
   model.forward(Tensor.zeros([BATCH, BLOCK]))
 
-  // tsc(2345): Argument of type 'IndexTensor<[16, 64]>' is not assignable to parameter of type 'IndexTensor<[16, 32]>'.
-  // tsc(2345): Type '64' is not assignable to type '32'.
+  // a 64-long context into a model built for 32
   // @ts-expect-error
   model.forward(Tensor.indices(new Array(BATCH * 64).fill(0), [BATCH, 64]))
 
-  // tsc(2345): Argument of type 'IndexTensor<[16]>' is not assignable to parameter of type 'IndexTensor<[16, 32]>'.
-  // tsc(2345): Type '[16]' is not assignable to type '[16, 32]'.
+  // [B] of targets against [B, T, V] of logits
   // @ts-expect-error
   crossEntropy(model.forward(batchAt(0).x), Tensor.indices(new Array(BATCH).fill(0), [BATCH]))
 }
-
-void _compileTimeErrors

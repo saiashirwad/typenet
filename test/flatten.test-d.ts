@@ -3,9 +3,7 @@
 import { DimMul } from "../src/shape.ts"
 import type { FlattenCheck, FlattenShape, Shape, UnflattenCheck, UnflattenShape } from "../src/shape.ts"
 import type { Tensor } from "../src/tensor.ts"
-
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
-type Expect<T extends true> = T
+import type { Equal, Expect } from "./helpers.ts"
 
 declare function flatten<S extends Shape, const F extends number, const T extends number>(
   t: Tensor<S>,

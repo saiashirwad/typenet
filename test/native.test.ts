@@ -5,11 +5,9 @@ import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { crossEntropy } from "../src/nn/index.ts"
 import { SGD } from "../src/optim/index.ts"
-import { Tensor } from "../src/tensor.ts"
+import { type AnyTensor, Tensor } from "../src/tensor.ts"
 import { bothWays, expectAgree, expectClose } from "./helpers.ts"
 import { makeXorNet } from "./xor-net.ts"
-
-type AnyTensor = Tensor<any>
 
 const available = isNativeAvailable()
 

@@ -7,8 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const root = resolve(__dirname, "..")
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const tsconfigRelPath = "tsconfig.budget.json"
 const baselinePath = resolve(root, "typecheck-budget.json")
 
@@ -19,26 +18,21 @@ function parseArgs(argv) {
   const args = { reseed: false, reason: undefined }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if (arg === "--reseed") {
-      args.reseed = true
-    } else if (arg === "--reason") {
-      args.reason = argv[++i]
-    } else if (arg.startsWith("--reason=")) {
-      args.reason = arg.slice("--reason=".length)
-    }
+    if (arg === "--reseed") args.reseed = true
+    else if (arg === "--reason") args.reason = argv[++i]
+    else if (arg.startsWith("--reason=")) args.reason = arg.slice("--reason=".length)
   }
   return args
 }
 
-function tscBinary() {
-  const local = resolve(root, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc")
-  return existsSync(local) ? local : "tsc"
+function fail(message, output = "") {
+  console.error(`typecheck-budget: ${message}\n${output}`)
+  process.exit(1)
 }
 
-export function parseExtendedDiagnostics(output) {
-  const grab = (label) => {
-    const re = new RegExp(`^${label}:\\s+([\\d.]+)(?:K|s)?\\s*$`, "m")
-    const m = output.match(re)
+function parseExtendedDiagnostics(output) {
+  const grab = label => {
+    const m = output.match(new RegExp(`^${label}:\\s+([\\d.]+)(?:K|s)?\\s*$`, "m"))
     return m ? Number(m[1]) : undefined
   }
   return {
@@ -50,41 +44,38 @@ export function parseExtendedDiagnostics(output) {
   }
 }
 
-// Throws with the raw tsc output attached as `.output` when tsc fails.
-export function measureBudget() {
-  const tsc = tscBinary()
+// Exits non-zero rather than returning when tsc fails or its output is unparseable.
+function measureBudget() {
+  const tsc = resolve(root, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc")
   let output
   try {
-    output = execFileSync(tsc, ["-p", tsconfigRelPath, "--noEmit", "--extendedDiagnostics"], {
+    output = execFileSync(existsSync(tsc) ? tsc : "tsc", ["-p", tsconfigRelPath, "--noEmit", "--extendedDiagnostics"], {
       cwd: root,
       encoding: "utf8",
     })
   } catch (err) {
     output = (err.stdout ?? "") + (err.stderr ?? "")
-    const parsed = parseExtendedDiagnostics(output)
-    const wrapped = new Error(
-      parsed?.instantiations !== undefined
-        ? "the budget file set (tsconfig.budget.json) has type errors"
+    fail(
+      parseExtendedDiagnostics(output).instantiations !== undefined
+        ? `the budget file set (${tsconfigRelPath}) has type errors`
         : "tsc failed and produced no parseable --extendedDiagnostics output",
+      output,
     )
-    wrapped.output = output
-    throw wrapped
   }
   const parsed = parseExtendedDiagnostics(output)
   if (parsed.instantiations === undefined || parsed.types === undefined) {
-    const wrapped = new Error("could not parse tsc --extendedDiagnostics output")
-    wrapped.output = output
-    throw wrapped
+    fail("could not parse tsc --extendedDiagnostics output", output)
   }
   return parsed
 }
 
-function loadBaseline() {
-  if (!existsSync(baselinePath)) return undefined
-  return JSON.parse(readFileSync(baselinePath, "utf8"))
-}
+const args = parseArgs(process.argv.slice(2))
 
-function writeBaseline(measured, reason) {
+if (args.reseed) {
+  if (!args.reason?.trim()) {
+    fail("--reseed requires a --reason \"<why the baseline is being rewritten>\".")
+  }
+  const measured = measureBudget()
   const baseline = {
     tsconfig: tsconfigRelPath,
     instantiations: measured.instantiations,
@@ -93,110 +84,59 @@ function writeBaseline(measured, reason) {
     checkTimeSeconds: measured.checkTimeSeconds ?? -1,
     totalTimeSeconds: measured.totalTimeSeconds ?? -1,
     measuredAt: new Date().toISOString(),
-    reason,
+    reason: args.reason.trim(),
   }
   writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n")
-  return baseline
+  console.log(`typecheck-budget: reseeded ${baselinePath}`)
+  console.log(`  tsconfig:       ${baseline.tsconfig}`)
+  console.log(`  instantiations: ${baseline.instantiations}`)
+  console.log(`  types:          ${baseline.types}`)
+  console.log(`  check time:     ${baseline.checkTimeSeconds}s`)
+  console.log(`  total time:     ${baseline.totalTimeSeconds}s`)
+  console.log(`  reason:         ${baseline.reason}`)
+  process.exit(0)
 }
 
-function ratio(current, base) {
-  return current / base
+if (!existsSync(baselinePath)) {
+  fail(`no baseline at ${baselinePath}. Seed one with --reseed --reason "<why>".`)
 }
+const baseline = JSON.parse(readFileSync(baselinePath, "utf8"))
+const measured = measureBudget()
 
-function main() {
-  const args = parseArgs(process.argv.slice(2))
+const row = (label, current, base, note, unit = "") =>
+  `  ${(label + ":").padEnd(16)}${current}${unit} vs baseline ${base}${unit}  -> ${(current / base).toFixed(3)}x ${note}`
 
-  if (args.reseed) {
-    if (!args.reason || !args.reason.trim()) {
-      console.error(
-        "typecheck-budget: --reseed requires a --reason \"<why the baseline is being rewritten>\".",
-      )
-      process.exit(1)
-    }
-    let measured
-    try {
-      measured = measureBudget()
-    } catch (err) {
-      console.error(`typecheck-budget: ${err.message}\n${err.output ?? ""}`)
-      process.exit(1)
-    }
-    const baseline = writeBaseline(measured, args.reason.trim())
-    console.log(`typecheck-budget: reseeded ${baselinePath}`)
-    console.log(`  tsconfig:       ${baseline.tsconfig}`)
-    console.log(`  instantiations: ${baseline.instantiations}`)
-    console.log(`  types:          ${baseline.types}`)
-    console.log(`  check time:     ${baseline.checkTimeSeconds}s`)
-    console.log(`  total time:     ${baseline.totalTimeSeconds}s`)
-    console.log(`  reason:         ${baseline.reason}`)
-    process.exit(0)
-  }
+const lines = [
+  `typecheck-budget (${tsconfigRelPath}):`,
+  row("instantiations", measured.instantiations, baseline.instantiations, `(limit ${INSTANTIATIONS_LIMIT}x)`),
+  row("types", measured.types, baseline.types, `(limit ${TYPES_LIMIT}x)`),
+]
+if (measured.checkTimeSeconds !== undefined && baseline.checkTimeSeconds !== undefined) {
+  lines.push(row("check time", measured.checkTimeSeconds, baseline.checkTimeSeconds, "(not gated: wall clock is noise)", "s"))
+}
+if (measured.totalTimeSeconds !== undefined && baseline.totalTimeSeconds !== undefined) {
+  lines.push(row("total time", measured.totalTimeSeconds, baseline.totalTimeSeconds, "(not gated)", "s"))
+}
+console.log(lines.join("\n"))
 
-  const baseline = loadBaseline()
-  if (!baseline) {
-    console.error(
-      `typecheck-budget: no baseline at ${baselinePath}. Seed one with --reseed --reason "<why>".`,
-    )
-    process.exit(1)
-  }
-
-  let measured
-  try {
-    measured = measureBudget()
-  } catch (err) {
-    console.error(`typecheck-budget: ${err.message}\n${err.output ?? ""}`)
-    process.exit(1)
-  }
-
-  const instRatio = ratio(measured.instantiations, baseline.instantiations)
-  const typesRatio = ratio(measured.types, baseline.types)
-
-  const lines = [
-    `typecheck-budget (${tsconfigRelPath}):`,
-    `  instantiations: ${measured.instantiations} vs baseline ${baseline.instantiations}  -> ${
+const failures = []
+const instRatio = measured.instantiations / baseline.instantiations
+const typesRatio = measured.types / baseline.types
+if (instRatio > INSTANTIATIONS_LIMIT) {
+  failures.push(
+    `instantiations ${measured.instantiations} is ${
       instRatio.toFixed(3)
-    }x (limit ${INSTANTIATIONS_LIMIT}x)`,
-    `  types:          ${measured.types} vs baseline ${baseline.types}  -> ${typesRatio.toFixed(3)}x (limit ${TYPES_LIMIT}x)`,
-  ]
-  if (measured.checkTimeSeconds !== undefined && baseline.checkTimeSeconds !== undefined) {
-    lines.push(
-      `  check time:     ${measured.checkTimeSeconds}s vs baseline ${baseline.checkTimeSeconds}s  -> ${
-        ratio(measured.checkTimeSeconds, baseline.checkTimeSeconds).toFixed(3)
-      }x (not gated: wall clock is noise)`,
-    )
-  }
-  if (measured.totalTimeSeconds !== undefined && baseline.totalTimeSeconds !== undefined) {
-    lines.push(
-      `  total time:     ${measured.totalTimeSeconds}s vs baseline ${baseline.totalTimeSeconds}s  -> ${
-        ratio(measured.totalTimeSeconds, baseline.totalTimeSeconds).toFixed(3)
-      }x (not gated)`,
-    )
-  }
-  console.log(lines.join("\n"))
-
-  const failures = []
-  if (instRatio > INSTANTIATIONS_LIMIT) {
-    failures.push(
-      `instantiations ${measured.instantiations} is ${
-        instRatio.toFixed(3)
-      }x baseline ${baseline.instantiations}, over the ${INSTANTIATIONS_LIMIT}x budget`,
-    )
-  }
-  if (typesRatio > TYPES_LIMIT) {
-    failures.push(
-      `types ${measured.types} is ${typesRatio.toFixed(3)}x baseline ${baseline.types}, over the ${TYPES_LIMIT}x budget`,
-    )
-  }
-
-  if (failures.length > 0) {
-    console.error("\ntypecheck-budget: FAIL")
-    for (const f of failures) console.error(`  - ${f}`)
-    process.exit(1)
-  }
-
-  console.log("\ntypecheck-budget: PASS")
+    }x baseline ${baseline.instantiations}, over the ${INSTANTIATIONS_LIMIT}x budget`,
+  )
+}
+if (typesRatio > TYPES_LIMIT) {
+  failures.push(`types ${measured.types} is ${typesRatio.toFixed(3)}x baseline ${baseline.types}, over the ${TYPES_LIMIT}x budget`)
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-if (isMain) {
-  main()
+if (failures.length > 0) {
+  console.error("\ntypecheck-budget: FAIL")
+  for (const f of failures) console.error(`  - ${f}`)
+  process.exit(1)
 }
+
+console.log("\ntypecheck-budget: PASS")

@@ -61,16 +61,8 @@ function makeNode(
   shape: readonly number[],
   dtype: DType,
 ): AnyTensor {
-  const node = {
-    ...body,
-    shape: [...shape],
-    dtype,
-  } as LazyNode
-  return makeStorage(
-    { kind: "lazy", node },
-    shape,
-    dtype,
-  )
+  const node = { ...body, shape: [...shape], dtype } as LazyNode
+  return makeStorage({ kind: "lazy", node }, shape, dtype)
 }
 
 type TensorField =
@@ -424,7 +416,7 @@ export function rawBinary(
 ): AnyTensor {
   if (lazyMode) {
     const outShape = broadcastShapes(a.shape, b.shape)
-    const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
+    const dtype = promoteBinaryDtype(a.dtype, b.dtype)
     return makeNode(
       { op: "binary", kind: op, parameter, a, b },
       outShape,
@@ -549,7 +541,7 @@ export function rawPermute(
 
 export function rawMatmul(a: AnyTensor, b: AnyTensor): AnyTensor {
   if (lazyMode) {
-    const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
+    const dtype = promoteBinaryDtype(a.dtype, b.dtype)
     return makeNode(
       { op: "matmul", a, b },
       matmulShape(a.shape, b.shape),
@@ -576,15 +568,7 @@ export function rawNarrow(
   return evalNarrowEager(a, d, start, length)
 }
 
-/**
- * Stacks `tensors` along a new axis at `dim`, as a balanced tree of `cat` nodes over `unsqueeze`.
- *
- * `Tensor.stack` folds a left-to-right `cat`, which copies the accumulated tensor once per input
- * and so is quadratic in the number of inputs. A loop that stacks one output per timestep hits
- * that directly. Pairing the inputs up instead keeps the copy count linear and the graph shallow,
- * and it is built only from `unsqueeze` and `cat`, so it lowers to the native backend exactly as
- * those two do.
- */
+/** A balanced tree of `cat` over `unsqueeze`: folding left to right would copy the accumulator once per input. */
 export function rawStackList(
   tensors: readonly AnyTensor[],
   dim: number,
@@ -601,7 +585,6 @@ export function rawStackList(
     }
   }
   const d = normalizeDim(dim, first.shape.length + 1)
-  // Every input gains the new axis at `d`, which is what turns a stack into a concatenation.
   let level = tensors.map(t => t.unsqueeze(d))
   while (level.length > 1) {
     const next: AnyTensor[] = []
@@ -622,7 +605,7 @@ export function rawCat(
   dim: number,
 ): AnyTensor {
   if (lazyMode) {
-    const dtype: DType = promoteBinaryDtype(a.dtype, b.dtype)
+    const dtype = promoteBinaryDtype(a.dtype, b.dtype)
     return makeNode(
       { op: "cat", a, b, dim },
       catShape(a.shape, b.shape, dim),
@@ -732,8 +715,7 @@ export function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
     : reshapeRaw(reduced, shape)
 }
 
-// Multi-output ops are one flat producer plus a slice per output; lazy mode turns
-// the slices into `pick` nodes, eager mode reads the kernel's buffer directly.
+// A multi-output op is one flat producer plus a slice per output: a `pick` node when lazy, a subarray when eager.
 
 function splitFlat(
   flat: AnyTensor,

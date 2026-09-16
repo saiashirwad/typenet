@@ -1,4 +1,3 @@
-// In-place twins (trailing `_`) route through `fill_`/`copy_`, so mutation guards live in tensor.ts.
 import { hash32, nextSeed, nextStream, randomData } from "../kernels.ts"
 import type { Shape } from "../shape.ts"
 import { prod, showShape } from "../storage.ts"
@@ -103,9 +102,6 @@ function kaimingStd(fan: number, o: GainOptions): number {
   return gain / Math.sqrt(fan)
 }
 
-// Closed-form erf/erfinv: truncated-normal sampling draws one uniform per element
-// with no rejection loop, so it stays as seed-deterministic as the other draws here.
-
 /** Abramowitz & Stegun 7.1.26, max error ~1.5e-7. */
 function erf(x: number): number {
   const sign = x < 0 ? -1 : 1
@@ -195,8 +191,7 @@ export function truncNormal<const Sh extends Shape>(shape: Sh, o: TruncNormalOpt
   for (let i = 0; i < n; i++) {
     // `normalInvCdf` blows up at exactly 0/1, which a boundary `u[i]` can hit.
     const p = Math.min(Math.max(lo + u[i]! * (hi - lo), 1e-7), 1 - 1e-7)
-    // Far in a tail both CDF endpoints underflow to 0, which would place the
-    // draw outside [a, b]; clamping lands on the bound nearest the mean.
+    // Far in a tail both CDF endpoints underflow to 0, putting the draw outside [a, b].
     data[i] = Math.min(Math.max(mean + std * normalInvCdf(p), a), b)
   }
   return fromFlat(data, shape, "float32")

@@ -17,28 +17,8 @@ import {
   Softmax,
   stepUnbatched,
 } from "../src/nn/index.ts"
-import { type AnyTensor, fromFlat, Tensor } from "../src/tensor.ts"
-import { expectAgreeStrict, expectClose } from "./helpers.ts"
-
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
-  <T>() => T extends B ? 1 : 2
-) ? true
-  : false
-type Expect<T extends true> = T
-
-function expectExact(a: AnyTensor, b: AnyTensor): void {
-  expect(b.shape).toEqual(a.shape)
-  expect(Array.from(b.data)).toEqual(Array.from(a.data))
-}
-
-const sample = (n: number, shape: number[]): AnyTensor =>
-  fromFlat(
-    Float32Array.from(
-      { length: n },
-      (_, i) => Math.sin(i * 1.7 + 0.3) * 1.6,
-    ),
-    shape,
-  ) as AnyTensor
+import { type AnyTensor, Tensor } from "../src/tensor.ts"
+import { type Equal, type Expect, expectAgreeStrict, expectClose, expectExact, sample } from "./helpers.ts"
 
 describe("layers", () => {
   describe("Embedding", () => {
@@ -77,7 +57,6 @@ describe("layers", () => {
         // @ts-expect-error a plain (non-index) Tensor is not an IndexTensor
         table.forward(x)
       }
-      void _typeOnly
     })
 
     it("its shape effect (appendDim) composes with a mapLast layer inside sequential", () => {
@@ -91,7 +70,7 @@ describe("layers", () => {
   })
 
   describe("LayerNorm", () => {
-    it("normalises the last axis to mean 0 / variance 1 before the affine, matches eager/lazy/native", () => {
+    it("matches eager/lazy/native", () => {
       const norm = new LayerNorm(4)
       const x = sample(12, [3, 4])
       expectAgreeStrict(() => norm.forward(x) as AnyTensor)
@@ -122,7 +101,6 @@ describe("layers", () => {
         // @ts-expect-error the norm owns the last axis: 4 -> 8 is a width mismatch
         sequential(new Linear(4, 4), new Softmax(-1), new LayerNorm(8))
       }
-      void _widthMismatch
     })
   })
 
@@ -436,7 +414,7 @@ describe("layers", () => {
       expectExact(functional.dropout(x, 0) as AnyTensor, x)
     })
 
-    it("softmax is the fused node: agrees with, but is not the composed spelling `Softmax` still uses", () => {
+    it("softmax agrees with the composed spelling `Softmax` still uses", () => {
       // The Softmax layer keeps the composed Tensor.prototype.softmax spelling to stay on the
       // native fast path, so this is expectClose at 1e-6, not expectExact.
       const x = sample(24, [4, 6])
@@ -447,10 +425,9 @@ describe("layers", () => {
       )
     })
 
-    it("logSoftmax matches x - logSumExp(x, dim) and the composed Tensor.logSoftmax", () => {
+    it("logSoftmax matches the composed Tensor.logSoftmax", () => {
       const x = sample(24, [4, 6])
-      const y = functional.logSoftmax(x, -1) as AnyTensor
-      expectClose(y, x.logSoftmax(-1) as AnyTensor, 1e-5)
+      expectClose(functional.logSoftmax(x, -1) as AnyTensor, x.logSoftmax(-1) as AnyTensor, 1e-5)
     })
 
     it("arangeIndex builds 0..N-1 as an IndexTensor usable by Embedding", () => {

@@ -1,5 +1,5 @@
 import type { DimEq, ErrorMessage, Shape } from "../shape.ts"
-import { type AnyTensor, Tensor } from "../tensor.ts"
+import type { AnyTensor, Tensor } from "../tensor.ts"
 import { Linear } from "./layers/linear.ts"
 import { Module } from "./module.ts"
 
@@ -53,8 +53,7 @@ export class Sequential<
   ): Tensor<ChainShape<L, S>> {
     let h: AnyTensor = x as AnyTensor
     for (const layer of this.layers) {
-      h = (layer as { forward(t: AnyTensor): AnyTensor })
-        .forward(h)
+      h = (layer as { forward(t: AnyTensor): AnyTensor }).forward(h)
     }
     return h as Tensor<ChainShape<L, S>>
   }
@@ -96,8 +95,7 @@ type ChainCheck<
     : never
   : unknown
 
-// L stays unconstrained: Tensor is invariant in S, so bounding it to a
-// rank-2 layer type would reject every real call. ChainCheck does the work.
+// L stays unconstrained: Tensor is invariant in S, so bounding it to a rank-2 layer type would reject every real call. ChainCheck does the work.
 export function sequential<
   const L extends readonly unknown[],
 >(
@@ -108,19 +106,13 @@ export function sequential(
 ): Sequential<readonly unknown[]> {
   let prevOut: number | undefined
   layers.forEach((l, i) => {
-    if (
-      prevOut !== undefined
-      && l.inFeatures !== undefined
-      && l.inFeatures !== prevOut
-    ) {
+    if (prevOut !== undefined && l.inFeatures !== undefined && l.inFeatures !== prevOut) {
       throw new Error(
         `sequential: layer ${i} expects ${l.inFeatures} features but the previous layer outputs ${prevOut}`,
       )
     }
     if (l.outFeatures !== undefined) prevOut = l.outFeatures
-    else if (l.inFeatures !== undefined) {
-      prevOut = l.inFeatures
-    }
+    else if (l.inFeatures !== undefined) prevOut = l.inFeatures
   })
   return new Sequential(layers)
 }

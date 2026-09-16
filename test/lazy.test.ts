@@ -5,12 +5,10 @@ import { isLazyMode } from "../src/ir.ts"
 import { configure } from "../src/lazy.ts"
 import { crossEntropy } from "../src/nn/index.ts"
 import { SGD } from "../src/optim/index.ts"
-import { Tensor } from "../src/tensor.ts"
+import { type AnyTensor, Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
 import { bothWays, expectClose } from "./helpers.ts"
 import { makeXorNet } from "./xor-net.ts"
-
-type AnyTensor = Tensor<any>
 
 function expectSame(
   eager: AnyTensor,

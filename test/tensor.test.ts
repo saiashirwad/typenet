@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest"
 import { compile } from "../src/compile.ts"
 import { arange, eye, ones, tensor, zeros } from "../src/factories.ts"
 import { fromFlat, Tensor } from "../src/tensor.ts"
+import type { Equal, Expect } from "./helpers.ts"
 
 // `pnpm typecheck` checks this file too; vitest never runs the types.
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
-type Expect<T extends true> = T
 
 describe("creation", () => {
   it("infers shape from nested arrays", () => {

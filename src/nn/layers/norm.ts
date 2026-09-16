@@ -16,20 +16,15 @@ export class LayerNorm<D extends number> extends Module {
     super()
     this.dim = dim
     this.eps = options.eps ?? 1e-5
-    // Explicit type arguments: inference through the outer generic call
-    // widens `[dim]` to bare `Shape`.
+    // Explicit type arguments: inference through the outer generic call widens `[dim]` to bare `Shape`.
     this.gamma = parameter(Tensor.ones<[D]>([dim]))
     this.beta = parameter(Tensor.zeros<[D]>([dim]))
   }
 
-  /** The cast only bridges generic deferral; {@link LastDimCheck} here and the runtime check in `layerNorm` both still apply. */
   forward<S extends Shape>(
     x: Tensor<S> & LastDimCheck<S, D>,
   ): Tensor<S> {
-    const a = x as AnyTensor
-    return layerNorm(a, this.gamma as AnyTensor, this.beta as AnyTensor, {
-      eps: this.eps,
-    }) as Tensor<S>
+    return layerNorm(x as AnyTensor, this.gamma as AnyTensor, this.beta as AnyTensor, { eps: this.eps }) as Tensor<S>
   }
 }
 
@@ -50,7 +45,6 @@ export class RMSNorm<D extends number> extends Module {
   forward<S extends Shape>(
     x: Tensor<S> & LastDimCheck<S, D>,
   ): Tensor<S> {
-    const a = x as AnyTensor
-    return rmsNorm(a, this.gamma as AnyTensor, { eps: this.eps }) as Tensor<S>
+    return rmsNorm(x as AnyTensor, this.gamma as AnyTensor, { eps: this.eps }) as Tensor<S>
   }
 }

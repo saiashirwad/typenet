@@ -18,7 +18,7 @@ export function parameter<S extends Shape>(t: Tensor<S>): Parameter<S> {
   return p
 }
 
-/** Records that `b`'s storage stands for `a`'s, so `Module` sees one parameter and one `stateDict` entry. Sharing one `.grad` needs the same `Tensor` object at both sites (see `TiedLinear`). */
+/** `b`'s storage stands for `a`'s, so `Module` sees one parameter and one `stateDict` entry. Sharing one `.grad` needs the same `Tensor` object at both sites. */
 const storageAlias = new WeakMap<TensorStorage, TensorStorage>()
 
 export function tie<S extends Shape>(a: Parameter<S>, b: Parameter<NoInfer<S>>): void {
@@ -36,7 +36,7 @@ function canonicalStorage(s: TensorStorage): TensorStorage {
   return cur
 }
 
-/** The identity `Module` dedups tensors by: storage resolved through any `tie()` alias, not object identity. */
+/** The identity `Module` dedups by: storage resolved through any `tie()` alias, not object identity. */
 export function storageKey(t: AnyTensor): TensorStorage {
   return canonicalStorage(_internal.sourceOf(t))
 }

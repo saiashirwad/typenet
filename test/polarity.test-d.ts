@@ -34,6 +34,7 @@ import type {
   ViewCheck,
 } from "../src/shape.ts"
 import type { AnyTensor, Tensor } from "../src/tensor.ts"
+import type { Equal, Expect } from "./helpers.ts"
 import { BROADCAST_TO_CASES, BROADCAST_TO_FAIL_CASES, BROADCAST_TO_TYPE_FAIL_CASES } from "./shape-cases.ts"
 
 // Checks that stay open for a fully naked `S extends Shape`.
@@ -96,7 +97,7 @@ function _matMulCheckOpen<M extends number, K extends number, N extends number>(
 // ViewCheck<S, V>: the escape that stays open under genericity is the `IsDynamic<S>` wildcard,
 // not a known-rank tuple, so the honest naked case for `view` is the truly dynamic `number[]`.
 declare function _viewCheck<S extends Shape, V extends number[]>(v: V & ViewCheck<S, V>): V
-function _viewCheckOpen(shape: number[]) {
+function _viewCheckOpen() {
   return _viewCheck<number[], [2, 3]>([2, 3])
 }
 
@@ -272,7 +273,6 @@ _bcastFrom1.broadcastTo(BROADCAST_TO_FAIL_CASES[0].to)
 // `ConvCheck`'s fail-openness, pinned by scratch copies of `ConvFits` with one mechanism
 // removed at a time: the `IsExact` guards are load-bearing, the distribution trigger alone is not.
 
-type _IsExact<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
 type _ConvSpan<H extends number, K extends number, P extends number> = DimSub<DimAdd<H, DimMul<2, P>>, K>
 type _Err<F> = F extends false ? ErrorMessage<"conv: the kernel does not fit"> : unknown
 
@@ -325,9 +325,7 @@ function _convCheckOnQuotientIsClosed<H extends number>(x: Tensor<[H]>) {
 
 // Every spelling above agrees with the real `ConvCheck` on literals, so a green literal
 // suite is not evidence that any of them is safe to adopt.
-type _Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
-type _Ex<T extends true> = T
-type _sameOnLiterals0 = _Ex<_Eq<_Err<_FitsNeither<28, 3, 0>>, ConvCheck<28, 3, 1, 0>>>
-type _sameOnLiterals1 = _Ex<_Eq<_Err<_FitsTriggerAlone<2, 5, 0>>, _Err<_FitsNeither<2, 5, 0>>>>
+type _sameOnLiterals0 = Expect<Equal<_Err<_FitsNeither<28, 3, 0>>, ConvCheck<28, 3, 1, 0>>>
+type _sameOnLiterals1 = Expect<Equal<_Err<_FitsTriggerAlone<2, 5, 0>>, _Err<_FitsNeither<2, 5, 0>>>>
 
 export { _convCheckNeitherIsClosed, _convCheckOnQuotientIsClosed, _convCheckTriggerAloneIsClosed }

@@ -3,10 +3,8 @@ import { isNativeAvailable } from "../src/backends/native.ts"
 import { compile, printGraph } from "../src/compile.ts"
 import { lazy, withContext } from "../src/context.ts"
 import { rand, randn } from "../src/factories.ts"
-import { Tensor } from "../src/tensor.ts"
+import { type AnyTensor, Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
-
-type AnyTensor = Tensor<any>
 
 function stats(t: AnyTensor): { mean: number; sd: number } {
   const d = t.data

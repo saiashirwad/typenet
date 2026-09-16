@@ -10,7 +10,7 @@ import { topoOrder } from "../src/ir.ts"
 import { configure } from "../src/lazy.ts"
 import { functional, LayerNorm, Linear, Module, ModuleList, MultiHeadAttention, Residual, TransformerBlock } from "../src/nn/index.ts"
 import { _internal, type AnyTensor, Tensor } from "../src/tensor.ts"
-import { expectAgreeStrict } from "./helpers.ts"
+import { expectAgreeStrict, mulberry32 } from "./helpers.ts"
 
 const { sdpa } = functional
 
@@ -18,17 +18,6 @@ afterEach(() => {
   configure({ lazy: false })
   disableNative()
 })
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 /** Sampled away from zero, so no gradient sits on a kink or a cancellation. */
 function awayFromZero(rand: () => number): number {

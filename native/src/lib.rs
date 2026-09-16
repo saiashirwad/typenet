@@ -11,7 +11,6 @@ fn to_napi_err(err: candle_core::Error) -> Error {
     Error::new(Status::GenericFailure, err.to_string())
 }
 
-#[derive(Default)]
 struct Counters {
     prepares: AtomicU64,
     index_builds: AtomicU64,

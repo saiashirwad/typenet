@@ -1,14 +1,7 @@
 "use tsover"
 
-// A vanilla (Elman) recurrent layer. The recurrence is a method rather than a loop inside
-// `forward`, because there is no sequence axis to fold: `forward` sees one timestep, and the
-// caller owns the loop. That is also what keeps every shape literal, since a state is `[B, H]`
-// whatever the caller's sequence length happens to be.
-//
-//   h_t = tanh(x_t @ weightIH + b_ih + h_{t-1} @ weightHH + b_hh)
-//
-// Both projections stay separate so each can be inspected or initialised on its own. The weights
-// follow `nn.RNN`'s convention, `U(-1/√H, 1/√H)` on the weights and the biases.
+// A vanilla (Elman) recurrent layer: h_t = tanh(x_t @ weightIH + b_ih + h_{t-1} @ weightHH + b_hh).
+// `forward` is one timestep and the caller owns the loop, which is what keeps every shape literal.
 
 import { Tensor } from "../../tensor.ts"
 import * as init from "../init.ts"
@@ -22,7 +15,7 @@ export type StateOrBatch<B extends number, H extends number> =
   | { readonly batch: B }
 
 export class Rnn<In extends number, H extends number> extends Module {
-  // A step maps `[B, In]` to `[B, H]`, so it neither appends an axis nor merges one.
+  // A step maps `[B, In]` to `[B, H]`: no axis appended or merged.
   declare readonly [SHAPE_EFFECT]: "identity"
 
   readonly inputSize: In
@@ -39,9 +32,8 @@ export class Rnn<In extends number, H extends number> extends Module {
     this.inputSize = inputSize
     this.hiddenSize = hiddenSize
     const k = 1 / Math.sqrt(hiddenSize)
-    // Fan-based initialisers are wrong here: a recurrent weight multiplies the state at every
-    // step of the unroll, so its bound has to shrink with `hiddenSize` whatever `inputSize` is,
-    // which is what `nn.RNN`'s flat `1/√H` does.
+    // `nn.RNN`'s flat `U(-1/√H, 1/√H)`, not a fan-based initialiser: a recurrent weight multiplies the
+    // state at every step of the unroll, so its bound has to shrink with `hiddenSize` whatever `inputSize` is.
     this.weightIH = parameter(init.uniform<[In, H]>([inputSize, hiddenSize], { low: -k, high: k }))
     this.weightHH = parameter(init.uniform<[H, H]>([hiddenSize, hiddenSize], { low: -k, high: k }))
     this.biasIH = options.bias === false ? null : parameter(init.uniform<[H]>([hiddenSize], { low: -k, high: k }))

@@ -2,11 +2,9 @@ import { afterEach, describe, expect, it } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { fromFlat, Tensor } from "../src/tensor.ts"
+import { type AnyTensor, fromFlat, Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
 import { expectAgree } from "./helpers.ts"
-
-type AnyTensor = Tensor<any>
 
 afterEach(() => {
   configure({ lazy: false })

@@ -193,4 +193,4 @@ pnpm format            # dprint
 pnpm build:native      # the Rust addon
 ```
 
-`examples/` holds seven runnable models: `pnpm example:shapes`, `example:mlp`, `example:gpt`, `example:xor`, `example:spiral`, and the character RNN, which trains with `example:char-rnn` and samples from the checkpoint it writes with `example:char-rnn:generate`.
+`examples/` holds seven runnable models, each started with `pnpm vite-node <file>`: `examples/shapes.ts`, `examples/mlp.ts`, `examples/gpt.ts`, `examples/xor.ts`, `examples/spiral.ts`, and the character RNN, where `examples/char-rnn/train.ts` writes the checkpoint `examples/char-rnn/generate.ts` samples from.

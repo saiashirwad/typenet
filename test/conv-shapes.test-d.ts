@@ -3,10 +3,8 @@
 import { Linear } from "../src/nn/index.ts"
 import type { ConvCheck, ConvOut, ErrorMessage, FlattenFrom, PoolOut, Shape } from "../src/shape.ts"
 import type { Tensor } from "../src/tensor.ts"
+import type { Equal, Expect } from "./helpers.ts"
 import { CONV_FIT_FAIL_CASES } from "./shape-cases.ts"
-
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
-type Expect<T extends true> = T
 
 // Every non-fitting row errors, including the rows whose truncated quotient looks like a legal 1-wide output.
 

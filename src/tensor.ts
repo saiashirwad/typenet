@@ -37,7 +37,6 @@ import {
 } from "./ir.ts"
 import { nextSeed, nextStream, randomData } from "./kernels.ts"
 import { force } from "./lazy.ts"
-import { resolveView } from "./shape.ts"
 import {
   type Broadcast,
   type BroadcastCheck,
@@ -68,6 +67,7 @@ import {
   type ReduceDim,
   type ResizeDim,
   type ResolveView,
+  resolveView,
   type SelectCheck,
   type SelectShape,
   type Shape,
@@ -406,8 +406,8 @@ export class Tensor<S extends Shape> {
     dtype: D,
   ): Tensor<S> {
     if (dtype === this.dtype) return this as any
-    const data = convertData(this.data, dtype)
-    return makeMovedData(this, data, dtype) as any
+    const out = makeRaw(convertData(this.data, dtype), this.shape, dtype)
+    return withGrad(out, "to", [this], g => [g]) as any
   }
 
   item(): number {
@@ -991,11 +991,7 @@ export class Tensor<S extends Shape> {
       if (c == null) continue
       const start = typeof c === "number" ? 0 : c[0]
       const length = typeof c === "number" ? c : c[1] - c[0]
-      out = (out as Tensor<any>).narrow(
-        d,
-        start,
-        length,
-      ) as AnyTensor
+      out = out.narrow(d, start, length) as AnyTensor
     }
     return out as any
   }
@@ -1039,11 +1035,7 @@ export class Tensor<S extends Shape> {
     })
   }
 
-  /**
-   * One position along `dim`, taken out: `[B, T, E].select(1, t)` is `[B, E]`. This is
-   * `narrow(dim, i, 1).squeeze(dim)` spelled once, which is what a hand-written sequence loop
-   * wants at every step; gradients flow to the selected slice like any other view.
-   */
+  /** `narrow(dim, i, 1).squeeze(dim)`: `[B, T, E].select(1, t)` is `[B, E]`. */
   select<D extends number, I extends number>(
     dim: D & DimCheck<S, D> & SelectCheck<S, D, I>,
     index: I,
@@ -1054,15 +1046,8 @@ export class Tensor<S extends Shape> {
     }
     // `narrow` takes a non-negative start only, so `select(0, -1)` resolves its own index first.
     const at = normalizeDim(index, this.shape[d]!)
-    // Composed from the two views that already exist, so the tape stays the ordinary chain of
-    // `narrow` and `squeeze` nodes: one view keeps the index's gradient, the other drops the
-    // axis. Both casts bridge generic deferral, as in `Linear.forward`: with `S` still generic,
-    // tsc cannot reduce `NarrowCheck`/`SqueezeDimCheck` against it, though `SelectCheck` above
-    // has already proved the same relation for the concrete shape the caller passes.
-    const window = (this as AnyTensor).narrow(d, at, 1) as Tensor<
-      ResizeDim<S, D, 1>
-    >
-    return (window as AnyTensor).squeeze(d) as Tensor<SelectShape<S, D>>
+    const window = (this as AnyTensor).narrow(d, at, 1) as AnyTensor
+    return window.squeeze(d) as Tensor<SelectShape<S, D>>
   }
 
   /** Gradients flow to the gathered tensor, never to the index. */
@@ -1226,13 +1211,11 @@ export class Tensor<S extends Shape> {
     ...order: O & PermuteCheck<S, O>
   ): Tensor<Permute<S, O>> {
     const rank = this.shape.length
-    const normalized = (order as readonly number[]).map(d => normalizeDim(d, rank))
-    if (
-      normalized.length !== rank
-      || new Set(normalized).size !== rank
-    ) {
+    const dims = order as readonly number[]
+    const normalized = dims.map(d => normalizeDim(d, rank))
+    if (normalized.length !== rank || new Set(normalized).size !== rank) {
       throw new Error(
-        `permute(${(order as readonly number[]).join(", ")}) is not a permutation of ${showShape(this.shape)}`,
+        `permute(${dims.join(", ")}) is not a permutation of ${showShape(this.shape)}`,
       )
     }
     return this.permuteRaw(normalized) as any
@@ -1260,13 +1243,8 @@ export class Tensor<S extends Shape> {
   }
 
   /**
-   * Stacks a list of tensors whose length is only known at run time: `Tensor.stack` takes a tuple,
-   * because its result's shape is derived from the tuple's length, but a loop that pushes one
-   * tensor per step has a list and cannot call it at all.
-   *
-   * The result is `Tensor<Shape>`, since a runtime count cannot appear in the type. This is also
-   * the cheap path for a tuple: one node and one pass, where `stack` used to fold a left-to-right
-   * `cat` that copied the accumulated tensor once per input.
+   * Stacks a list whose length is only known at run time, where `Tensor.stack` needs a tuple to
+   * derive its result shape. The result is `Tensor<Shape>`: a runtime count cannot appear in the type.
    */
   static stackList(
     tensors: readonly AnyTensor[],
@@ -1438,15 +1416,6 @@ function coerce(
 function coerceLhs(lhs: any, rhs: any): AnyTensor {
   if (lhs instanceof Tensor) return lhs as AnyTensor
   return coerce(lhs, rhs as AnyTensor)
-}
-
-function makeMovedData(
-  t: AnyTensor,
-  data: TypedArray,
-  dtype: DType,
-): AnyTensor {
-  const out = makeRaw(data, t.shape, dtype)
-  return withGrad(out, "to", [t], g => [g])
 }
 
 function matmul2(a: AnyTensor, b: AnyTensor): AnyTensor {

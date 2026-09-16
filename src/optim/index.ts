@@ -22,17 +22,12 @@ function finishGraphUpdates(
   }
   forceMany(updates.map(u => u.expr))
   for (const u of updates) {
-    ;(u.target.data as Float32Array).set(
-      u.expr.data as Float32Array,
-    )
+    ;(u.target.data as Float32Array).set(u.expr.data as Float32Array)
   }
 }
 
 function useGraphStep(p: AnyTensor): boolean {
-  return (
-    (_activeUpdateTrace() !== null || isLazyMode())
-    && p.dtype === "float32"
-  )
+  return (_activeUpdateTrace() !== null || isLazyMode()) && p.dtype === "float32"
 }
 
 type Algebra<T> = {
@@ -55,8 +50,7 @@ const nums: Algebra<number> = {
   min1: a => Math.min(a, 1),
 }
 
-// A file-local untyped algebra over the raw dispatchers: optimizer formulas
-// relate shapes the public BroadcastCheck cannot see, and the step runs under noGrad.
+// A file-local untyped algebra over the raw dispatchers: optimizer formulas relate shapes the public BroadcastCheck cannot see, and the step runs under noGrad.
 const asTensor = (v: AnyTensor | number): AnyTensor => typeof v === "number" ? Tensor.scalar(v) as AnyTensor : v
 
 const tensors: Algebra<AnyTensor> = {
@@ -69,14 +63,8 @@ const tensors: Algebra<AnyTensor> = {
   min1: a => rawBinary(a, asTensor(1), "minimum"),
 }
 
-function clipScale<T>(
-  A: Algebra<T>,
-  sumSq: T,
-  maxNorm: number,
-): T {
-  return A.min1(
-    A.div(A.of(maxNorm), A.add(A.sqrt(sumSq), 1e-6)),
-  )
+function clipScale<T>(A: Algebra<T>, sumSq: T, maxNorm: number): T {
+  return A.min1(A.div(A.of(maxNorm), A.add(A.sqrt(sumSq), 1e-6)))
 }
 
 function sgdUpdate<T>(
@@ -143,9 +131,7 @@ export function clipGradNorm(
   maxNorm: number,
 ): Tensor<[]> {
   if (!(maxNorm > 0)) {
-    throw new Error(
-      `clipGradNorm: maxNorm must be positive, got ${maxNorm}`,
-    )
+    throw new Error(`clipGradNorm: maxNorm must be positive, got ${maxNorm}`)
   }
   const withGrads = params.filter(p => p.grad)
   if (withGrads.length === 0) return Tensor.scalar(0)
@@ -234,9 +220,7 @@ export abstract class Optimizer {
     this.maxGradNorm = maxGradNorm
     for (const p of this.params) {
       if (!p.needsGrad) {
-        throw new Error(
-          "Optimizer received a tensor without requiresGrad",
-        )
+        throw new Error("Optimizer received a tensor without requiresGrad")
       }
       if (p.dtype === "int32" || p.dtype === "int64") {
         throw new Error(
@@ -299,9 +283,7 @@ export class SGD extends Optimizer {
     this.checkParameterEpoch()
     this.clipIfNeeded()
     if (this.momentum > 0 && !this.velocities) {
-      this.velocities = this.params.map(
-        p => new Float64Array(p.numel),
-      )
+      this.velocities = this.params.map(p => new Float64Array(p.numel))
     }
     const updates: GraphUpdate[] = []
     const grads: AnyTensor[] = []
@@ -312,11 +294,7 @@ export class SGD extends Optimizer {
         if (useGraphStep(p)) {
           let velocity: AnyTensor | null = null
           if (this.momentum > 0) {
-            if (!this.graphVelocities) {
-              this.graphVelocities = this.params.map(
-                q => Tensor.zeros(q.shape) as AnyTensor,
-              )
-            }
+            this.graphVelocities ??= this.params.map(q => Tensor.zeros(q.shape) as AnyTensor)
             velocity = this.graphVelocities[pi]!
           }
           const next = sgdUpdate(
@@ -337,9 +315,7 @@ export class SGD extends Optimizer {
         }
         const data = p.data
         const gd = g.data
-        const vel = this.momentum > 0
-          ? this.velocities![pi]!
-          : null
+        const vel = this.momentum > 0 ? this.velocities![pi]! : null
         for (let i = 0; i < data.length; i++) {
           const next = sgdUpdate(
             nums,
@@ -420,8 +396,7 @@ export class Adam extends Optimizer {
   private v: Float64Array[] | null
   private graphM: AnyTensor[] | null = null
   private graphV: AnyTensor[] | null = null
-  // The in-graph step count must be a leaf, not the host-side `t`: a
-  // traced constant would freeze the bias correction at t = 1.
+  // The in-graph step count must be a leaf, not the host-side `t`: a traced constant would freeze the bias correction at t = 1.
   private graphT: AnyTensor | null = null
 
   constructor(
@@ -431,10 +406,7 @@ export class Adam extends Optimizer {
   ) {
     super(source, options.maxGradNorm)
     this.lr = options.lr ?? 0.001
-    ;[this.beta1, this.beta2] = options.betas ?? [
-      0.9,
-      0.999,
-    ]
+    ;[this.beta1, this.beta2] = options.betas ?? [0.9, 0.999]
     this.eps = options.eps ?? 1e-8
     this.weightDecay = options.weightDecay ?? 0
     this.decoupled = decoupled
@@ -452,21 +424,15 @@ export class Adam extends Optimizer {
     const bc2 = 1 - this.beta2 ** this.t
     const updates: GraphUpdate[] = []
     const grads: AnyTensor[] = []
-    // Bias corrections as graph expressions of the step-count leaf:
-    // beta^t as exp(t·ln beta), built lazily on first graph-path use.
+    // Bias corrections as graph expressions of the step-count leaf: beta^t as exp(t·ln beta), built lazily on first graph-path use.
     let graphBc: { one: AnyTensor; two: AnyTensor } | null = null
     const corrections = () => {
       if (graphBc) return graphBc
-      if (!this.graphT) {
-        this.graphT = Tensor.zeros([]) as AnyTensor
-      }
+      this.graphT ??= Tensor.zeros([]) as AnyTensor
       const next = this.graphT.add(1)
       updates.push({ target: this.graphT, expr: next })
       const correct = (beta: number) => next.mul(Math.log(beta)).exp().neg().add(1)
-      graphBc = {
-        one: correct(this.beta1),
-        two: correct(this.beta2),
-      }
+      graphBc = { one: correct(this.beta1), two: correct(this.beta2) }
       return graphBc
     }
     noGrad(() => {
@@ -474,16 +440,8 @@ export class Adam extends Optimizer {
         const g = p.grad
         if (!g) return
         if (useGraphStep(p)) {
-          if (!this.graphM) {
-            this.graphM = this.params.map(
-              q => Tensor.zeros(q.shape) as AnyTensor,
-            )
-          }
-          if (!this.graphV) {
-            this.graphV = this.params.map(
-              q => Tensor.zeros(q.shape) as AnyTensor,
-            )
-          }
+          this.graphM ??= this.params.map(q => Tensor.zeros(q.shape) as AnyTensor)
+          this.graphV ??= this.params.map(q => Tensor.zeros(q.shape) as AnyTensor)
           const m = this.graphM[pi]!
           const v = this.graphV[pi]!
           const bc = corrections()
@@ -603,10 +561,6 @@ export interface AdamWOptions {
 
 export class AdamW extends Adam {
   constructor(source: OptimizerSource, options: AdamWOptions = {}) {
-    super(
-      source,
-      { ...options, weightDecay: options.weightDecay ?? 0.01 },
-      true,
-    )
+    super(source, { ...options, weightDecay: options.weightDecay ?? 0.01 }, true)
   }
 }

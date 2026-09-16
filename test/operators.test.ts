@@ -4,12 +4,7 @@ import { describe, expect, it } from "vitest"
 import { tensor } from "../src/factories.ts"
 import { mseLoss } from "../src/nn/index.ts"
 import { Tensor } from "../src/tensor.ts"
-
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
-  <T>() => T extends B ? 1 : 2
-) ? true
-  : false
-type Expect<T extends true> = T
+import type { Equal, Expect } from "./helpers.ts"
 
 const _col = tensor([[1], [2]])
 const _rowVec = tensor([[10, 20, 30]])

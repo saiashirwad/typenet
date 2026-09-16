@@ -1,6 +1,24 @@
 import type { IndexTensor, Init, Shape } from "../shape.ts"
 import { type AnyTensor, Tensor } from "../tensor.ts"
 
+/** Collapses everything but the class axis into one batch axis, so `[B,T,V]`/`[B,T]` reduces to `[B,C]`/`[B]`. */
+function flattenBatch(l: AnyTensor, t: AnyTensor, who: string): { logits: AnyTensor; targets: AnyTensor; batch: number } {
+  if (l.rank < 2) {
+    throw new Error(
+      `${who}: logits must be at least rank 2 ([N, C]), got rank ${l.rank}`,
+    )
+  }
+  const logits = (l.rank > 2 ? l.flatten(0, l.rank - 2) : l) as AnyTensor
+  const targets = (t.rank > 1 ? t.flatten() : t) as AnyTensor
+  const batch = logits.shape[0]!
+  if (targets.numel !== batch) {
+    throw new Error(
+      `${who}: ${targets.numel} targets for batch of ${batch}`,
+    )
+  }
+  return { logits, targets, batch }
+}
+
 export function mseLoss<
   S extends Shape,
 >(
@@ -25,22 +43,8 @@ export function crossEntropy<
   } = {},
 ): Tensor<[]> {
   const l = logits as AnyTensor
-  const t = targets as AnyTensor
-  if (l.rank < 2) {
-    throw new Error(
-      `crossEntropy: logits must be at least rank 2 ([N, C]), got rank ${l.rank}`,
-    )
-  }
   const classes = l.shape[l.rank - 1]!
-  // Everything but the class axis collapses into one batch axis, so [B,T,V]/[B,T] reduces to [B,C]/[B].
-  const flatLogits = (l.rank > 2 ? l.flatten(0, l.rank - 2) : l) as AnyTensor
-  const flatTargets = (t.rank > 1 ? t.flatten() : t) as AnyTensor
-  const batch = flatLogits.shape[0]!
-  if (flatTargets.numel !== batch) {
-    throw new Error(
-      `crossEntropy: ${flatTargets.numel} targets for batch of ${batch}`,
-    )
-  }
+  const { logits: flatLogits, targets: flatTargets, batch } = flattenBatch(l, targets as AnyTensor, "crossEntropy")
 
   let keep: AnyTensor | null = null
   let denom = batch
@@ -82,23 +86,8 @@ export function accuracy<
   logits: Tensor<S>,
   targets: IndexTensor<Init<S>>,
 ): number {
-  const l = logits as AnyTensor
-  const t = targets as AnyTensor
-  if (l.rank < 2) {
-    throw new Error(
-      `accuracy: logits must be at least rank 2 ([N, C]), got rank ${l.rank}`,
-    )
-  }
-  const flatLogits = (l.rank > 2 ? l.flatten(0, l.rank - 2) : l) as AnyTensor
-  const flatTargets = (t.rank > 1 ? t.flatten() : t) as AnyTensor
-  const batch = flatLogits.shape[0]!
-  if (flatTargets.numel !== batch) {
-    throw new Error(
-      `accuracy: ${flatTargets.numel} targets for batch of ${batch}`,
-    )
-  }
-  const preds = flatLogits.argmax(1)
-  const predData = preds.data
+  const { logits: flatLogits, targets: flatTargets, batch } = flattenBatch(logits as AnyTensor, targets as AnyTensor, "accuracy")
+  const predData = flatLogits.argmax(1).data
   const targetData = flatTargets.data
   let correct = 0
   for (let i = 0; i < batch; i++) {

@@ -1,22 +1,17 @@
 import type { DimCheck, Shape } from "../../shape.ts"
-import { type AnyTensor, gelu, silu, Tensor } from "../../tensor.ts"
+import { type AnyTensor, gelu, silu, type Tensor } from "../../tensor.ts"
 import { Module } from "../module.ts"
 import { SHAPE_EFFECT } from "../sequential.ts"
 
 class Activation extends Module {
   declare readonly [SHAPE_EFFECT]: "identity"
 
-  // Named `fn`, not `apply`: a private field clashing with the inherited
-  // Module.apply() is a TS2415 error.
-  constructor(
-    private readonly fn: (x: AnyTensor) => AnyTensor,
-  ) {
+  // Named `fn`, not `apply`: a field clashing with the inherited Module.apply() is a TS2415 error.
+  constructor(private readonly fn: (x: AnyTensor) => AnyTensor) {
     super()
   }
 
-  forward<S extends Shape>(
-    x: Tensor<S>,
-  ): Tensor<S> {
+  forward<S extends Shape>(x: Tensor<S>): Tensor<S> {
     return this.fn(x) as Tensor<S>
   }
 }

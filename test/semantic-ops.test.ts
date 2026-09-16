@@ -6,16 +6,21 @@ import { evalMatmulEager } from "../src/eager.ts"
 import { sumTo } from "../src/ir.ts"
 import { configure, serializeLazyGraph } from "../src/lazy.ts"
 import { crossEntropy as composedCrossEntropy } from "../src/nn/index.ts"
-import { crossEntropy, dropout, fromFlat, gatherRows, gelu, layerNorm, logSumExp, rmsNorm, silu, softmax, Tensor } from "../src/tensor.ts"
-import { bothWays, expectClose } from "./helpers.ts"
-
-type AnyTensor = Tensor<any>
-
-/** Exact equality, element for element; expectClose is strictly less-than. */
-function expectExact(a: AnyTensor, b: AnyTensor): void {
-  expect(b.shape).toEqual(a.shape)
-  expect(Array.from(b.data)).toEqual(Array.from(a.data))
-}
+import {
+  type AnyTensor,
+  crossEntropy,
+  dropout,
+  fromFlat,
+  gatherRows,
+  gelu,
+  layerNorm,
+  logSumExp,
+  rmsNorm,
+  silu,
+  softmax,
+  Tensor,
+} from "../src/tensor.ts"
+import { bothWays, expectClose, expectExact, sample } from "./helpers.ts"
 
 afterEach(() => {
   configure({ lazy: false })
@@ -24,15 +29,6 @@ afterEach(() => {
 
 // Each semantic kernel is checked against the composition it replaces, written independently here
 // rather than against a magic constant nobody can re-derive.
-
-const sample = (n: number, shape: number[]): AnyTensor =>
-  fromFlat(
-    Float32Array.from(
-      { length: n },
-      (_, i) => Math.sin(i * 1.7 + 0.3) * 1.6,
-    ),
-    shape,
-  ) as AnyTensor
 
 describe("semantic ops match the composition they replace", () => {
   it("gelu == 0.5x(1 + tanh(sqrt(2/pi)(x + 0.044715 x^3)))", () => {

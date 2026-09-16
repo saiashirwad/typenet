@@ -1,5 +1,5 @@
 import type { IndexTensor, Shape } from "../../shape.ts"
-import { gatherRows, Tensor } from "../../tensor.ts"
+import { gatherRows, type Tensor } from "../../tensor.ts"
 import * as init from "../init.ts"
 import { Module } from "../module.ts"
 import { type Parameter, parameter } from "../parameter.ts"
@@ -17,9 +17,7 @@ export class Embedding<V extends number, D extends number> extends Module {
     this.numEmbeddings = numEmbeddings
     this.embeddingDim = embeddingDim
     // PyTorch's default init: N(0, 1) per row.
-    this.weight = parameter(
-      init.normal<[V, D]>([numEmbeddings, embeddingDim]),
-    )
+    this.weight = parameter(init.normal<[V, D]>([numEmbeddings, embeddingDim]))
   }
 
   /** For weight tying, pass `this.weight` itself to `TiedLinear.of`. */

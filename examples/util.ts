@@ -1,15 +1,5 @@
 import type { Tensor } from "../index.ts"
 
-export function timeAvg(
-  fn: () => void,
-  { warmup = 1, iters }: { warmup?: number; iters: number },
-): number {
-  for (let i = 0; i < warmup; i++) fn()
-  const t0 = performance.now()
-  for (let i = 0; i < iters; i++) fn()
-  return (performance.now() - t0) / iters
-}
-
 export function accuracy<N extends number>(
   logits: Tensor<[N, number]>,
   targets: readonly number[],

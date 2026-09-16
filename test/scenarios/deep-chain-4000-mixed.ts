@@ -3,9 +3,7 @@
 import assert from "node:assert/strict"
 import { tensor } from "../../src/factories.ts"
 import { configure } from "../../src/lazy.ts"
-import { Tensor } from "../../src/tensor.ts"
-
-type AnyTensor = Tensor<any>
+import type { AnyTensor } from "../../src/tensor.ts"
 
 const DEPTH = 4000
 const N = 4

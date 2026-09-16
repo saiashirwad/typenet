@@ -1,13 +1,12 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    // Same reason as tsconfig.test.json: this file set includes test/**, whose assertion aliases are
-    // legitimately unreferenced.
+    // test/**'s `Expect<...>` aliases are deliberately unreferenced.
     "noUnusedLocals": false,
     "noUnusedParameters": false
   },
   "include": ["index.ts", "src/**/*.ts", "test/**/*.ts"],
-  // tsconfig.json excludes test/, which this config would inherit and thereby silently stop measuring
-  // the type tests; exclude only what the budget never measured in the first place.
-  "exclude": ["node_modules", "native"]
+  // Overrides tsconfig.json's exclude, which would otherwise drop test/ from the measurement.
+  // examples.test.ts imports examples/, which the budget has never measured.
+  "exclude": ["node_modules", "native", "test/examples.test.ts"]
 }

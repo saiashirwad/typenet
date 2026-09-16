@@ -316,8 +316,7 @@ function serializeLazyGraph(roots: AnyTensor[]): {
       return null
     }
     work += prod(node.shape)
-    // Inputs precede `t` topologically, so their indices exist; `encodeForWire` may
-    // append wire nodes, so the index it returns is the one consumers reference.
+    // `encodeForWire` may append wire nodes, so the index it returns is the one consumers reference.
     index.set(
       t,
       encodeForWire(
@@ -427,8 +426,9 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
     planRegistry.register(plan, handle, plan)
     forcePlans.set(first, plan)
   }
-  const dirty = new Uint8Array(plan!.leafBytes)
-  plan!.leafTensors.forEach((t, i) => {
+  const ready = plan!
+  const dirty = new Uint8Array(ready.leafBytes)
+  ready.leafTensors.forEach((t, i) => {
     const data = _internal.cpuOf(t)!
     dirty.set(
       new Uint8Array(
@@ -436,20 +436,18 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
         data.byteOffset,
         data.byteLength,
       ),
-      plan!.leafOffsets[i]!,
+      ready.leafOffsets[i]!,
     )
   })
-  const dirtyIndex = Uint32Array.from(
-    plan!.leafTensors.keys(),
-  )
+  const dirtyIndex = Uint32Array.from(ready.leafTensors.keys())
   const data = nativeBackend.evalPreparedNative(
-    plan!.handle,
+    ready.handle,
     dirty,
     dirtyIndex,
     nextSeed(),
   )
   let offset = 0
-  plan!.rootShapes.forEach((shape, i) => {
+  ready.rootShapes.forEach((shape, i) => {
     const n = prod(shape)
     _internal.setCpu(
       roots[i]!,
@@ -459,7 +457,7 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
   })
   if (offset !== data.length) {
     throw new Error(
-      `native backend returned ${data.length} values, expected ${offset} for roots [${plan!.rootShapes.map(showShape).join(", ")}]`,
+      `native backend returned ${data.length} values, expected ${offset} for roots [${ready.rootShapes.map(showShape).join(", ")}]`,
     )
   }
   return true

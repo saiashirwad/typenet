@@ -20,8 +20,7 @@
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true
   },
-  // Test files are excluded here because they hold deliberately unreferenced `type _x = Expect<...>`
-  // assertion aliases, which noUnusedLocals flags; tsconfig.test.json checks them in full with the
-  // two unused-* flags off, and only `export` is not an option since many live inside test callbacks.
+  // test/ is checked by tsconfig.test.json instead: its `type _x = Expect<...>` aliases are
+  // deliberately unreferenced and noUnusedLocals flags them.
   "exclude": ["node_modules", "native", "test"]
 }

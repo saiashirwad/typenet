@@ -1,8 +1,5 @@
 "use tsover"
 
-// Every line here is checked by `tsc`. `test/examples.test.ts` recompiles the eight
-// negative cases and compares each quoted message against the compiler's own.
-
 import { cat, DimAdd, DimMul, Linear, Module, randn, ReLU, sequential, Tensor } from "../index.ts"
 
 const mlp = sequential(
@@ -64,46 +61,37 @@ function splitHeads<
 const heads: Tensor<[2, 5, 4, 8]> = splitHeads(randn([2, 5, 32]), 4, 8)
 const merged: Tensor<[2, 5, 32]> = heads.flatten(2, 3)
 
-// The quotes below are compared against real compiler output. Every `ErrorMessage` ends in
-// an invisible zero-width space, which the test strips before comparing.
-
-function theEightErrors(): void {
-  // tsc(2345): Argument of type 'Tensor<[2, 3]>' is not assignable to parameter of type
-  // tsc(2345): 'Tensor<[2, 3]> & "matmul: inner dimensions do not match ([2, 3] @ [2, 3])"'.
+/** Seven rejections, never run: `pnpm typecheck` is what executes them. */
+export function compileTimeErrors(): void {
+  // matmul: inner dimensions do not match ([2, 3] @ [2, 3])
   // @ts-expect-error
   randn([2, 3]).matmul(randn([2, 3]))
 
-  // tsc(2365): Operator '+' cannot be applied to types 'Tensor<[2, 3]>' and 'Tensor<[4]>'.
+  // '+' over [2, 3] and [4]
   // @ts-expect-error
   randn([2, 3]) + randn([4])
 
-  // tsc(2345): Argument of type '[7, 2]' is not assignable to parameter of type
-  // tsc(2345): 'readonly [7, 2] & "Cannot view tensor of shape [2, 3] as [7, 2] (6 vs 14 elements)"'.
+  // Cannot view tensor of shape [2, 3] as [7, 2] (6 vs 14 elements)
   // @ts-expect-error
   randn([2, 3]).view([7, 2])
 
-  // tsc(2345): Argument of type '[0, 0, 1]' is not assignable to parameter of type
-  // tsc(2345): 'readonly [0, 0, 1] & "permute([0, 0, 1]) repeats a dimension"'.
+  // permute([0, 0, 1]) repeats a dimension
   // @ts-expect-error
   randn([2, 3, 4]).permute(0, 0, 1)
 
-  // tsc(2345): Argument of type 'Tensor<[2, 4]>' is not assignable to parameter of type
-  // tsc(2345): 'Tensor<[2, 4]> & "cat: shapes [2, 3] and [2, 4] differ outside dim 0"'.
+  // cat: shapes [2, 3] and [2, 4] differ outside dim 0
   // @ts-expect-error
   cat(randn([2, 3]), randn([2, 4]), 0)
 
-  // tsc(2345): Argument of type '[Linear<2, 8>, ReLU, Linear<16, 3>]' is not assignable to parameter of type
-  // tsc(2345): 'readonly [Linear<2, 8>, ReLU, Linear<16, 3>] & "sequential: layer expects 16 input features but the previous layer outputs 8"'.
+  // sequential: layer expects 16 input features but the previous layer outputs 8
   // @ts-expect-error
   sequential(new Linear(2, 8), new ReLU(), new Linear(16, 3))
 
-  // tsc(2345): Argument of type 'Tensor<[4, 5]>' is not assignable to parameter of type
-  // tsc(2345): 'Tensor<[4, 5]> & "sequential: input shape does not fit the layer chain"'.
+  // sequential: input shape does not fit the layer chain
   // @ts-expect-error
   sequential(new Linear(2, 8), new Linear(8, 3)).forward(randn([4, 5]))
 }
 
-// tsc(2322): Type 'Tensor<[B, T, DimMul<4, D>]>' is not assignable to type 'Tensor<[B, T, D]>'.
 class Broken<D extends number> extends Module {
   readonly up: Linear<D, DimMul<4, D>>
 
@@ -113,6 +101,7 @@ class Broken<D extends number> extends Module {
   }
 
   forward<B extends number, T extends number>(x: Tensor<[B, T, D]>): Tensor<[B, T, D]> {
+    // [B, T, DimMul<4, D>] is not [B, T, D]
     // @ts-expect-error
     return this.up.forward(x)
   }
@@ -136,13 +125,10 @@ console.log(
   `\n  ${new Broken(4).up.outFeatures} = DimMul(4, 4) at run time, the same arithmetic the type did`,
 )
 
-void theEightErrors
 try {
-  const two = randn([2, 3])
-  // @ts-expect-error the same error case (1) is rejected for at compile time
-  two.matmul(randn([2, 3]))
+  // the first case above, reaching the kernel that rejects it the same way
+  // @ts-expect-error
+  randn([2, 3]).matmul(randn([2, 3]))
 } catch (e) {
   console.log(`\n  the same check, at run time: ${(e as Error).message}`)
 }
-
-console.log("\n  8 compile-time errors above; `pnpm typecheck` is what runs them")

@@ -7,10 +7,10 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
 import { isNativeAvailable } from "../src/backends/native.ts"
+import type { AnyTensor } from "../src/tensor.ts"
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const root = resolve(__dirname, "..")
 const THIS_FILE = fileURLToPath(import.meta.url)
+const root = resolve(dirname(THIS_FILE), "..")
 const CHILD_MARKER = "--loss-curve-child"
 const OUTPUT_PREFIX = "LOSS_CURVE_JSON:"
 
@@ -126,8 +126,6 @@ async function runChild(argJson: string): Promise<void> {
   const { configure } = await import("../src/lazy.ts")
   const { mseLoss } = await import("../src/nn/index.ts")
   const { lossCurveData, lossCurveNet, lossCurveOptim, setMode } = await import("./loss-curve-model.ts")
-  const { Tensor } = await import("../src/tensor.ts")
-  type AnyTensor = InstanceType<typeof Tensor>
 
   // Seed before any rand() draw: weight init and the training batch consume the seeded generator
   // in a fixed order, so one up-front seed reproduces both.

@@ -4,10 +4,8 @@ import { compile } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { Linear, mseLoss, sequential, Tanh } from "../src/nn/index.ts"
-import { Tensor } from "../src/tensor.ts"
+import { type AnyTensor, Tensor } from "../src/tensor.ts"
 import { expectClose } from "./helpers.ts"
-
-type AnyTensor = Tensor<any>
 
 const available = isNativeAvailable()
 

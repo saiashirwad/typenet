@@ -99,8 +99,6 @@ export abstract class Module {
       const key = storageKey(e.value as AnyTensor)
       if (seen.has(key)) continue
       seen.add(key)
-      // isParameter()/needsGrad is the source of truth; the cast only
-      // bridges the type erased to `unknown` by Object.entries.
       out.set(e.path, e.value as Parameter)
     }
     this.#warnUnreachable(seen)
@@ -167,11 +165,8 @@ export abstract class Module {
 
   train(mode = true): this {
     this.#trainingMode = mode
-    for (const m of this.namedModules().values()) {
-      // JS private fields are accessible from the class body on any
-      // instance, regardless of `m`'s subclass.
-      m.#trainingMode = mode
-    }
+    // A private field is reachable from the class body on any instance, whatever `m`'s subclass.
+    for (const m of this.namedModules().values()) m.#trainingMode = mode
     return this
   }
 

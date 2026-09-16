@@ -1,7 +1,5 @@
 import { tensor } from "../src/factories.ts"
-import { Tensor } from "../src/tensor.ts"
-
-type AnyTensor = Tensor<any>
+import type { AnyTensor } from "../src/tensor.ts"
 
 /** Shared 2→4→1 MLP (tanh hidden, sigmoid output) for the XOR truth table. */
 export function makeXorNet() {
@@ -30,8 +28,8 @@ export function makeXorNet() {
   ]).requiresGrad()
   const b2 = tensor([0.2]).requiresGrad()
   const params = [w1, b1, w2, b2] as AnyTensor[]
-  const forward = () => {
-    const h = x.matmul(w1).add(b1).tanh()
+  const forward = (input: AnyTensor = x as AnyTensor): AnyTensor => {
+    const h = input.matmul(w1).add(b1).tanh()
     return h.matmul(w2).add(b2).sigmoid()
   }
   const loss = () => forward().sub(y).pow(2).mean()

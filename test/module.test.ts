@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { Linear } from "../src/nn/index.ts"
-import { isParameter, type LoadReport, Module, type Parameter, parameter, tie } from "../src/nn/index.ts"
+import { isParameter, Linear, type LoadReport, Module, type Parameter, parameter, tie } from "../src/nn/index.ts"
 import { SGD } from "../src/optim/index.ts"
 import { type AnyTensor, Tensor } from "../src/tensor.ts"
 

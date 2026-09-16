@@ -6,20 +6,13 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:ci": "pnpm test && pnpm typecheck && pnpm typecheck:budget && cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "build:native": "pnpm -C native build",
-    "format": "dprint fmt",
-    "example:shapes": "vite-node examples/shapes.ts",
-    "example:mlp": "vite-node examples/mlp.ts",
-    "example:gpt": "vite-node examples/gpt.ts",
-    "example:xor": "vite-node examples/xor.ts",
-    "example:spiral": "vite-node examples/spiral.ts",
-    "example:char-rnn": "vite-node examples/char-rnn/train.ts",
-    "example:char-rnn:generate": "vite-node examples/char-rnn/generate.ts",
     "typecheck:budget": "node scripts/typecheck-budget.mjs",
     "check:readme": "node scripts/check-readme.mjs",
+    "build:native": "pnpm -C native build",
     "fetch:corpus": "node scripts/fetch-corpus.mjs",
-    "test:ci": "pnpm test && pnpm typecheck && pnpm typecheck:budget && cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings"
+    "format": "dprint fmt"
   },
   "dependencies": {
     "hotscript": "^1.0.13",

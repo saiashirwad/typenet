@@ -29,10 +29,7 @@ export { constant, cosine, linearDecay, oneCycle, stepDecay, warmup, warmupCosin
 export type { Schedule } from "./src/optim/schedule.ts"
 
 // DimAdd, DimMul and the other shape helpers are both a type and a value, so a width like DimMul(4, d) keeps its derived type.
-export { DimAdd, DimDiv, DimMul, DimSub } from "./src/shape.ts"
-export { assertChecked } from "./src/shape.ts"
-export { ConvOut, flattenFrom, PoolOut } from "./src/shape.ts"
-export { flattenShape, unflattenShape } from "./src/shape.ts"
+export { assertChecked, ConvOut, DimAdd, DimDiv, DimMul, DimSub, flattenFrom, flattenShape, PoolOut, unflattenShape } from "./src/shape.ts"
 export type {
   BatchPrefix,
   Broadcast,

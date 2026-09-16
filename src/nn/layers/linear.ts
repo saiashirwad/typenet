@@ -23,11 +23,9 @@ export class Linear<
     super()
     this.inFeatures = inFeatures
     this.outFeatures = outFeatures
-    // `weight` is `[In, Out]` (matmul order), transposed relative to PyTorch's
-    // `[Out, In]`; fanMode "fanOut" makes the fan table land on fanIn = inFeatures.
+    // `weight` is `[In, Out]` (matmul order), the transpose of PyTorch's `[Out, In]`; fanMode "fanOut" makes the fan table land on fanIn = inFeatures.
     this.weight = init.kaimingUniform_(
-      // Explicit type argument: inferring `Sh` through the outer generic
-      // call widens it to bare `Shape` instead of the tuple.
+      // Explicit type argument: inferring `Sh` through the outer generic call widens it to bare `Shape`.
       Tensor.zeros<[In, Out]>([inFeatures, outFeatures]),
       { fanMode: "fanOut" },
     )
@@ -41,8 +39,7 @@ export class Linear<
   forward<S extends Shape>(
     x: Tensor<S> & MatMulCheck<S, [In, Out]>,
   ): Tensor<MatMul<S, [In, Out]>> {
-    // Both casts bridge generic deferral: for a generic `S`, TS cannot reduce
-    // MatMulCheck to `unknown` or Broadcast<..., [Out]> to `MatMul<...>` on its own.
+    // Both casts bridge generic deferral: for a generic `S`, TS cannot reduce MatMulCheck to `unknown` or Broadcast<..., [Out]> to `MatMul<...>`.
     const y = x.matmul(this.weight as Tensor<[In, Out]> & MatMulCheck<S, [In, Out]>)
     return (this.bias ? y.add(this.bias) : y) as unknown as Tensor<
       MatMul<S, [In, Out]>
@@ -52,8 +49,7 @@ export class Linear<
 
 /** An LM head that stores the embedding's own `Parameter` object, so tying is literal: one parameter, one accumulated `.grad`, one `stateDict` entry. `tie()` alone cannot express this, since it requires equal shapes. */
 export class TiedLinear<D extends number, V extends number> extends Module {
-  // `weight` is `[V, D]` but the layer maps `D -> V`: the stored weight is
-  // the transpose of the declared effect.
+  // `weight` is `[V, D]` but the layer maps `D -> V`: the stored weight is the transpose of the declared effect.
   declare readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: V]
 
   readonly weight: Parameter<[V, D]>
@@ -70,7 +66,6 @@ export class TiedLinear<D extends number, V extends number> extends Module {
   forward<S extends Shape>(
     x: Tensor<S> & LastDimCheck<S, D>,
   ): Tensor<MatMul<S, [D, V]>> {
-    // Same generic-deferral bridge as Linear.forward.
     const wt = this.weight.transpose(0, 1) as Tensor<[D, V]> & MatMulCheck<S, [D, V]>
     return x.matmul(wt)
   }

@@ -161,7 +161,7 @@ describe("optimizer parameterEpoch guard", () => {
       a = new Linear(2, 2)
     }
     const net = new Net()
-    const opt = new SGD(net, { lr: 0.1 }) // Structural mutation after construction: a new submodule appears.
+    const opt = new SGD(net, { lr: 0.1 })
     ;(net as unknown as { b: Linear<2, 2> }).b = new Linear(2, 2)
     expect(() => opt.step()).toThrow(/parameter set changed/)
   })
@@ -259,7 +259,7 @@ describe("optimizer stateDict / loadStateDict", () => {
 })
 
 describe("Optimizer base", () => {
-  it("still rejects integer-dtype parameters (unchanged behaviour)", () => {
+  it("rejects integer-dtype parameters", () => {
     const i32 = Tensor.of([1, 2, 3]).to("int32").requiresGrad() as AnyTensor
     expect(() => new SGD([i32], { lr: 0.1 })).toThrow(/float32 or float64/)
   })

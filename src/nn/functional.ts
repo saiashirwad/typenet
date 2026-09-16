@@ -31,8 +31,7 @@ export function sdpa<
   K extends number,
 >(
   q: Tensor<[B, H, T, K]>,
-  // NoInfer on every axis of `k`/`v`: all dims are read off `q`, so a
-  // mismatched head count fails against a known target instead of unifying.
+  // NoInfer on every axis of `k`/`v`: all dims are read off `q`, so a mismatched head count fails against a known target instead of unifying.
   k: Tensor<[NoInfer<B>, NoInfer<H>, NoInfer<K>, NoInfer<T>]>,
   v: Tensor<[NoInfer<B>, NoInfer<H>, NoInfer<T>, NoInfer<K>]>,
   options: { causal?: boolean; dropout?: number } = {},
@@ -52,11 +51,8 @@ export function sdpa<
       `sdpa: head dim disagrees, q ${showShape(qa.shape)}, k ${showShape(ka.shape)}, v ${showShape(va.shape)}`,
     )
   }
-  // Scale the scores, not `q`: the PyTorch reference formula's spelling.
   const scores = qa.matmul(ka).mul(1 / Math.sqrt(headDim))
   const weights = softmaxOp(scores, -1, { causal: options.causal ?? false })
   const p = options.dropout ?? 0
-  // `p === 0` emits no node at all.
-  const dropped = p > 0 ? dropoutOp(weights, p) : weights
-  return dropped.matmul(va) as Tensor<[B, H, T, K]>
+  return (p > 0 ? dropoutOp(weights, p) : weights).matmul(va) as Tensor<[B, H, T, K]>
 }

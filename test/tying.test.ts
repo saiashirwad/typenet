@@ -68,7 +68,7 @@ describe("weight tying (TiedLinear)", () => {
     expect(totalElems(tied)).toBe(totalElems(untied) - V * D)
   })
 
-  it("forward matches an untied model initialised with head.weight = wte.weight.transpose(0,1)", () => {
+  it("forward matches the untied reference", () => {
     const tied = new TiedNet()
     const untied = new UntiedNet()
     const ids = Tensor.indices([0, 2], [2])
@@ -113,26 +113,23 @@ describe("weight tying (TiedLinear)", () => {
     expectClose(fresh.forward(ids), tied.forward(ids), 1e-6)
   })
 
-  it(
-    "the shared weight is exactly one leaf in the graph, reached through exactly one permute",
-    () => {
-      configure({ lazy: true })
-      try {
-        const tied = new TiedNet()
-        tied.wte.weight.named("wte")
-        const ids = Tensor.indices([0, 2], [2])
-        const logits = tied.forward(ids).named("logits")
-        const lines = printGraph(logits).split("\n")
+  it("the shared weight is one leaf, reached through one permute", () => {
+    configure({ lazy: true })
+    try {
+      const tied = new TiedNet()
+      tied.wte.weight.named("wte")
+      const ids = Tensor.indices([0, 2], [2])
+      const logits = tied.forward(ids).named("logits")
+      const lines = printGraph(logits).split("\n")
 
-        const leafLines = lines.filter(l => /^wte\s+= leaf\b/.test(l))
-        expect(leafLines).toHaveLength(1)
+      const leafLines = lines.filter(l => /^wte\s+= leaf\b/.test(l))
+      expect(leafLines).toHaveLength(1)
 
-        // One permute of it, never a second buffer.
-        const permuteLines = lines.filter(l => /= permute\(wte\)/.test(l))
-        expect(permuteLines).toHaveLength(1)
-      } finally {
-        configure({ lazy: false })
-      }
-    },
-  )
+      // One permute of it, never a second buffer.
+      const permuteLines = lines.filter(l => /= permute\(wte\)/.test(l))
+      expect(permuteLines).toHaveLength(1)
+    } finally {
+      configure({ lazy: false })
+    }
+  })
 })

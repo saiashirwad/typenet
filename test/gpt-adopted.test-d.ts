@@ -1,13 +1,10 @@
 // A GPT-style attention stack checked against the real `src/shape.ts`. The layers that do
 // not exist yet are `declare`d here; `Linear` and `Module` are the real ones.
 import { Linear, Module } from "../src/nn/index.ts"
-import { assertChecked } from "../src/shape.ts"
-import { DimDiv, DimMul } from "../src/shape.ts"
+import { assertChecked, DimDiv, DimMul } from "../src/shape.ts"
 import type { DimDivCheck, FlattenCheck, FlattenShape, IndexTensor, Init, LastDimCheck, Shape, UnflattenCheck, UnflattenShape } from "../src/shape.ts"
 import type { Tensor } from "../src/tensor.ts"
-
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
-type Expect<T extends true> = T
+import type { Equal, Expect } from "./helpers.ts"
 
 declare function flatten<S extends Shape, const F extends number, const T extends number>(
   t: Tensor<S>,

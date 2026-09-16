@@ -182,7 +182,7 @@ describe("conv shapes: the spatial ladder, the wildcards and the truncation trap
 
   // ConvCheck tests the SPAN, not the quotient: Math.trunc (and hotscript's Numbers.Div) truncate
   // toward zero, so a kernel that does not fit still reports a plausible output.
-  it("a kernel that does not fit still produces a number, which is why ConvCheck tests the span", () => {
+  it("a kernel that does not fit still produces a number", () => {
     for (const c of CONV_FIT_FAIL_CASES) {
       expect(c.h + 2 * c.p - c.k).toBe(c.span)
       expect(c.span).toBeLessThan(0)

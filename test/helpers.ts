@@ -1,9 +1,7 @@
 import { expect } from "vitest"
 import { disableNative, isNativeAvailable, useNative } from "../src/backends/native.ts"
 import { configure } from "../src/lazy.ts"
-import { Tensor } from "../src/tensor.ts"
-
-type AnyTensor = Tensor<any>
+import { type AnyTensor, fromFlat } from "../src/tensor.ts"
 
 export function bothWays<T>(fn: () => T): {
   eager: T
@@ -104,3 +102,33 @@ export function expectAgreeStrict(
     }
   }
 }
+
+export function expectExact(a: AnyTensor, b: AnyTensor): void {
+  expect(b.shape).toEqual(a.shape)
+  expect(Array.from(b.data)).toEqual(Array.from(a.data))
+}
+
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** Deterministic spread of values in roughly [-1.6, 1.6]. */
+export const sample = (n: number, shape: number[]): AnyTensor =>
+  fromFlat(
+    Float32Array.from(
+      { length: n },
+      (_, i) => Math.sin(i * 1.7 + 0.3) * 1.6,
+    ),
+    shape,
+  ) as AnyTensor
+
+/** Exact type equality, for `type _x = Expect<Equal<A, B>>` assertions. */
+export type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
+export type Expect<T extends true> = T

@@ -2,9 +2,7 @@
 // is a pure typecheck fixture where the negative cases are the assertions.
 import { DimDiv, DimMul } from "../src/shape.ts"
 import type { DimDivCheck } from "../src/shape.ts"
-
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
-type Expect<T extends true> = T
+import type { Equal, Expect } from "./helpers.ts"
 
 type _d1 = Expect<Equal<DimDiv<384, 6>, 64>>
 type _d2 = Expect<Equal<DimDiv<12, 4>, 3>>

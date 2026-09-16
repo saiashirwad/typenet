@@ -3,6 +3,8 @@ import { withContext } from "../src/context.ts"
 import { init, Linear } from "../src/nn/index.ts"
 import { type AnyTensor, Tensor } from "../src/tensor.ts"
 
+const shape: [512, 2048] = [512, 2048]
+
 function stats(data: ArrayLike<number>): { mean: number; variance: number } {
   let sum = 0
   for (let i = 0; i < data.length; i++) sum += data[i]!
@@ -78,54 +80,41 @@ describe("statistical accuracy (within 10% of the analytic variance at [1024,102
   })
 
   it("kaimingUniform_: default (fanMode: fanIn)", () => {
-    const shape: [512, 2048] = [512, 2048]
-    const fanIn = shape[1]
     const t = init.kaimingUniform_(Tensor.zeros(shape) as AnyTensor)
-    expectVarianceNear(t.data, 1 / (3 * fanIn))
+    expectVarianceNear(t.data, 1 / (3 * shape[1]))
   })
 
   it("kaimingUniform_: fanMode: fanOut", () => {
-    const shape: [512, 2048] = [512, 2048]
-    const fanOut = shape[0]
     const t = init.kaimingUniform_(Tensor.zeros(shape) as AnyTensor, { fanMode: "fanOut" })
-    expectVarianceNear(t.data, 1 / (3 * fanOut))
+    expectVarianceNear(t.data, 1 / (3 * shape[0]))
   })
 
   it("kaimingUniform_: nonlinearity: relu", () => {
-    const shape: [512, 2048] = [512, 2048]
-    const fanIn = shape[1]
     const t = init.kaimingUniform_(Tensor.zeros(shape) as AnyTensor, { nonlinearity: "relu" })
-    const gain = Math.sqrt(2)
-    expectVarianceNear(t.data, gain ** 2 / fanIn)
+    expectVarianceNear(t.data, Math.sqrt(2) ** 2 / shape[1])
   })
 
   it("kaimingNormal_: default", () => {
-    const shape: [512, 2048] = [512, 2048]
-    const fanIn = shape[1]
     const t = init.kaimingNormal_(Tensor.zeros(shape) as AnyTensor)
-    expectVarianceNear(t.data, 1 / (3 * fanIn))
+    expectVarianceNear(t.data, 1 / (3 * shape[1]))
   })
 
   it("kaimingNormal_: nonlinearity: relu", () => {
-    const shape: [512, 2048] = [512, 2048]
-    const fanIn = shape[1]
     const t = init.kaimingNormal_(Tensor.zeros(shape) as AnyTensor, { nonlinearity: "relu" })
-    expectVarianceNear(t.data, 2 / fanIn)
+    expectVarianceNear(t.data, 2 / shape[1])
   })
 
   it("xavierUniform_", () => {
-    const shape: [512, 2048] = [512, 2048]
     const t = init.xavierUniform_(Tensor.zeros(shape) as AnyTensor)
     expectVarianceNear(t.data, 2 / (shape[0] + shape[1]))
   })
 
   it("xavierNormal_", () => {
-    const shape: [512, 2048] = [512, 2048]
     const t = init.xavierNormal_(Tensor.zeros(shape) as AnyTensor)
     expectVarianceNear(t.data, 2 / (shape[0] + shape[1]))
   })
 
-  it("truncNormal_: bounds respected and variance matches the truncated-normal analytic value", () => {
+  it("truncNormal_: bounds respected, variance matches the analytic value", () => {
     const t = init.truncNormal_(Tensor.zeros(BIG) as AnyTensor, { mean: 0, std: 1, a: -2, b: 2 })
     for (const x of t.data) {
       expect(x).toBeGreaterThanOrEqual(-2)
@@ -175,11 +164,9 @@ describe("pure (non-mutating) initialisers", () => {
   })
 
   it("kaimingNormal: relu gain over fanIn, explicit gain over fanOut", () => {
-    const shape: [512, 2048] = [512, 2048]
-    const gain = Math.SQRT2
     expectVarianceNear(
       init.kaimingNormal(shape, { nonlinearity: "relu", generator: init.generator(13) }).data,
-      gain ** 2 / shape[1],
+      Math.SQRT2 ** 2 / shape[1],
     )
     expectVarianceNear(
       init.kaimingNormal(shape, { fanMode: "fanOut", gain: 3, generator: init.generator(13) }).data,
@@ -188,7 +175,6 @@ describe("pure (non-mutating) initialisers", () => {
   })
 
   it("xavierUniform and xavierNormal carry gain·sqrt(2/(fanIn+fanOut)) into the variance", () => {
-    const shape: [512, 2048] = [512, 2048]
     // U(-b, b) with b = gain*sqrt(6/(fanIn+fanOut)) has variance gain^2*2/(fanIn+fanOut), which
     // is also the exact variance of the Xavier normal with the same gain.
     const variance = 2 ** 2 * 2 / (shape[0] + shape[1])

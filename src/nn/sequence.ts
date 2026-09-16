@@ -1,17 +1,5 @@
 "use tsover"
 
-// Running a recurrence over a sequence.
-//
-// A recurrent model is a loop, and every hand-written one repeats the same four lines: keep the
-// state, step it, keep the output, join the outputs at the end. The last of those is the awkward
-// one, because a `for` loop produces a list and `Tensor.stack` wants a tuple, so a loop with a
-// runtime bound cannot spell its own result shape at all. `scan` does the whole loop once, here.
-//
-// The step carries the state and returns the output alongside it, so the state's type can change
-// as the loop runs: a language model's state is `[B, H]` while its output is `[B, V]`, and the
-// next state is derived from that output. That is the shape a real recurrence has, and stating it
-// once here keeps every caller's loop down to a single expression.
-
 import type { Drop, Shape } from "../shape.ts"
 import { type AnyTensor, Tensor } from "../tensor.ts"
 
@@ -22,28 +10,13 @@ export interface ScanStep<Out extends Shape, St extends Shape> {
 }
 
 export interface ScanResult<B extends number, Out extends Shape, St extends Shape> {
-  /**
-   * Every step's output, concatenated along a new time axis: `[B, T, ...]`.
-   *
-   * `Out` is one step's whole shape, batch included, so the rest of it is `Drop<Out, 1>`: a
-   * spread of the full `Out` would repeat the batch axis into the result.
-   */
+  /** Every step's output along a new time axis. `Out` is one step's whole shape, batch included, so the tail is `Drop<Out, 1>`. */
   readonly outputs: Tensor<[B, number, ...Drop<Out, 1>]>
   /** The state after the last step. */
   readonly state: Tensor<St>
 }
 
-/**
- * Runs `steps` iterations of `next`, from `initial`, and concatenates the outputs: `scan` of a
- * recurrence over a fixed length, which is what training a window is.
- *
- * `initial` is the state before the first step, and `next` receives it together with the index of
- * the step it is being asked for.
- *
- * Each `[B, ...Out]` is unsqueezed and concatenated rather than stacked, because `Tensor.stack`
- * needs a tuple of tensors and a loop bound is a runtime count. The result is shaped exactly as
- * annotated.
- */
+/** Runs `steps` iterations of `next` from `initial`, concatenating the outputs along a new time axis. */
 export function scan<B extends number, St extends Shape, Out extends Shape>(
   initial: Tensor<St>,
   steps: number,
@@ -69,19 +42,12 @@ export function scan<B extends number, St extends Shape, Out extends Shape>(
   if (pieces.length === 0) {
     throw new Error("scan: steps was 0, so there is no output to return")
   }
-  // `stackList` is the one-node stack: one pass and one gradient gather, where catting the
-  // outputs one at a time would copy the whole run on every step.
+  // One-node stack: catting the outputs one at a time would copy the whole run on every step.
   const outputs = Tensor.stackList(pieces, 1) as unknown as Tensor<[B, number, ...Drop<Out, 1>]>
   return { outputs, state }
 }
 
-/**
- * A stepped recurrence, for loops whose length is not known up front: sampling a character at a
- * time, where each step decides whether to take another one.
- *
- * `Sequence<B, St>` carries a `[B, ...St]` state; `step` returns the output it recorded, and
- * `outputs()` concatenates everything recorded so far along a new time axis.
- */
+/** A stepped recurrence for loops whose length is not known up front: carries a `[B, ...St]` state, and `outputs()` concatenates everything recorded so far. */
 export class Sequence<B extends number, St extends Shape = Shape> {
   private readonly history: Tensor<Shape>[] = []
   private current: Tensor<St>
@@ -107,10 +73,7 @@ export class Sequence<B extends number, St extends Shape = Shape> {
     return this.history.length
   }
 
-  /**
-   * Steps once and records `output`. The state carried on with is `state`, so a step whose state
-   * and output differ in shape says so once, here, instead of at every call site.
-   */
+  /** Steps once, recording `output` and carrying on with `state`, which need not share its shape. */
   step<Out extends Shape>(output: Tensor<Out>, state: Tensor<St>): Sequence<B, St> {
     if (output.shape[0] !== this.batch || state.shape[0] !== this.batch) {
       throw new Error(
@@ -138,7 +101,6 @@ export class Sequence<B extends number, St extends Shape = Shape> {
     if (this.history.length === 0) {
       throw new Error("Sequence.outputs: nothing has been stepped yet")
     }
-    // Same one-node stack as `scan`: the history is a list, and `Tensor.stack` wants a tuple.
     return Tensor.stackList(this.history, 1) as unknown as Tensor<[B, number, ...Drop<Out, 1>]>
   }
 }

@@ -3,10 +3,8 @@ import { disableNative, isNativeAvailable, useNative } from "../src/backends/nat
 import { compile, printGraph } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { Tensor } from "../src/tensor.ts"
+import { type AnyTensor, Tensor } from "../src/tensor.ts"
 import { runOnSmallStack } from "./small-stack.ts"
-
-type AnyTensor = Tensor<any>
 
 const DEPTH = 20000
 

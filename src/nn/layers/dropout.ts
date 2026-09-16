@@ -1,5 +1,5 @@
 import type { Shape } from "../../shape.ts"
-import { dropout as dropoutOp, Tensor } from "../../tensor.ts"
+import { dropout as dropoutOp, type Tensor } from "../../tensor.ts"
 import { Module } from "../module.ts"
 import { SHAPE_EFFECT } from "../sequential.ts"
 

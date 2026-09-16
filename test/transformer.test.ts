@@ -8,6 +8,7 @@ import { compile } from "../src/compile.ts"
 import { configure } from "../src/lazy.ts"
 import { sdpa } from "../src/nn/functional.ts"
 import { _internal, type AnyTensor, fromFlat, gelu, layerNorm } from "../src/tensor.ts"
+import { mulberry32 } from "./helpers.ts"
 
 const EPS = 1e-3
 const TOL = 1e-3
@@ -21,17 +22,6 @@ const D = 8
 const H = 2
 const K = D / H
 const HID = 2 * D
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 const PARAM_SHAPES = {
   x: [B, T, D],

@@ -1,9 +1,7 @@
 // The frozen model that test/loss-curve.ts's bit-identical loss-curve test depends on.
 // Frozen: a differently-shaped or -trained variant gets its own file, not an edit to this one.
 
-import { Adam, configure, disableNative, Linear, rand, ReLU, sequential, Tensor, useNative } from "../index.ts"
-
-type AnyTensor = Tensor<any>
+import { Adam, type AnyTensor, configure, disableNative, Linear, rand, ReLU, sequential, useNative } from "../index.ts"
 
 /** The execution modes `setMode` selects; declared locally because this frozen model must depend on nothing outside `../index.ts`. */
 type Mode = "eager" | "interp" | "native"

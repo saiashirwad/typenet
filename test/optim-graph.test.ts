@@ -4,11 +4,9 @@ import { compile } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { Adam, clipGradNorm, SGD } from "../src/optim/index.ts"
-import { Tensor } from "../src/tensor.ts"
+import { type AnyTensor, Tensor } from "../src/tensor.ts"
 import { expectClose } from "./helpers.ts"
 import { makeXorNet } from "./xor-net.ts"
-
-type AnyTensor = Tensor<any>
 
 const available = isNativeAvailable()
 
@@ -140,15 +138,7 @@ describe("compiled training step (forward + backward + optimizer)", () => {
       momentum: 0.9,
     })
     const step = compile((x: AnyTensor, y: AnyTensor) => {
-      const hidden = x
-        .matmul(compiled.params[0]!)
-        .add(compiled.params[1]!)
-        .tanh()
-      const out = hidden
-        .matmul(compiled.params[2]!)
-        .add(compiled.params[3]!)
-        .sigmoid()
-      const loss = out.sub(y).pow(2).mean()
+      const loss = compiled.forward(x).sub(y).pow(2).mean()
       opt.zeroGrad()
       loss.backward()
       opt.step()
@@ -195,15 +185,7 @@ describe("compiled training step (forward + backward + optimizer)", () => {
     const refOpt = new Adam(reference.params, { lr: 0.05 })
     const opt = new Adam(compiled.params, { lr: 0.05 })
     const step = compile((x: AnyTensor, y: AnyTensor) => {
-      const h = x
-        .matmul(compiled.params[0]!)
-        .add(compiled.params[1]!)
-        .tanh()
-      const out = h
-        .matmul(compiled.params[2]!)
-        .add(compiled.params[3]!)
-        .sigmoid()
-      const loss = out.sub(y).pow(2).mean()
+      const loss = compiled.forward(x).sub(y).pow(2).mean()
       opt.zeroGrad()
       loss.backward()
       opt.step()
@@ -238,15 +220,7 @@ describe("compiled training step (forward + backward + optimizer)", () => {
     const refOpt = new SGD(reference.params, { lr: 0.1 })
     const opt = new SGD(compiled.params, { lr: 0.1 })
     const step = compile((x: AnyTensor, y: AnyTensor) => {
-      const h = x
-        .matmul(compiled.params[0]!)
-        .add(compiled.params[1]!)
-        .tanh()
-      const out = h
-        .matmul(compiled.params[2]!)
-        .add(compiled.params[3]!)
-        .sigmoid()
-      const loss = out.sub(y).pow(2).mean().mul(1000)
+      const loss = compiled.forward(x).sub(y).pow(2).mean().mul(1000)
       opt.zeroGrad()
       loss.backward()
       clipGradNorm(compiled.params, 1)
@@ -347,15 +321,7 @@ describe.skipIf(!available)(
         momentum: 0.9,
       })
       const step = compile((x: AnyTensor, y: AnyTensor) => {
-        const h = x
-          .matmul(compiled.params[0]!)
-          .add(compiled.params[1]!)
-          .tanh()
-        const out = h
-          .matmul(compiled.params[2]!)
-          .add(compiled.params[3]!)
-          .sigmoid()
-        const loss = out.sub(y).pow(2).mean()
+        const loss = compiled.forward(x).sub(y).pow(2).mean()
         opt.zeroGrad()
         loss.backward()
         opt.step()
@@ -392,15 +358,7 @@ describe.skipIf(!available)(
       })
       const opt = new Adam(compiled.params, { lr: 0.05 })
       const step = compile((x: AnyTensor, y: AnyTensor) => {
-        const h = x
-          .matmul(compiled.params[0]!)
-          .add(compiled.params[1]!)
-          .tanh()
-        const out = h
-          .matmul(compiled.params[2]!)
-          .add(compiled.params[3]!)
-          .sigmoid()
-        const loss = out.sub(y).pow(2).mean()
+        const loss = compiled.forward(x).sub(y).pow(2).mean()
         opt.zeroGrad()
         loss.backward()
         clipGradNorm(compiled.params, 0.5)
@@ -435,15 +393,7 @@ describe("scalar optimizer options inside a compiled step", () => {
     const net = makeXorNet()
     const opt = new SGD(net.params, { lr: 1e-3 })
     const step = compile((x: AnyTensor, y: AnyTensor) => {
-      const hidden = x
-        .matmul(net.params[0]!)
-        .add(net.params[1]!)
-        .tanh()
-      const out = hidden
-        .matmul(net.params[2]!)
-        .add(net.params[3]!)
-        .sigmoid()
-      const loss = out.sub(y).pow(2).mean()
+      const loss = net.forward(x).sub(y).pow(2).mean()
       opt.zeroGrad()
       loss.backward()
       opt.step()

@@ -11,10 +11,7 @@ import { Dropout } from "./dropout.ts"
 import { Linear } from "./linear.ts"
 import { LayerNorm } from "./norm.ts"
 
-// `"use tsover"` lets the residual adds be written `x + y` (the same
-// Broadcast-checked overload `.add` uses).
-
-// Pre-norm block: h = x + attn(ln1(x)); y = h + drop(proj(gelu(fc(ln2(h))))).
+// `"use tsover"` lets the residual adds be written `x + y` (the same Broadcast-checked overload `.add` uses).
 export class TransformerBlock<D extends number, H extends number> extends Module {
   declare readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: D]
 
@@ -40,8 +37,7 @@ export class TransformerBlock<D extends number, H extends number> extends Module
     super()
     const p = options.dropout ?? 0
     this.ln1 = new LayerNorm(d, { eps: options.eps })
-    // Explicit type arguments: inference from the `h` intersection would
-    // re-derive `H` and discharge the divisibility check against itself.
+    // Explicit type arguments: inference from the `h` intersection would re-derive `H` and discharge the divisibility check against itself.
     this.attn = new MultiHeadAttention<D, H>(d, h, {
       causal: options.causal ?? true,
       dropout: p,

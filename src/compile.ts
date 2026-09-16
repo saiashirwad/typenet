@@ -24,9 +24,8 @@ export function _activeUpdateTrace(): UpdateTrace | null {
 
 type CompiledInput<T extends AnyTensor> = T extends Tensor<infer S> ? Tensor<S> | ArrayLike<number> : never
 
-// Forcing swaps storage in place, so a tensor keeps its name. Names do not cross
-// detach()/clone() or compile() placeholders, which make fresh tensors.
-
+// Forcing swaps storage in place, so a tensor keeps its name; detach()/clone() and
+// compile() placeholders make fresh tensors, so names do not cross them.
 const tensorNames = new WeakMap<AnyTensor, string>()
 
 export function printGraph(
@@ -164,7 +163,7 @@ export function compile<
       ...updates.map(u => u.expr),
       ...materialize,
     ]
-    const lazy: State["lazy"] = topoOrder(roots).filter(
+    const lazy = topoOrder(roots).filter(
       t => _internal.sourceOf(t).kind === "lazy",
     )
     const serialized = serializeLazyGraph(roots)

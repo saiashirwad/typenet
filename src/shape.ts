@@ -1,6 +1,6 @@
 import type { Call, Numbers } from "hotscript"
 import { prod, showShape } from "./storage.ts"
-// Type-only: `verbatimModuleSyntax` erases it, so tensor.ts -> shape.ts stays the only runtime edge.
+// Type-only, so tensor.ts -> shape.ts stays the only runtime edge.
 import type { AnyTensor, Tensor } from "./tensor.ts"
 
 const zeroWidthSpace = "​"
@@ -15,7 +15,7 @@ export type IsDynamic<S extends Shape> = number[] extends S ? true : false
 /** The algebra below destructures mutable tuples, so a readonly shape is copied at the boundary. */
 type MutableShape<V extends readonly number[]> = { -readonly [K in keyof V]: V[K] }
 
-/** Each guard mentions one operand at a time, right operand first, so the identity cases reduce even while a dim is an unresolved generic. */
+/** One operand per guard, right first, so identity cases reduce even while a dim is an unresolved generic. */
 export type DimAdd<A extends number, B extends number> =
     IsExact<B, 0> extends true ? A
   : IsExact<A, 0> extends true ? B
@@ -164,7 +164,7 @@ type InsertAt<
 
 type IsExact<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
 
-/** The size-1 cases come first: each guard mentions one operand, so `BroadcastDim<C, 1>` reduces to `C` even while `C` is a generic. */
+/** Size-1 first, one operand per guard, so `BroadcastDim<C, 1>` reduces to `C` even while `C` is a generic. */
 type BroadcastDim<X extends number, Y extends number> =
     IsExact<Y, 1> extends true ? X
   : IsExact<X, 1> extends true ? Y
@@ -314,7 +314,7 @@ type ViewCheckOf<S extends Shape, V extends number[]> =
     : ErrorMessage<`Cannot infer -1 dim: ${Prod<S>} elements do not divide evenly into ${ShowShape<S>} -> ${ShowShape<V>}`>
   : ErrorMessage<`Only one -1 dim is allowed in view()`>
 
-// Fail-open rule for the checks below: the IsExact guards answer TS's permissive instantiation of a naked generic, so their ErrorMessage branch is unreachable.
+// Fail-open: the IsExact guards below answer TS's permissive instantiation of a naked generic, so their ErrorMessage branch is unreachable.
 
 type DimInRange<S extends Shape, D extends number> =
     IsExact<S, Shape> extends true ? true
@@ -585,7 +585,6 @@ export type NarrowCheck<S extends Shape, D extends number, Start extends number,
   : FitsWithin<DimAdd<Start, L>, DimAt<S, D>> extends false ? ErrorMessage<`narrow(${D}, ${Start}, ${L}) is out of range for ${ShowShape<S>}`>
   : unknown
 
-/** `select(dim, i)` is `[B, T, E] -> [B, E]`: the selected axis is gone, the others keep their order. */
 export type SelectShape<S extends Shape, D extends number> =
     IsDynamic<S> extends true ? Shape
   : NormalizeDim<S, D> extends infer I extends number ?
@@ -903,7 +902,6 @@ export function permuteShape(
   return order.map(i => shape[i]!)
 }
 
-/** Expand-only: `to` must be exactly what broadcasting `from` against it yields. */
 export function broadcastToShape(
   from: readonly number[],
   to: readonly number[],

@@ -1,4 +1,7 @@
+import type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
 import type { AnyTensor } from "./tensor.ts"
+
+export type { BinaryOp, RandomKind, ReduceOp, UnaryOp }
 
 export type DType = "float32" | "float64" | "int32" | "int64"
 
@@ -6,9 +9,6 @@ export type DType = "float32" | "float64" | "int32" | "int64"
 export function promoteBinaryDtype(a: DType, b: DType): DType {
   return a === "float64" || b === "float64" ? "float64" : "float32"
 }
-
-import type { BinaryOp, RandomKind, ReduceOp, UnaryOp } from "./ops.ts"
-export type { BinaryOp, RandomKind, ReduceOp, UnaryOp }
 
 export type TypedArray = Float32Array | Float64Array | Int32Array | BigInt64Array
 

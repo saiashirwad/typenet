@@ -8,7 +8,7 @@ import { disableNative, isNativeAvailable, nativeCounters, nativeDeviceInfo, use
 import { compile } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { type AnyTensor } from "../src/tensor.ts"
+import type { AnyTensor } from "../src/tensor.ts"
 
 const available = isNativeAvailable()
 

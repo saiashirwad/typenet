@@ -23,6 +23,7 @@ import type {
   Unsqueeze,
 } from "../src/shape.ts"
 import { fromFlat, Tensor } from "../src/tensor.ts"
+import type { Equal, Expect } from "./helpers.ts"
 import {
   BROADCAST_CASES,
   CAT_CASES,
@@ -36,12 +37,6 @@ import {
   SLICE_CASES,
   VIEW_CASES,
 } from "./shape-cases.ts"
-
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
-  <T>() => T extends B ? 1 : 2
-) ? true
-  : false
-type Expect<T extends true> = T
 
 type _b1 = Expect<Equal<Broadcast<[2, 3], [3]>, [2, 3]>>
 type _b2 = Expect<
@@ -274,24 +269,10 @@ function _tensors() {
   type _15 = Expect<Equal<typeof mt.shape, [3, 2]>>
 
   const rg = a.requiresGrad()
-  type _16 = Expect<
-    Equal<
-      typeof rg,
-      Tensor<
-        [2, 3]
-      >
-    >
-  >
+  type _16 = Expect<Equal<typeof rg, Tensor<[2, 3]>>>
 
   const f64 = a.to("float64")
-  type _17 = Expect<
-    Equal<
-      typeof f64,
-      Tensor<
-        [2, 3]
-      >
-    >
-  >
+  type _17 = Expect<Equal<typeof f64, Tensor<[2, 3]>>>
 
   const sliced = randn([4, 5, 6]).slice([2, [1, 4], null])
   type _18 = Expect<Equal<typeof sliced.shape, [2, 3, 6]>>
@@ -748,9 +729,7 @@ function _gatherScatter<
   type _1 = Expect<Equal<typeof gathered.shape, [4096, 16]>>
 
   const aggregated = gathered.scatterAdd(src, 1024)
-  type _2 = Expect<
-    Equal<typeof aggregated.shape, [1024, 16]>
-  >
+  type _2 = Expect<Equal<typeof aggregated.shape, [1024, 16]>>
 
   const channels = nodes.indexSelect(zeros([3]).toIndex(), 1)
   type _3 = Expect<Equal<typeof channels.shape, [1024, 3]>>

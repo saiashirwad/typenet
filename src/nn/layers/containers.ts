@@ -68,13 +68,9 @@ export class Residual<M extends Module> extends Module {
   forward<S extends Shape>(
     x: Tensor<S> & ResidualCheck<M, S>,
   ): Tensor<S> {
-    // `Module` declares no `forward`, so cast to the exact contract
-    // ResidualCheck just verified, not an erasing `as any`.
-    const branch = (this.inner as unknown as {
-      forward(t: Tensor<S>): Tensor<S>
-    }).forward(x)
-    // Runtime twin of ResidualCheck: `+` would otherwise quietly
-    // broadcast a mismatched branch.
+    // `Module` declares no `forward`, so cast to the contract ResidualCheck just verified.
+    const branch = (this.inner as unknown as { forward(t: Tensor<S>): Tensor<S> }).forward(x)
+    // Runtime twin of ResidualCheck: `+` would otherwise quietly broadcast a mismatched branch.
     if (branch.shape.length !== x.shape.length || branch.shape.some((s, i) => s !== x.shape[i])) {
       throw new Error(
         `Residual: ${this.inner.constructor.name} maps [${x.shape.join(", ")}] to `

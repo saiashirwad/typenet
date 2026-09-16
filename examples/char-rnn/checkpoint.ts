@@ -1,10 +1,6 @@
 "use tsover"
 
-// Checkpoints and text loading for the character RNN examples.
-//
-// Saving goes through `Module.stateDict()`, so it writes exactly what the module reports: the
-// parameters, by dotted name, at their own dtype and shape. The alphabet travels with them,
-// because a model is only meaningful next to the symbols it was trained on.
+// Checkpoints for the character RNN: `stateDict()` plus the alphabet it was trained on.
 
 import { readFileSync, writeFileSync } from "node:fs"
 import { type DType, type StateDict, type StateEntry } from "../../index.ts"
@@ -17,22 +13,10 @@ export function alphabetOf(text: string): string {
   return [...new Set(text)].sort().join("")
 }
 
-/**
- * Reads the corpus at `path`. There is no built-in text, so the path is required: a caller that
- * forgets to name one gets a `readFileSync` error rather than a silent fallback to some other
- * text than the one it meant.
- */
-export function readCorpus(path: string): string {
-  const text = readFileSync(path, "utf8")
-  if (text.length === 0) throw new Error(`${path} is empty`)
-  return text
-}
-
-/** The seed a sample replays from, and the reason `Math.random` is not used for one. */
+/** mulberry32: a sample replays from its seed, which `Math.random` would not give. */
 export function seeded(seed: number): () => number {
   let state = seed >>> 0
   return () => {
-    // mulberry32.
     state = (state + 0x6d2b79f5) >>> 0
     let t = state
     t = Math.imul(t ^ (t >>> 15), t | 1)
@@ -58,10 +42,8 @@ interface CheckpointFile {
 }
 
 /**
- * What saving needs: the alphabet to record, the widths to record, and the state to write. A
- * narrow structural type rather than the model class itself, because `CharacterRNN`'s widths are
- * invariant and a model built from inferred literals (`CharacterRNN<65, 32, 128>`) is not
- * assignable to one built from numbers.
+ * A structural type rather than `CharacterRNN` itself, because its widths are invariant and a
+ * model built from inferred literals is not assignable to one built from numbers.
  */
 export interface CheckpointableModel {
   readonly config: CharacterRNNConfig<number, number, number>
@@ -98,8 +80,6 @@ export function loadCheckpoint(
   }
   const { vocab, embed, hidden, unroll, alphabet } = file.signature
   const model = new CharacterRNN({ vocab, embed, hidden, unroll }, alphabet)
-  // Strict: a checkpoint whose weights disagree with the signature above throws here, rather
-  // than sampling from a model that is half the one the file was written from.
   const state: Record<string, StateEntry> = {}
   for (const [name, entry] of Object.entries(file.state)) {
     state[name] = {
@@ -108,6 +88,7 @@ export function loadCheckpoint(
       data: Float32Array.from(entry.data),
     }
   }
+  // Strict: weights that disagree with the signature throw rather than sampling half a model.
   model.loadStateDict(state)
   model.eval()
   return { model, signature: file.signature }
