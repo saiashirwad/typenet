@@ -1,6 +1,6 @@
 # typenet
 
-A tensor library for TypeScript where a shape is part of a tensor's type. `Tensor<[2, 3]>` times `Tensor<[3, 4]>` gives `Tensor<[2, 4]>`; mismatched inner dimensions fail the build. Eager and lazy execution, reverse-mode autograd, an `nn` module system, and an optional Rust backend for CPU or Metal. Operators are shape-checked through [tsover](https://tsover.swmansion.com).
+A tensor library for TypeScript where a shape is part of a tensor's type. `Tensor<[2, 3]>` times `Tensor<[3, 4]>` gives `Tensor<[2, 4]>`; mismatched inner dimensions fail the build. Execution is eager or lazy, autograd is reverse-mode, and an optional Rust backend targets CPU or Metal. Operators are shape-checked through [tsover](https://tsover.swmansion.com).
 
 ## Shapes are types
 
@@ -31,7 +31,7 @@ const batch: Tensor<[number, 784]> = randn([8, 784])
 const out: Tensor<[number, 128]> = layer.forward(batch)
 ```
 
-`DimAdd`, `DimMul`, `DimSub` and `DimDiv` are each a type and a function. The type computes on literal sizes, the function on numbers.
+`DimAdd`, `DimMul`, `DimSub` and `DimDiv` are each a type and a function. The type computes on literal sizes, and the function computes on numbers.
 
 ```ts
 "use tsover"
@@ -111,7 +111,7 @@ crossEntropy(
 
 ## A character-level GPT
 
-`examples/gpt.ts` trains a small GPT on a passage encoded in the file. The output head is tied: `TiedLinear.of(this.wte)` reuses the `[V, D]` token table instead of allocating a second matrix, so `parameters()` reports it once.
+`examples/gpt.ts` trains a small GPT on a passage encoded in the file. The output head is tied. `TiedLinear.of(this.wte)` reuses the `[V, D]` token table instead of allocating a second matrix, so `parameters()` reports it once.
 
 ```ts
 "use tsover"
