@@ -1,6 +1,6 @@
 # typenet
 
-A tensor library for TypeScript where a shape is part of a tensor's type. `Tensor<[2, 3]>` times `Tensor<[3, 4]>` gives `Tensor<[2, 4]>`; mismatched inner dimensions fail the build. Execution is eager or lazy, autograd is reverse-mode, and an optional Rust backend targets CPU or Metal. Operators are shape-checked through [tsover](https://tsover.swmansion.com).
+A tensor library for TypeScript with compile-time shape checking. `Tensor<[2, 3]>` times `Tensor<[3, 4]>` is `Tensor<[2, 4]>`, and mismatched inner dimensions fail the build. It runs eagerly or lazily, differentiates in reverse mode, and has an optional Rust backend for CPU or Metal. Arithmetic operators are checked the same way, with [tsover](https://tsover.swmansion.com).
 
 Pre-alpha. There are no releases yet, and the API changes between commits without a deprecation window.
 
