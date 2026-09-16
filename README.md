@@ -6,14 +6,14 @@ Pre-alpha. No releases yet, and the API changes between commits.
 
 ```ts
 "use tsover"
-import { randn, Tensor } from "typenet"
+import { randn } from "typenet"
 
-const a = randn([2, 3])
-const w = randn([3, 4])
+const a = randn([2, 3]) // Tensor<[2, 3]>
+const w = randn([3, 4]) // Tensor<[3, 4]>
 
-const h: Tensor<[2, 4]> = a.matmul(w)
-const c: Tensor<[2, 3]> = randn([2, 1]) + randn([1, 3]) // broadcast
-const loss: Tensor<[]> = ((h - 1) ** 2).mean()
+const h = a.matmul(w) // Tensor<[2, 4]>
+const c = randn([2, 1]) + randn([1, 3]) // broadcast -> Tensor<[2, 3]>
+const loss = ((h - 1) ** 2).mean() // Tensor<[]>
 
 // @ts-expect-error matmul: inner dimensions do not match ([2, 3] @ [2, 3])
 a.matmul(randn([2, 3]))
@@ -23,8 +23,14 @@ a.matmul(randn([2, 3]))
 import { Linear, randn, Tensor } from "typenet"
 
 const layer = new Linear(784, 128)
-const batch: Tensor<[number, 784]> = randn([8, 784]) // number stays a wildcard
-const out: Tensor<[number, 128]> = layer.forward(batch)
+
+// the batch stays generic through the layer, so this is written once
+function forward<B extends number>(x: Tensor<[B, 784]>): Tensor<[B, 128]> {
+  return layer.forward(x)
+}
+
+forward(randn([8, 784])) // Tensor<[8, 128]>
+forward(randn([32, 784])) // Tensor<[32, 128]>
 ```
 
 ```ts
@@ -50,8 +56,8 @@ class FeedForward<D extends number> extends Module {
 }
 
 const ff = new FeedForward(16)
-const hidden: Tensor<[16, 64]> = ff.up.weight // DimMul<4, 16>
-const joined: Tensor<[8, 20]> = cat(randn([8, 12]), randn([8, 8]), 1)
+const hidden = ff.up.weight // Tensor<[16, 64]>
+const joined = cat(randn([8, 12]), randn([8, 8]), 1) // Tensor<[8, 20]>
 ```
 
 ## API
@@ -147,7 +153,7 @@ class GPT<
 
   forward<B extends number>(idx: IndexTensor<[B, T]>): Tensor<[B, T, V]> {
     const { wte, wpe, pos } = this
-    let h: Tensor<[B, T, D]> = wte.forward(idx) + wpe.forward(pos)
+    let h = wte.forward(idx) + wpe.forward(pos) // Tensor<[B, T, D]>
     for (const block of this.blocks) h = block.forward(h)
     return this.head.forward(this.lnf.forward(h))
   }
