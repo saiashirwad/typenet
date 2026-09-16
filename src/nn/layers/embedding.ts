@@ -5,7 +5,6 @@ import { Module } from "../module.ts"
 import { type Parameter, parameter } from "../parameter.ts"
 import { SHAPE_EFFECT } from "../sequential.ts"
 
-/** A lookup table of `V` rows of width `D`, addressed by an index tensor of any rank via the fused `gatherRows` node. */
 export class Embedding<V extends number, D extends number> extends Module {
   declare readonly [SHAPE_EFFECT]: [effect: "appendDim", D: D]
 
@@ -23,7 +22,7 @@ export class Embedding<V extends number, D extends number> extends Module {
     )
   }
 
-  /** `ids` must be an {@link IndexTensor}; for weight tying, pass `this.weight` itself to `TiedLinear.of`. */
+  /** For weight tying, pass `this.weight` itself to `TiedLinear.of`. */
   forward<S extends Shape>(
     ids: IndexTensor<S>,
   ): Tensor<[...S, D]> {

@@ -45,14 +45,13 @@ export class Sigmoid extends Activation {
   }
 }
 
-/** GELU (tanh approximation) over the fused `gelu` node. */
+/** GELU, tanh approximation, over the fused `gelu` node. */
 export class GELU extends Activation {
   constructor() {
     super(x => gelu(x))
   }
 }
 
-/** SiLU / swish: `x * sigmoid(x)` over the fused `silu` node. */
 export class SiLU extends Activation {
   constructor() {
     super(x => silu(x))

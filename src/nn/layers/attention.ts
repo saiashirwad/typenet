@@ -1,4 +1,4 @@
-import { assertChecked } from "../../cast.ts"
+import { assertChecked } from "../../shape.ts"
 import { type DimDiv, DimDiv as dimDiv, type DimDivCheck, type DimMul, DimMul as dimMul } from "../../shape.ts"
 import type { Tensor } from "../../tensor.ts"
 import { sdpa } from "../functional.ts"
@@ -6,13 +6,11 @@ import { Module } from "../module.ts"
 import { SHAPE_EFFECT } from "../sequential.ts"
 import { Linear } from "./linear.ts"
 
-/** Multi-head self-attention over `[B, T, D]`; `D` must be divisible by `H` (checked at the constructor in both type and value). */
+/** Multi-head self-attention over `[B, T, D]`. `D` must divide by `H`, checked at the constructor in both type and value. */
 export class MultiHeadAttention<D extends number, H extends number> extends Module {
   declare readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: D]
 
-  /** The fused `[D, 3D]` projection, or `null` under `qkvFused: false`. */
   readonly qkv: Linear<D, DimMul<3, D>> | null
-  /** The three separate `[D, D]` projections, or `null` when fused. */
   readonly wq: Linear<D, D> | null
   readonly wk: Linear<D, D> | null
   readonly wv: Linear<D, D> | null
@@ -31,8 +29,8 @@ export class MultiHeadAttention<D extends number, H extends number> extends Modu
     options: {
       causal?: boolean
       dropout?: number
-      bias?: boolean
-      qkvFused?: boolean
+      bias?: boolean | undefined
+      qkvFused?: boolean | undefined
     } = {},
   ) {
     super()
@@ -64,7 +62,6 @@ export class MultiHeadAttention<D extends number, H extends number> extends Modu
     this.proj = new Linear(d, d, { bias })
   }
 
-  /** `[B, T, D] -> [B, T, D]`; head split/merge go through `unflatten`/`permute`/`flatten` because `view` cannot reduce with generic `B`/`T`. */
   forward<B extends number, T extends number>(
     x: Tensor<[B, T, D]>,
   ): Tensor<[B, T, D]> {
@@ -95,7 +92,6 @@ export class MultiHeadAttention<D extends number, H extends number> extends Modu
       k = this.wk!.forward(x)
       v = this.wv!.forward(x)
     }
-    // `k` goes straight to `[B, H, Dh, T]`, the transposed form `sdpa` takes.
     const q4 = q.unflatten(2, [h, headDim]).permute(0, 2, 1, 3)
     const k4 = k.unflatten(2, [h, headDim]).permute(0, 2, 3, 1)
     const v4 = v.unflatten(2, [h, headDim]).permute(0, 2, 1, 3)

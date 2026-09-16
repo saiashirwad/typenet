@@ -1,7 +1,0 @@
-# Pins the versions these scripts are written and measured against
-# (PLAN-V2 §4.2, W0.4). This file documents the interpreter's package set;
-# it does not install anything itself — `$TORCH_PYTHON` (see
-# bench/torch/lib/python.mjs) is expected to already be a working
-# environment with these installed, per bench/torch/README.md.
-torch==2.13.0
-numpy==2.3.5

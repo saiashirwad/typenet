@@ -11,7 +11,7 @@ export type GraphUpdate = {
   expr: AnyTensor
 }
 
-export type UpdateTrace = {
+type UpdateTrace = {
   updates: GraphUpdate[]
   materialize: AnyTensor[]
 }
@@ -24,8 +24,8 @@ export function _activeUpdateTrace(): UpdateTrace | null {
 
 type CompiledInput<T extends AnyTensor> = T extends Tensor<infer S> ? Tensor<S> | ArrayLike<number> : never
 
-// Forcing swaps storage in place, so a tensor keeps its identity and its name;
-// names do not cross detach()/clone() or compile() placeholders, which make fresh tensors.
+// Forcing swaps storage in place, so a tensor keeps its name. Names do not cross
+// detach()/clone() or compile() placeholders, which make fresh tensors.
 
 const tensorNames = new WeakMap<AnyTensor, string>()
 
@@ -63,7 +63,7 @@ export function printGraph(
 
 export { tensorNames }
 
-/** Shape-stable compiled function; tracing runs under lazy semantics and covers a full training step (backward + optimizer updates). */
+/** Shape-stable: later calls must match the traced shapes. Tracing covers a full training step. */
 export type CompiledFn<
   Args extends AnyTensor[],
   R extends AnyTensor | AnyTensor[],
@@ -78,7 +78,7 @@ export function compile<
   R extends AnyTensor | AnyTensor[],
 >(
   fn: (...args: Args) => R,
-  /** Example inputs to trace against up front. @deprecated pass these on the first call instead. */
+  /** @deprecated pass these on the first call instead. */
   exampleInputs?: [...Args],
 ): CompiledFn<Args, R> {
   type State = {
@@ -95,7 +95,6 @@ export function compile<
       leafOffsets: number[]
       leafBytes: number
       rootShapes: number[][]
-      /** Leaf indices re-sent every eval: placeholders + update targets. */
       dirty: number[] | null
     } | null
     lazy: AnyTensor[]
@@ -155,7 +154,7 @@ export function compile<
     const materialize = traced.materialize.map(t => {
       if (_internal.sourceOf(t).kind !== "lazy") {
         throw new Error(
-          "compile(): an optimizer step produced a non-lazy gradient — compiled training steps need lazy gradients",
+          "compile(): an optimizer step produced a non-lazy gradient, compiled training steps need lazy gradients",
         )
       }
       return t
@@ -220,7 +219,7 @@ export function compile<
           throw new Error(
             `compiled function argument ${i}: expected shape ${showShape(state.shapes[i]!)}, got ${
               showShape(t.shape)
-            } — compiled graphs are shape-stable, recompile for a new shape`,
+            }, compiled graphs are shape-stable, recompile for a new shape`,
           )
         }
         buffer.set(_internal.cpuOf(t) as Float32Array)
@@ -256,7 +255,7 @@ export function compile<
   ): void => {
     if (_internal.sourceOf(u.target).kind !== "cpu") {
       throw new Error(
-        "compiled function: an optimizer update target is not CPU storage — compiled graphs require parameters and optimizer state to stay put",
+        "compiled function: an optimizer update target is not CPU storage, compiled graphs require parameters and optimizer state to stay put",
       )
     }
     const buffer = _internal.cpuOf(u.target)!
@@ -272,7 +271,7 @@ export function compile<
     const buffer = _internal.cpuOf(leaf)
     if (buffer === null) {
       throw new Error(
-        "compiled function: a captured tensor is not CPU storage — compiled graphs require captured leaves (e.g. parameters) to stay put",
+        "compiled function: a captured tensor is not CPU storage, compiled graphs require captured leaves (e.g. parameters) to stay put",
       )
     }
     return new Uint8Array(
@@ -285,8 +284,8 @@ export function compile<
   const runNative = (state: State): AnyTensor[] => {
     const native = state.native!
     if (native.handle === null) {
-      // Pin every leaf once; only the dirty set is re-sent per eval, so mutating a
-      // captured non-parameter leaf after compile() is not seen.
+      // Pin every leaf once; only the dirty set is re-sent, so mutating a captured
+      // non-parameter leaf after compile() is not seen.
       native.handle = nativeBackend.prepareGraphNative(
         native.json,
       )
@@ -342,7 +341,7 @@ export function compile<
   }
 
   const runInterpreter = (state: State): AnyTensor[] => {
-    // Rewind: drop the previous replay's materialized values so the graph recomputes against fresh inputs.
+    // Drop the previous replay's materialized values so the graph recomputes against fresh inputs.
     for (const t of state.lazy) {
       _internal.resetCpu(t)
     }

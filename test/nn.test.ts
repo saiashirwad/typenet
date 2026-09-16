@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { tensor } from "../src/factories.ts"
-import { crossEntropy, Linear, Module, mseLoss, ReLU, sequential } from "../src/nn.ts"
-import { Adam, SGD } from "../src/optim.ts"
+import { crossEntropy, Linear, Module, mseLoss, ReLU, sequential } from "../src/nn/index.ts"
+import { Adam, SGD } from "../src/optim/index.ts"
 import { Tensor } from "../src/tensor.ts"
 
 describe("Linear", () => {

@@ -1,20 +1,15 @@
-// Each initialiser has an in-place twin (trailing `_`) that routes
-// through `fill_`/`copy_`, so mutation guards live in tensor.ts.
+// In-place twins (trailing `_`) route through `fill_`/`copy_`, so mutation guards live in tensor.ts.
 import { hash32, nextSeed, nextStream, randomData } from "../kernels.ts"
 import type { Shape } from "../shape.ts"
 import { prod, showShape } from "../storage.ts"
 import { type AnyTensor, fromFlat, Tensor } from "../tensor.ts"
 
-/**
- * An explicit draw source, independent of the ambient seed counter: pass
- * the same `Generator` to two calls to get identical draws.
- */
+/** An explicit draw source, independent of the ambient seed counter: the same `Generator` gives identical draws in two calls. */
 export interface Generator {
   readonly seed: number
   readonly stream: number
 }
 
-/** A `Generator` deterministically derived from `seed`: same seed in, same Generator out. */
 export function generator(seed: number): Generator {
   const s = seed >>> 0
   return { seed: hash32(s), stream: hash32(s ^ 0x9e3779b9) }
@@ -47,10 +42,10 @@ function drawData(
   ) as Float32Array
 }
 
-export type FanMode = "fanIn" | "fanOut"
-export type Nonlinearity = "linear" | "sigmoid" | "tanh" | "relu" | "leakyRelu"
+type FanMode = "fanIn" | "fanOut"
+type Nonlinearity = "linear" | "sigmoid" | "tanh" | "relu" | "leakyRelu"
 
-/** `{fanIn, fanOut}` from a shape, PyTorch's convention: dim 0 is fan-out, dim 1 is fan-in, trailing axes multiply into both. */
+/** `{fanIn, fanOut}` by PyTorch's convention: dim 0 is fan-out, dim 1 is fan-in, trailing axes multiply into both. */
 export function calculateFan(
   shape: readonly number[],
   who: string,
@@ -70,8 +65,7 @@ function pickFan(shape: readonly number[], mode: FanMode | undefined, who: strin
   return (mode ?? "fanIn") === "fanIn" ? fanIn : fanOut
 }
 
-/** The recommended gain for `nonlinearity`, `torch.nn.init.calculate_gain`'s table. */
-export function calculateGain(nonlinearity: Nonlinearity, negativeSlope = 0.01): number {
+function calculateGain(nonlinearity: Nonlinearity, negativeSlope = 0.01): number {
   switch (nonlinearity) {
     case "linear":
     case "sigmoid":
@@ -91,7 +85,7 @@ interface GainOptions {
   negativeSlope?: number
 }
 
-/** The Kaiming uniform half-width `gain·√(3/fan)`; with no gain/nonlinearity, `1/√fan` (PyTorch's `a=√5` default) in one rounding step. */
+/** The Kaiming uniform half-width `gain·√(3/fan)`. With no gain or nonlinearity it is `1/√fan` in one rounding step, which is PyTorch's `a=√5` default. */
 function kaimingBound(fan: number, o: GainOptions): number {
   if (o.gain === undefined && o.nonlinearity === undefined) {
     return 1 / Math.sqrt(fan)
@@ -100,7 +94,7 @@ function kaimingBound(fan: number, o: GainOptions): number {
   return gain * Math.sqrt(3 / fan)
 }
 
-/** The Kaiming normal std `gain/√fan`; with no gain/nonlinearity, `√(1/(3·fan))` to match {@link kaimingBound}'s default variance (`Var(U(-b,b)) = b²/3`). */
+/** The Kaiming normal std `gain/√fan`. With no gain or nonlinearity it is `√(1/(3·fan))`, which matches the variance of {@link kaimingBound}'s default uniform. */
 function kaimingStd(fan: number, o: GainOptions): number {
   if (o.gain === undefined && o.nonlinearity === undefined) {
     return Math.sqrt(1 / (3 * fan))
@@ -109,9 +103,8 @@ function kaimingStd(fan: number, o: GainOptions): number {
   return gain / Math.sqrt(fan)
 }
 
-// Closed-form erf/erfinv: truncated-normal sampling with one uniform
-// sample per element and no rejection loop, so it is as seed-deterministic
-// as every other draw here.
+// Closed-form erf/erfinv: truncated-normal sampling draws one uniform per element
+// with no rejection loop, so it stays as seed-deterministic as the other draws here.
 
 /** Abramowitz & Stegun 7.1.26, max error ~1.5e-7. */
 function erf(x: number): number {
@@ -155,7 +148,7 @@ export function constant<const Sh extends Shape>(shape: Sh, value: number): Tens
 export interface UniformOptions {
   low?: number
   high?: number
-  generator?: Generator
+  generator?: Generator | undefined
 }
 
 /** Uniform in `[low, high)` (default `[0, 1)`). */
@@ -170,10 +163,9 @@ export function uniform<const Sh extends Shape>(shape: Sh, o: UniformOptions = {
 export interface NormalOptions {
   mean?: number
   std?: number
-  generator?: Generator
+  generator?: Generator | undefined
 }
 
-/** `Normal(mean, std)` (default standard normal). */
 export function normal<const Sh extends Shape>(shape: Sh, o: NormalOptions = {}): Tensor<Sh> {
   const { mean = 0, std = 1, generator: gen } = o
   const raw = drawTensor("normal", shape, gen)
@@ -203,7 +195,9 @@ export function truncNormal<const Sh extends Shape>(shape: Sh, o: TruncNormalOpt
   for (let i = 0; i < n; i++) {
     // `normalInvCdf` blows up at exactly 0/1, which a boundary `u[i]` can hit.
     const p = Math.min(Math.max(lo + u[i]! * (hi - lo), 1e-7), 1 - 1e-7)
-    data[i] = mean + std * normalInvCdf(p)
+    // Far in a tail both CDF endpoints underflow to 0, which would place the
+    // draw outside [a, b]; clamping lands on the bound nearest the mean.
+    data[i] = Math.min(Math.max(mean + std * normalInvCdf(p), a), b)
   }
   return fromFlat(data, shape, "float32")
 }
@@ -213,14 +207,12 @@ export interface KaimingOptions extends GainOptions {
   generator?: Generator
 }
 
-/** Kaiming/He uniform: `U(-bound, bound)`, `bound = gain·√(3/fan)`. See {@link kaimingBound}. */
 export function kaimingUniform<const Sh extends Shape>(shape: Sh, o: KaimingOptions = {}): Tensor<Sh> {
   const fan = pickFan(shape, o.fanMode, "kaimingUniform")
   const bound = kaimingBound(fan, o)
   return uniform(shape, { low: -bound, high: bound, generator: o.generator })
 }
 
-/** Kaiming/He normal: `Normal(0, std)`, `std = gain/√fan`. See {@link kaimingStd}. */
 export function kaimingNormal<const Sh extends Shape>(shape: Sh, o: KaimingOptions = {}): Tensor<Sh> {
   const fan = pickFan(shape, o.fanMode, "kaimingNormal")
   return normal(shape, { mean: 0, std: kaimingStd(fan, o), generator: o.generator })

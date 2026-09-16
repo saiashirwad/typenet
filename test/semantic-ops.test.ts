@@ -5,27 +5,13 @@ import { jsCounters, resetJsCounters } from "../src/counters.ts"
 import { evalMatmulEager } from "../src/eager.ts"
 import { sumTo } from "../src/ir.ts"
 import { configure, serializeLazyGraph } from "../src/lazy.ts"
-import { crossEntropy as composedCrossEntropy } from "../src/nn.ts"
-import {
-  contiguous,
-  crossEntropy,
-  dropout,
-  fromFlat,
-  gatherRows,
-  gelu,
-  layerNorm,
-  logSumExp,
-  rmsNorm,
-  scatterAddRows,
-  silu,
-  softmax,
-  Tensor,
-} from "../src/tensor.ts"
+import { crossEntropy as composedCrossEntropy } from "../src/nn/index.ts"
+import { crossEntropy, dropout, fromFlat, gatherRows, gelu, layerNorm, logSumExp, rmsNorm, silu, softmax, Tensor } from "../src/tensor.ts"
 import { bothWays, expectClose } from "./helpers.ts"
 
 type AnyTensor = Tensor<any>
 
-/** Exact equality, element for element; `expectClose` is strictly `<`. */
+/** Exact equality, element for element; expectClose is strictly less-than. */
 function expectExact(a: AnyTensor, b: AnyTensor): void {
   expect(b.shape).toEqual(a.shape)
   expect(Array.from(b.data)).toEqual(Array.from(a.data))
@@ -36,9 +22,8 @@ afterEach(() => {
   disableNative()
 })
 
-// Each semantic kernel against the composition it replaces: the honest
-// check is against that composition written independently here, not
-// against a magic constant nobody can re-derive.
+// Each semantic kernel is checked against the composition it replaces, written independently here
+// rather than against a magic constant nobody can re-derive.
 
 const sample = (n: number, shape: number[]): AnyTensor =>
   fromFlat(
@@ -128,8 +113,7 @@ describe("semantic ops match the composition they replace", () => {
 
   it("crossEntropy == the logSoftmax/one-hot composition", () => {
     const logits = sample(12, [4, 3])
-    // `nn.crossEntropy` takes a branded `IndexTensor`, so the target ids
-    // are built once and shared with the tensor-level `crossEntropy` below.
+    // nn.crossEntropy takes a branded IndexTensor, so the ids are built once and shared below.
     const targets = Tensor.indices([2, 0, 1, 2], [4])
     expectClose(
       crossEntropy(
@@ -153,26 +137,9 @@ describe("semantic ops match the composition they replace", () => {
     expect(rows.shape).toEqual([2, 3, 3])
     expectExact(rows.view([6, 3] as any) as AnyTensor, flat)
   })
-
-  it("scatterAddRows == scatterAdd on the flattened index", () => {
-    const src = sample(9, [3, 3])
-    const idx = Tensor.of([2, 0, 0]) as any
-    expectExact(
-      scatterAddRows(src, idx, 4) as AnyTensor,
-      src.scatterAdd(idx, 4 as any) as AnyTensor,
-    )
-  })
-
-  it("contiguous is the identity, in a fresh buffer", () => {
-    const x = sample(6, [2, 3])
-    const c = contiguous(x) as AnyTensor
-    expectExact(c, x)
-    expect(c.data).not.toBe(x.data)
-  })
 })
 
-// Eager and the lazy interpreter run the same kernel, so they agree bit
-// for bit, not to a tolerance.
+// Eager and the lazy interpreter run the same kernel, so they agree bit for bit, not to a tolerance.
 
 describe("eager and lazy agree bit for bit", () => {
   const bits = (t: AnyTensor): Uint32Array =>
@@ -226,14 +193,6 @@ describe("eager and lazy agree bit for bit", () => {
         ) as AnyTensor,
     ],
     [
-      "scatterAddRows",
-      () => scatterAddRows(sample(9, [3, 3]), Tensor.of([2, 0, 0]) as any, 4) as AnyTensor,
-    ],
-    [
-      "contiguous",
-      () => contiguous(sample(6, [2, 3])) as AnyTensor,
-    ],
-    [
       "multi-axis reduce",
       () => sumTo(sample(24, [2, 3, 4]), [4]),
     ],
@@ -247,7 +206,7 @@ describe("eager and lazy agree bit for bit", () => {
   })
 })
 
-// Causal softmax: the mask is the node's, not a buffer's.
+// Causal softmax: the mask belongs to the node, not to a buffer.
 describe("softmax{causal}", () => {
   it("zeroes the strict upper triangle exactly and keeps rows summing to 1", () => {
     const scores = sample(18, [2, 3, 3])
@@ -272,7 +231,7 @@ describe("softmax{causal}", () => {
   })
 })
 
-// Dropout: one draw, shared by the forward and the backward.
+// Dropout: one draw, shared by forward and backward.
 describe("dropout", () => {
   it("p = 0 is exactly the identity", () => {
     const x = sample(16, [4, 4])
@@ -386,9 +345,8 @@ describe("reduce{dims} on the wire", () => {
   })
 })
 
-// The reference below is a verbatim copy of `evalMatmulEager`'s inner
-// loop: it is the loop the recorded loss curves were produced with, and
-// any change to the per-output accumulation order invalidates them.
+// A verbatim copy of evalMatmulEager's inner loop: it is the loop the recorded loss curves were
+// produced with, and any change to the per-output accumulation order invalidates them.
 function referenceMatmul(
   a: Float32Array,
   b: Float32Array,

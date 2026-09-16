@@ -1,6 +1,6 @@
 import { createRequire } from "node:module"
 
-export type NativeModule = {
+type NativeModule = {
   prepareGraph(graphJson: string): number
   pinLeaf(
     handle: number,
@@ -25,7 +25,6 @@ export type NativeModule = {
   deviceName(): string
   counters(): string
   deviceInfo(): string
-  takeProfile(): string
 }
 
 let moduleCache: NativeModule | null | undefined
@@ -47,17 +46,15 @@ export function isNativeAvailable(): boolean {
   return loadNative() !== null
 }
 
-/** Best accelerator the addon found ("metal" or "cpu"), whether used or not. */
+/** The accelerator the addon reports, whether or not anything uses it. */
 export function nativeDevice(): string | null {
   return loadNative()?.deviceName() ?? null
 }
 
-/** Which device non-tiny graphs currently run on. */
 export function nativeDeviceMode(): "cpu" | "gpu" {
   return deviceMode
 }
 
-/** Throws when the addon is not built; only affects lazy mode. */
 export function useNative(
   options: { device?: "cpu" | "gpu" } = {},
 ): void {
@@ -80,7 +77,6 @@ export function isNativeEnabled(): boolean {
   return nativeEnabled && loadNative() !== null
 }
 
-/** Internal save/restore hooks for the context stack. */
 export function _nativeState(): {
   enabled: boolean
   device: "cpu" | "gpu"
@@ -144,7 +140,6 @@ export function evalPreparedNative(
   return withNative(mod => new Float32Array(mod.evalPrepared(handle, dirty, dirtyIndex, seed >>> 0)))
 }
 
-/** Null when the addon is not loaded (caller falls back to JS). */
 export function sgemmNative(
   a: Float32Array,
   b: Float32Array,
@@ -158,7 +153,6 @@ export function sgemmNative(
   )
 }
 
-/** No-op when the addon is not loaded. */
 export function releaseGraphNative(handle: number): void {
   withNative(mod => mod.releaseGraph(handle), () => undefined)
 }
@@ -167,17 +161,11 @@ export function preparedGraphCountNative(): number {
   return withNative(mod => mod.preparedGraphCount(), () => 0)
 }
 
-/** Structural counters from the addon's JSON; an unmeasured field is -1, never 0. `{}` when the addon is not built. */
+/** An unmeasured field is -1, never 0. Empty when the addon is not built. */
 export function nativeCounters(): Record<string, unknown> {
   return withNative(mod => JSON.parse(mod.counters()) as Record<string, unknown>, () => ({}))
 }
 
-/** Device name plus every declared TYPENET_* kill switch and whether it is honoured. `{}` when the addon is not built. */
 export function nativeDeviceInfo(): Record<string, unknown> {
   return withNative(mod => JSON.parse(mod.deviceInfo()) as Record<string, unknown>, () => ({}))
-}
-
-/** Op-kind timings since the last call (TYPENET_PROFILE=1 only), as a text table; "" when the addon is not built. */
-export function nativeProfile(): string {
-  return withNative(mod => mod.takeProfile(), () => "")
 }

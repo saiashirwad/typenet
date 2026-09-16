@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
-import { Linear } from "../src/nn.ts"
+import { Linear } from "../src/nn/index.ts"
 import { isParameter, type LoadReport, Module, type Parameter, parameter, tie } from "../src/nn/index.ts"
-import { SGD } from "../src/optim.ts"
+import { SGD } from "../src/optim/index.ts"
 import { type AnyTensor, Tensor } from "../src/tensor.ts"
 
 describe("Module.parameters dedup", () => {
@@ -22,9 +22,8 @@ describe("Module.parameters dedup", () => {
     expect([...net.namedParameters().keys()]).toEqual(["a"])
 
     const opt = new SGD(net.parameters(), { lr: 0.1 })
-    // loss = a (identity), so d(loss)/da = 1 and a correct step moves `a`
-    // by exactly `-lr`; double-counting the shared object would move it
-    // by `-2*lr`.
+    // loss = a, so d(loss)/da = 1 and a correct step moves a by exactly -lr; double-counting
+    // the shared object would move it by -2*lr.
     opt.zeroGrad()
     net.a.backward()
     opt.step()
@@ -152,7 +151,7 @@ describe("Module register() and the unreachable-parameter warning", () => {
       expect(params.has("unregistered")).toBe(false)
       expect(warnSpy).toHaveBeenCalledTimes(1)
       expect(warnSpy.mock.calls[0]?.[0]).toContain("unregistered")
-      // one-time: a second read does not warn again.
+      // One-time: a second read does not warn again.
       net.namedParameters()
       expect(warnSpy).toHaveBeenCalledTimes(1)
     } finally {

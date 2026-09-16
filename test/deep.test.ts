@@ -77,15 +77,10 @@ describe.skipIf(!isNativeAvailable())(
   },
 )
 
-// These re-run the deep chains above as child processes with a tiny
-// (256 KB) V8 stack, so graph construction, forcing and backward all have
-// to stay iterative rather than recursing one native frame per graph node.
-// `runOnSmallStack` spawns each `test/scenarios/*.ts` file under vite-node;
-// a scenario asserts internally and exits non-zero on failure (assertion
-// or native stack overflow alike).
+// These re-run the deep chains above as child processes with a tiny (256 KB) V8 stack, so graph
+// construction, forcing and backward must stay iterative. A scenario asserts and exits non-zero.
 describe("deep graphs, small stack", () => {
-  // A cold vite-node process (its own TS transform) dominates the wall
-  // time; give it headroom above vitest's 5s default.
+  // A cold vite-node process dominates the wall time, so give it headroom over vitest's 5s default.
   const SMALL_STACK_TIMEOUT = 60_000
 
   it("forces, and differentiates, the depth-20000 chain on a small stack", async () => {

@@ -6,5 +6,5 @@
   "checkTimeSeconds": 0.76,
   "totalTimeSeconds": 1,
   "measuredAt": "2026-09-13T18:11:38.468Z",
-  "reason": "S3/S4: attention, losses, weight tying and the typed GPT landed; the growth is TypeScript's variance computation on generic layer classes holding Tensor fields (measured: ~45k instantiations per such class), check time still under 1 s"
+  "reason": "Attention, losses, weight tying and the typed GPT landed; the growth is TypeScript's variance computation on generic layer classes holding Tensor fields (measured: ~45k instantiations per such class), check time still under 1 s"
 }

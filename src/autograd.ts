@@ -66,7 +66,6 @@ function withGrad(
   return result
 }
 
-/** Reverse-mode sweep from `root`; `Tensor.backward` delegates here. */
 function runBackward(
   root: AnyTensor,
   gradient: AnyTensor | undefined,
@@ -135,8 +134,8 @@ function runBackward(
 
   if (lazyPath) {
     walk()
-    // One multi-root forcing point (one FFI hop); forward tensors are forced too
-    // so post-optimizer-step reads still see pre-step values.
+    // One forcing point for every root, so one FFI hop. Forward tensors are forced
+    // too so reads after an optimizer step still see pre-step values.
     if (!activeTrace()) {
       forceMany([
         ...topo,

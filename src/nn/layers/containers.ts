@@ -5,7 +5,7 @@ import type { Tensor } from "../../tensor.ts"
 import { Module } from "../module.ts"
 import { SHAPE_EFFECT, type ShapeEffect } from "../sequential.ts"
 
-/** An ordered list of submodules of one type. No `forward`, so `sequential` rejects it and the caller drives the loop. */
+/** No `forward`, so `sequential` rejects it and the caller drives the loop. */
 export class ModuleList<M extends Module> extends Module {
   readonly items: readonly M[]
 
@@ -14,7 +14,6 @@ export class ModuleList<M extends Module> extends Module {
     this.items = [...items]
   }
 
-  /** `n` modules built by `make(i)`; each call makes its own parameters. */
   static of<M extends Module>(n: number, make: (i: number) => M): ModuleList<M> {
     if (!Number.isInteger(n) || n < 0) {
       throw new Error(`ModuleList.of: n must be a non-negative integer, got ${n}`)
@@ -26,7 +25,6 @@ export class ModuleList<M extends Module> extends Module {
     return this.items.length
   }
 
-  /** Positive or negative index, bounds-checked. */
   at(i: number): M {
     const idx = i < 0 ? this.items.length + i : i
     const m = this.items[idx]
@@ -43,10 +41,10 @@ export class ModuleList<M extends Module> extends Module {
   }
 }
 
-/** The declared effect {@link Residual} inherits from its inner module; an undeclared inner module reports `"identity"`. */
+/** The declared effect {@link Residual} inherits from its inner module; an undeclared one reports `"identity"`. */
 type ResidualEffect<M> = M extends { readonly [SHAPE_EFFECT]: infer E extends ShapeEffect } ? E : "identity"
 
-/** Errors when the wrapped module provably changes width or rank; fail-open otherwise. */
+/** Errors when the wrapped module provably changes width or rank, and fails open otherwise. */
 type ResidualCheck<M, S extends Shape> =
     number[] extends S ? unknown
   : M extends { readonly [SHAPE_EFFECT]: [effect: "mapLast", In: infer In extends number, Out: infer Out extends number] } ?
@@ -59,7 +57,7 @@ type ResidualCheck<M, S extends Shape> =
   >
   : unknown
 
-/** `x -> x + inner(x)`. Reports the inner module's own {@link SHAPE_EFFECT}, so the surrounding chain still width-checks through it. */
+/** `x -> x + inner(x)`. Reports the inner module's {@link SHAPE_EFFECT}, so the surrounding chain still width-checks through it. */
 export class Residual<M extends Module> extends Module {
   declare readonly [SHAPE_EFFECT]: ResidualEffect<M>
 

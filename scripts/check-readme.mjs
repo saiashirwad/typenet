@@ -1,9 +1,6 @@
 #!/usr/bin/env node
-// Extracts every ```ts fenced block from README.md, compiles each as a
-// standalone module with the workspace tsc, and re-anchors diagnostics to
-// their README line. A block opts out with
-// `<!-- check-readme: skip, why this one is not a program -->` above its
-// fence; every skip is printed in the summary.
+// Compiles every ts block in README.md with "typenet" pointed at index.ts, and reports
+// diagnostics on their README line. A block opts out with a `check-readme: skip, why` comment.
 
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -15,10 +12,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, "..")
 const readmePath = resolve(root, "README.md")
 
-/** Languages whose blocks are compiled. `sh`, `json`, … are prose. */
 const CHECKED = new Set(["ts", "tsx", "typescript"])
 
-/** Fenced blocks, with the 1-based README line of the first code line. */
 function extractBlocks(markdown) {
   const lines = markdown.split("\n")
   const blocks = []
@@ -58,7 +53,6 @@ function tscBinary() {
   return existsSync(local) ? local : "tsc"
 }
 
-/** The import spelling a reader would use, pointed at this checkout. */
 function rewriteImports(code) {
   const indexPath = resolve(root, "index.ts")
   return code.replaceAll(/(["'])typenet\1/g, JSON.stringify(indexPath))
@@ -71,11 +65,11 @@ const skipped = []
 const compiled = []
 for (const block of blocks) {
   if (block.directive?.startsWith("skip")) {
-    const reason = block.directive.replace(/^skip\s*[—:-]?\s*/, "").trim()
+    const reason = block.directive.replace(/^skip\s*[,:-]?\s*/, "").trim()
     if (reason === "") {
       console.error(
-        `README.md:${block.line}: a check-readme skip needs a reason — write`
-          + ` "<!-- check-readme: skip — why -->"`,
+        `README.md:${block.line}: a check-readme skip needs a reason, write`
+          + ` "<!-- check-readme: skip, why -->"`,
       )
       process.exit(1)
     }
@@ -124,7 +118,6 @@ try {
 
   if (diagnostics.length > 0) {
     for (const line of diagnostics) {
-      // "<path>(row,col): error TSxxxx: …" -> "README.md:<readme line>: …"
       const m = /^(.*?)\((\d+),(\d+)\): (.*)$/.exec(line)
       if (!m) {
         console.error(line)
@@ -144,7 +137,7 @@ try {
   }
 
   for (const block of skipped) {
-    console.log(`  skipped README.md:${block.line} — ${block.reason}`)
+    console.log(`  skipped README.md:${block.line}, ${block.reason}`)
   }
   console.log(
     `check-readme: ${compiled.length} code block(s) typecheck`

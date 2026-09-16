@@ -1,14 +1,11 @@
-// See `test/loss-curve.ts` for the harness itself; this file only
-// exercises its contract.
 import { describe, expect, it } from "vitest"
 import { isNativeAvailable } from "../src/backends/native.ts"
 import { assertKnownEnvSwitches, expectIdenticalCurves, KNOWN_ENV_SWITCHES, lossCurve } from "./loss-curve.ts"
 
 const available = isNativeAvailable()
 
-// Each `lossCurve()` call spawns a fresh `vite-node` process, and module
-// load alone costs several seconds, well past vitest's default 5s timeout,
-// hence the generous timeouts below.
+// Each lossCurve() call spawns a fresh vite-node process, and module load alone costs several
+// seconds, well past vitest's default 5s timeout.
 const SPAWN_TIMEOUT_MS = 60_000
 
 describe.skipIf(!available)("loss curve", () => {
@@ -57,8 +54,8 @@ describe("expectIdenticalCurves", () => {
     const f32ToBits = (v: number) => new Uint32Array(new Float32Array([v]).buffer)[0]!
     const base = Uint32Array.from({ length: 200 }, (_, i) => f32ToBits(Math.sin(i)))
     const perturbed = Uint32Array.from(base)
-    // Flip the least-significant bit of the f32 mantissa at step 137: the
-    // smallest possible representable difference (one ulp).
+    // Flip the least-significant bit of the f32 mantissa at step 137: the smallest representable
+    // difference (one ulp).
     perturbed[137] = perturbed[137]! ^ 1
     expect(() => expectIdenticalCurves(base, perturbed, "one-ulp-at-137")).toThrow(/step 137/)
   })

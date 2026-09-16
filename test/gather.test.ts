@@ -4,7 +4,7 @@ import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
 import { fromFlat, Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
-import { allPaths, expectAgree } from "./helpers.ts"
+import { expectAgree } from "./helpers.ts"
 
 type AnyTensor = Tensor<any>
 
@@ -172,10 +172,12 @@ describe("narrow", () => {
   })
 
   it("rejects a window past the end", () => {
-    expect(() => rows().narrow(0, 3, 2)).toThrow(
+    // Both windows are compile errors now, so the cast reaches the runtime floor that stays
+    // for the checks a number-typed window cannot discharge.
+    expect(() => (rows() as AnyTensor).narrow(0, 3, 2)).toThrow(
       /narrow\(0, 3, 2\) is out of range for \[4, 2\]/,
     )
-    expect(() => rows().narrow(0, -1, 2)).toThrow(
+    expect(() => (rows() as AnyTensor).narrow(0, -1, 2)).toThrow(
       /out of range/,
     )
   })
@@ -421,9 +423,8 @@ describe.skipIf(!isNativeAvailable())(
         const c = 40
         const e = 2048
         const x = Tensor.rand([n, c]) as AnyTensor
-        // Both `x` and the index are erased to `AnyTensor` on purpose:
-        // this test is about eager/native numeric agreement at a
-        // candle-sized shape, not about the type-level brand.
+        // x and the index are erased on purpose: this is about eager/native numeric agreement
+        // at a candle-sized shape, not about the type-level brand.
         const index = Tensor.zeros([e]) as AnyTensor
         for (let i = 0; i < e; i++) {
           ;(index.data as Float32Array)[i] = (i * 7) % n
@@ -451,9 +452,8 @@ describe.skipIf(!isNativeAvailable())(
       },
     )
 
-    // Above LOOP_EVALUATOR_MAX_WORK (65536 elements) the graph runs
-    // through candle rather than the tiny-graph loop evaluator, so this
-    // covers the other native code path.
+    // Above LOOP_EVALUATOR_MAX_WORK (65536 elements) the graph runs through candle rather
+    // than the tiny-graph loop evaluator, so this covers the other native code path.
     it("matches eager for a large gather/scatter round trip", () => {
       const n = 512
       const c = 64
@@ -488,9 +488,8 @@ describe.skipIf(!isNativeAvailable())(
   },
 )
 
-// Degenerate shapes: a zero-length dim is legal and the parallel kernels
-// divide by it, so a chunk size of zero would panic inside the addon
-// rather than return an empty result.
+// Degenerate shapes: a zero-length dim is legal and the parallel kernels divide by it,
+// so a chunk size of zero would panic inside the addon rather than return an empty result.
 describe("empty dimensions", () => {
   const each = (fn: () => AnyTensor) => {
     for (
@@ -550,13 +549,8 @@ describe("empty dimensions", () => {
 describe.skipIf(!isNativeAvailable())(
   "large reductions",
   () => {
-    // Summing away the outer dim of a tall matrix takes a BLAS route above
-    // 4096 rows, which reassociates the summation. Comparing it to the
-    // sequential sum would be the wrong test: a sum of 20000 terms of
-    // magnitude 0.5 that cancels down to ~3 has an absolute error set by
-    // the *terms*, so the two orders legitimately differ by far more than
-    // the result's last digits. What matters is that the new route is no
-    // less accurate, so both are measured against an f64 reference.
+    // Above 4096 rows the sum takes a BLAS route that reassociates the summation, so the two
+    // orders legitimately differ; both are measured against an f64 reference instead.
     const build = (rows: number, cols: number) => {
       const x = Tensor.zeros([rows, cols]) as AnyTensor
       const data = x.data as Float32Array

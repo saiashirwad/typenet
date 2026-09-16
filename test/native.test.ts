@@ -3,8 +3,8 @@ import { disableNative, isNativeAvailable, nativeDevice, preparedGraphCountNativ
 import { compile } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { crossEntropy } from "../src/nn.ts"
-import { SGD } from "../src/optim.ts"
+import { crossEntropy } from "../src/nn/index.ts"
+import { SGD } from "../src/optim/index.ts"
 import { Tensor } from "../src/tensor.ts"
 import { bothWays, expectAgree, expectClose } from "./helpers.ts"
 import { makeXorNet } from "./xor-net.ts"
@@ -236,9 +236,8 @@ describe.skipIf(!available)("native backend", () => {
     const y = z.add(z)
     const w = z.sum()
     y.sum().add(w).backward()
-    // loss = 3 * sum(x²), so d/dx = 6x; the forward x*x must be one
-    // node in the serialized graph (dedupe) and every alias must see
-    // the same materialized values.
+    // loss = 3 * sum(x^2), so d/dx = 6x; the forward x*x must be one node in the serialized
+    // graph (dedupe) and every alias must see the same materialized values.
     expectClose(
       tensor([6, 12, 18]) as AnyTensor,
       x.grad as AnyTensor,
@@ -301,9 +300,8 @@ describe("native backend availability", () => {
   })
 })
 
-// Leak baselines: neither the eager-native GEMM assist nor the
-// compile/dispose cycle should grow the native prepared-graph table; a
-// leak would eventually exhaust native handles in a long-running process.
+// Leak baselines: neither the eager-native GEMM assist nor the compile/dispose cycle should grow
+// the native prepared-graph table; a leak would eventually exhaust native handles.
 describe.skipIf(!available)("native backend leak baselines", () => {
   it("10,000 eager-native matmuls leave preparedGraphCount at baseline", () => {
     configure({ lazy: false })
@@ -312,8 +310,7 @@ describe.skipIf(!available)("native backend leak baselines", () => {
     const a = Tensor.rand([8, 8]) as AnyTensor
     const b = Tensor.rand([8, 8]) as AnyTensor
     for (let i = 0; i < 10_000; i++) {
-      // eager native GEMM assist path (src/eager.ts); it must never
-      // touch prepareGraph/releaseGraph.
+      // The eager native GEMM assist path (src/eager.ts) must never touch prepareGraph/releaseGraph.
       a.matmul(b).data
     }
     expect(preparedGraphCountNative()).toBe(before)
@@ -323,8 +320,7 @@ describe.skipIf(!available)("native backend leak baselines", () => {
     useNative()
     const before = preparedGraphCountNative()
     for (let i = 0; i < 200; i++) {
-      // Distinct scale per cycle so each prepare allocates its own
-      // handle rather than reusing one from a previous iteration.
+      // Distinct scale per cycle so each prepare allocates its own handle rather than reusing one.
       const scale = i + 1
       const fn = compile((x: AnyTensor) => x.mul(scale).sum())
       fn(tensor([1, 2, 3, 4]))

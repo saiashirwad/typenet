@@ -3,7 +3,7 @@ import { prod, showShape } from "./storage.ts"
 // Type-only: `verbatimModuleSyntax` erases it, so tensor.ts -> shape.ts stays the only runtime edge.
 import type { AnyTensor, Tensor } from "./tensor.ts"
 
-export const zeroWidthSpace = "​"
+const zeroWidthSpace = "​"
 type ZeroWidthSpace = typeof zeroWidthSpace
 
 export type ErrorMessage<message extends string = string> = `${message}${ZeroWidthSpace}`
@@ -11,6 +11,9 @@ export type ErrorMessage<message extends string = string> = `${message}${ZeroWid
 export type Shape = number[]
 
 export type IsDynamic<S extends Shape> = number[] extends S ? true : false
+
+/** The algebra below destructures mutable tuples, so a readonly shape is copied at the boundary. */
+type MutableShape<V extends readonly number[]> = { -readonly [K in keyof V]: V[K] }
 
 /** Each guard mentions one operand at a time, right operand first, so the identity cases reduce even while a dim is an unresolved generic. */
 export type DimAdd<A extends number, B extends number> =
@@ -50,7 +53,7 @@ export function DimSub<const A extends number, const B extends number>(a: A, b: 
   return (a - b) as any
 }
 
-/** Integer division. hotscript's `Numbers.Div` truncates toward zero, and the value twin uses `Math.trunc` so runtime and type agree. */
+/** hotscript's Numbers.Div truncates toward zero; the value twin uses Math.trunc to match. */
 export type DimDiv<A extends number, B extends number> =
     IsExact<B, 1> extends true ? A
   : number extends A ? number
@@ -78,7 +81,6 @@ export type Init<S extends Shape> = S extends [...infer R extends number[], any]
 
 export type Last<S extends Shape> = S extends [...any[], infer L extends number] ? L : never
 
-/** The batch axes of a shape: everything the final (feature / class / vocab) axis is not. */
 export type BatchPrefix<S extends Shape> = Init<S>
 
 export type Take<S extends Shape, N extends number, Acc extends Shape = []> =
@@ -91,12 +93,10 @@ export type Drop<S extends Shape, N extends number, I extends 1[] = []> =
   : S extends [any, ...infer R extends number[]] ? Drop<R, N, [...I, 1]>
   : []
 
-/** Ranks past 12 fall off the end of this tuple; no tensor in this library is rank 13. */
 type Ones = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
 type Inc<N extends number> = [...Take<Ones, N>, 1]["length"] & number
 
-/** `A - B + 1`: the number of axes in the inclusive window `B..A`. `never` when `A < B`. */
 type Span<A extends number, B extends number> = [...Take<Ones, A>, 1] extends [...Take<Ones, B>, ...infer R] ? R["length"] & number : never
 
 type HasDup<T extends number[], Seen extends number = never> =
@@ -116,7 +116,7 @@ type ShowShape<S extends Shape, Acc extends string = ""> =
 type FoldMul<S extends Shape, Acc extends number> = S extends [infer X extends number, ...infer Xs extends number[]] ? FoldMul<Xs, DimMul<Acc, X>>
   : Acc
 
-/** Number of elements in a shape. Seeded with `S[0]`, not `1`: `DimMul<1, B>` defers for generic `B`, and this seeding keeps `Prod<[B, T]>` identical to a hand-written `DimMul<B, T>`. */
+/** Seeded with S[0] so a generic first dim stays exact: DimMul<1, B> defers for a generic B. */
 export type Prod<S extends Shape> =
     IsDynamic<S> extends true ? number
   : S extends [infer X extends number, ...infer Xs extends number[]] ? FoldMul<Xs, X>
@@ -129,7 +129,7 @@ export type NormalizeDim<S extends Shape, D extends number> =
   : IsNegative<D> extends true ? DimAdd<S["length"], D>
   : D
 
-export type IsValidDim<S extends Shape, D extends number> =
+type IsValidDim<S extends Shape, D extends number> =
     IsDynamic<S> extends true ? true
   : number extends D ? true
   : `${NormalizeDim<S, D>}` extends keyof S ? true
@@ -195,7 +195,7 @@ type BroadcastRev<A extends Shape, B extends Shape, Acc extends Shape = []> =
   : B extends [infer Y extends number, ...infer Ys extends number[]] ? BroadcastRev<[], Ys, [...Acc, Y]>
   : Reverse<Acc>
 
-/** The generic outer product (`[N, 1] x [1, N]`) is deliberately not handled here; the `this`-typed overloads on add/sub/mul/div route it instead. */
+/** The generic outer product is left to the this-typed overloads on add/sub/mul/div. */
 type ColumnBroadcast<A extends Shape, B extends Shape> =
     [A, B] extends [
       [infer _X extends number, infer _Y extends number],
@@ -209,7 +209,7 @@ export type Broadcast<A extends Shape, B extends Shape> = IsExact<A, B> extends 
   : IsDynamic<A> extends true ? number[] : IsDynamic<B> extends true ? number[]
   : A extends [...infer _ extends [number, ...number[]], ...B] ? A
   : B extends [...infer _ extends [number, ...number[]], ...A] ? B
-  // Rank-2 column broadcast `[X, Y] × [X, 1]`: both operands are decidable, while
+  // Rank-2 column broadcast [X, Y] x [X, 1]: both operands are decidable, while
   // the mirrored rule would test A's second dim and defer on a generic.
   : [ColumnBroadcast<A, B>] extends [never] ? BroadcastRev<Reverse<A>, Reverse<B>>
   : ColumnBroadcast<A, B>
@@ -220,7 +220,7 @@ export type CanBroadcast<A extends Shape, B extends Shape> =
   : IsDynamic<B> extends true ? true
   : CanBroadcastRev<Reverse<A>, Reverse<B>>
 
-/** Tests `extends false`, not `extends true`: a predicate on a naked generic defers, and a deferred result must fall through to `unknown` rather than the error branch. */
+/** Tests extends false, not extends true: a naked generic defers, and a deferred result must fall through to unknown. */
 export type BroadcastCheck<A extends Shape, B extends Shape> = CanBroadcast<A, B> extends false
   ? ErrorMessage<`Cannot broadcast ${ShowShape<A>} with ${ShowShape<B>}`>
   : unknown
@@ -238,7 +238,7 @@ export type DimEq<X extends number, Y extends number> =
   : X extends Y ? true
   : false
 
-/** The only error branch sits behind a definite `false`, which a deferred `DimEq` never produces, so a generic shape never trips it. */
+/** The error branch needs a definite false, which a deferred DimEq never produces. */
 export type LastDimCheck<S extends Shape, D extends number> =
     IsDynamic<S> extends true ? unknown
   : DimEq<Last<S>, D> extends false ? ErrorMessage<`expects ${D} features on the last axis, got ${ShowShape<S>}`>
@@ -292,11 +292,15 @@ type CountNegOnes<V extends number[], Acc extends 1[] = []> =
     : CountNegOnes<Xs, Acc>
   : Acc["length"]
 
-export type ResolveView<S extends Shape, V extends number[]> = {
+export type ResolveView<S extends Shape, V extends readonly number[]> = ResolveViewOf<S, MutableShape<V>>
+
+type ResolveViewOf<S extends Shape, V extends number[]> = {
   [K in keyof V]: V[K] extends -1 ? DimDiv<Prod<S>, ProductSkipNegOne<V>> : V[K]
 }
 
-export type ViewCheck<S extends Shape, V extends number[]> =
+export type ViewCheck<S extends Shape, V extends readonly number[]> = ViewCheckOf<S, MutableShape<V>>
+
+type ViewCheckOf<S extends Shape, V extends number[]> =
     CountNegOnes<V> extends 0 | 1 ?
       number extends Prod<S> ? unknown
     : number extends ProductSkipNegOne<V> ? unknown
@@ -310,22 +314,19 @@ export type ViewCheck<S extends Shape, V extends number[]> =
     : ErrorMessage<`Cannot infer -1 dim: ${Prod<S>} elements do not divide evenly into ${ShowShape<S>} -> ${ShowShape<V>}`>
   : ErrorMessage<`Only one -1 dim is allowed in view()`>
 
-// Fail-open rule for every check below: the `IsExact` guards answer TS's permissive instantiation of a naked generic, so its `ErrorMessage` branch is unreachable.
+// Fail-open rule for the checks below: the IsExact guards answer TS's permissive instantiation of a naked generic, so their ErrorMessage branch is unreachable.
 
-/** {@link IsValidDim} that answers `true` rather than deferring under a naked `S`. */
 type DimInRange<S extends Shape, D extends number> =
     IsExact<S, Shape> extends true ? true
   : IsExact<D, number> extends true ? true
   : IsValidDim<S, D> extends false ? false
   : true
 
-/** {@link IsNegative} that answers `false` rather than deferring under a naked `D`. */
 type IsNegativeDim<D extends number> =
     IsExact<D, number> extends true ? false
   : `${D}` extends `-${string}` ? true
   : false
 
-/** The generic-dim reshape path: unlike `view()`, the fold here reduces exactly while the collapsed dims are generics. */
 export type FlattenShape<S extends Shape, F extends number, T extends number> =
     IsDynamic<S> extends true ? number[]
   : number extends F ? number[]
@@ -343,20 +344,21 @@ export type FlattenCheck<S extends Shape, F extends number, T extends number> =
   : IsNegativeDim<DimSub<T, F>> extends true ? ErrorMessage<`flatten(${F}, ${T}): start dim is after end dim`>
   : unknown
 
-/** `unflatten(dim, sizes)`: one axis splits into `sizes`, the inverse of {@link FlattenShape}. */
-export type UnflattenShape<S extends Shape, D extends number, Sizes extends Shape> =
+export type UnflattenShape<S extends Shape, D extends number, Sizes extends readonly number[]> =
     IsDynamic<S> extends true ? number[]
   : number extends D ? number[]
-  : [...Take<S, D>, ...Sizes, ...Drop<S, Inc<D>>]
+  : [...Take<S, D>, ...MutableShape<Sizes>, ...Drop<S, Inc<D>>]
 
-/** The `Prod<Sizes>` guard against `0` is fail-open machinery: under TS's permissive instantiation a product of generics collapses to `0`. */
+/** Fail-open: under TS's permissive instantiation a product of generics collapses to 0. */
 type SizesFillDim<S extends Shape, D extends number, Sizes extends Shape> =
     IsExact<S, Shape> extends true ? true
   : IsExact<Prod<Sizes>, 0> extends true ? true
   : DimEq<Prod<Sizes>, DimAt<S, D>> extends false ? false
   : true
 
-export type UnflattenCheck<S extends Shape, D extends number, Sizes extends Shape> =
+export type UnflattenCheck<S extends Shape, D extends number, Sizes extends readonly number[]> = UnflattenCheckOf<S, D, MutableShape<Sizes>>
+
+type UnflattenCheckOf<S extends Shape, D extends number, Sizes extends Shape> =
     IsDynamic<S> extends true ? unknown
   : number extends D ? unknown
   : IsNegativeDim<D> extends true ? ErrorMessage<`unflatten() takes a non-negative dim, got ${D}`>
@@ -382,7 +384,9 @@ export type TransposeCheck<S extends Shape, D0 extends number, D1 extends number
   : IsValidDim<S, D1> extends false ? ErrorMessage<`Dimension ${D1} is out of range for shape ${ShowShape<S>}`>
   : unknown
 
-export type Permute<S extends Shape, Order extends number[]> = IsDynamic<S> extends true ? number[] : {
+export type Permute<S extends Shape, Order extends readonly number[]> = PermuteOf<S, MutableShape<Order>>
+
+type PermuteOf<S extends Shape, Order extends number[]> = IsDynamic<S> extends true ? number[] : {
   [K in keyof Order]: S[NormalizeDim<S, Order[K]> extends infer I extends number ? I : never]
 }
 
@@ -399,7 +403,9 @@ type NormalizeDims<S extends Shape, Ds extends number[]> = {
   [K in keyof Ds]: NormalizeDim<S, Ds[K]>
 }
 
-export type PermuteCheck<S extends Shape, Order extends number[]> =
+export type PermuteCheck<S extends Shape, Order extends readonly number[]> = PermuteCheckOf<S, MutableShape<Order>>
+
+type PermuteCheckOf<S extends Shape, Order extends number[]> =
     IsDynamic<S> extends true ? unknown
   : Order["length"] extends S["length"] ?
       AllValidDims<S, Order> extends false ? ErrorMessage<`permute(${ShowShape<Order>}) has a dim out of range for ${ShowShape<S>}`>
@@ -486,7 +492,6 @@ export type ReduceDims<S extends Shape, Ds extends number[], Keep extends boolea
     : ReduceDimsWalk<S, Ns[number], Keep>
   : never
 
-/** The size of dim `D` of `S`, with negative dims normalized. */
 export type DimAt<S extends Shape, D extends number> = S[NormalizeDim<S, D> & keyof S] & number
 
 export type Rank1Check<S extends Shape> =
@@ -501,7 +506,6 @@ export type ResizeDim<S extends Shape, D extends number, L extends number> =
     : ReplaceAt<S, I, L>
   : never
 
-/** One axis of a `slice` spec: an end index (from 0), a `[start, end]` window, or keep-the-dim. */
 export type Slice = number | readonly [number, number] | null | undefined
 
 type SliceSize<C, D extends number> =
@@ -514,7 +518,7 @@ export type SliceShape<S extends Shape, Spec extends readonly Slice[]> = {
   [K in keyof S]: SliceSize<Spec[K & keyof Spec], S[K] & number>
 }
 
-/** `End <= D`, decided by the sign of the difference; the wildcard guards double as the fail-open escape. */
+/** The IsExact wildcards double as the fail-open escape. */
 type FitsWithin<End extends number, D extends number> =
     IsExact<End, number> extends true ? true
   : IsExact<D, number> extends true ? true
@@ -552,7 +556,7 @@ type SliceAxes<S extends Shape, Spec extends readonly Slice[]> =
     : unknown
   : unknown
 
-/** A generic spec entry leaves the walk deferred with the error still in reach; widening the index to `number` or calling `narrow()` is the workaround. */
+/** A generic spec entry leaves the walk deferred; widen the index to number or call narrow() to get the error. */
 export type SliceCheck<S extends Shape, Spec extends readonly Slice[]> =
     IsDynamic<S> extends true ? unknown
   : SliceArityOk<S, Spec> extends false ? ErrorMessage<`slice() expects ${S["length"]} entries, got ${Spec["length"]}`>
@@ -564,11 +568,22 @@ type SliceArityOk<S extends Shape, Spec extends readonly Slice[]> =
   : Spec["length"] extends S["length"] ? true
   : false
 
-/** Any axis provably out of range. The message is recomputed by {@link SliceAxes} only in the error branch. */
 type SliceAxesOk<S extends Shape, Spec extends readonly Slice[]> =
     IsExact<S, Shape> extends true ? true
   : [SliceAxes<S, Spec>] extends [ErrorMessage<string>] ? false
   : true
+
+/** The value twin throws the same sentence, so a shape that compiles cannot be rejected at run time. */
+export type NarrowCheck<S extends Shape, D extends number, Start extends number, L extends number> =
+    IsDynamic<S> extends true ? unknown
+  : IsExact<D, number> extends true ? unknown
+  : IsExact<Start, number> extends true ? unknown
+  : IsExact<L, number> extends true ? unknown
+  : DimInRange<S, D> extends false ? ErrorMessage<`Dimension ${D} is out of range for shape ${ShowShape<S>}`>
+  : IsNegativeDim<Start> extends true ? ErrorMessage<`narrow: start ${Start} is negative`>
+  : IsNegativeDim<L> extends true ? ErrorMessage<`narrow: length ${L} is negative`>
+  : FitsWithin<DimAdd<Start, L>, DimAt<S, D>> extends false ? ErrorMessage<`narrow(${D}, ${Start}, ${L}) is out of range for ${ShowShape<S>}`>
+  : unknown
 
 export type Stack<S extends Shape, N extends number, D extends number> =
     IsDynamic<S> extends true ? number[]
@@ -619,8 +634,7 @@ export type CatCheck<A extends Shape, B extends Shape, D extends number> =
     : never
   : ErrorMessage<`cat: tensors must have the same rank (${ShowShape<A>} vs ${ShowShape<B>})`>
 
-/** Shapes of a tuple of tensors, read structurally to avoid a cycle with tensor.ts. */
-export type ShapesOf<T extends readonly unknown[]> = {
+type ShapesOf<T extends readonly unknown[]> = {
   [K in keyof T]: T[K] extends { readonly shape: infer S extends Shape } ? S : never
 }
 
@@ -633,7 +647,6 @@ type CatNShapes<Ss extends readonly Shape[], D extends number> =
   ] ? CatNShapes<[Cat<A, B, D>, ...Rest], D>
   : never
 
-/** The shape of concatenating a tuple of tensors along `D`, as a fold of pairwise `Cat`. */
 export type CatN<T extends readonly unknown[], D extends number> = CatNShapes<ShapesOf<T>, D>
 
 type CatNCheckShapes<Ss extends readonly Shape[], D extends number> =
@@ -665,14 +678,13 @@ declare const INDEX: unique symbol
 export type IndexTensor<S extends Shape> = Tensor<S> & { readonly [INDEX]: true }
 
 export type IndexCheck<T> = T extends { readonly [INDEX]: true } ? unknown
-  : ErrorMessage<"index tensors must be int32/int64 — use t.toIndex() or Tensor.indices()">
+  : ErrorMessage<"index tensors must be int32/int64, use t.toIndex() or Tensor.indices()">
 
 /** For shapes that are true but not derivable; never a way past a `*Check` that fires. */
 export function assertChecked<S2 extends Shape, C = unknown>(t: AnyTensor): Tensor<S2> & C {
   return t as Tensor<S2> & C
 }
 
-/** Value twin of {@link Broadcast} / {@link CanBroadcast}. */
 export function broadcastShapes(
   a: readonly number[],
   b: readonly number[],
@@ -692,7 +704,6 @@ export function broadcastShapes(
   return out
 }
 
-/** Value twin of {@link ResolveView} / {@link ViewCheck}. */
 export function resolveView(
   shape: readonly number[],
   view: readonly number[],
@@ -719,7 +730,6 @@ export function resolveView(
   return [...view]
 }
 
-/** Value twin of {@link MatMul} / {@link MatMulCheck} for rank >= 2 operands. */
 export function matmulShape(
   a: readonly number[],
   b: readonly number[],
@@ -738,7 +748,6 @@ export function matmulShape(
   ]
 }
 
-/** Value twin of {@link ReduceDim}. `dim` must already be normalized. */
 export function reduceShape(
   shape: readonly number[],
   dim: number,
@@ -749,7 +758,6 @@ export function reduceShape(
     : shape.filter((_, i) => i !== dim)
 }
 
-/** Value twin of {@link Cat} / {@link CatCheck}. `dim` must already be normalized. */
 export function catShape(
   a: readonly number[],
   b: readonly number[],
@@ -770,7 +778,6 @@ export function catShape(
   return a.map((s, i) => (i === dim ? s + b[i]! : s))
 }
 
-/** Value twin of {@link ResizeDim}. `dim` must already be normalized. */
 export function resizeDim(
   shape: readonly number[],
   dim: number,
@@ -779,7 +786,6 @@ export function resizeDim(
   return shape.map((s, i) => (i === dim ? length : s))
 }
 
-/** Value twin of {@link SliceShape} / {@link SliceCheck}, throwing the check's strings. */
 export function sliceShape(
   shape: readonly number[],
   spec: readonly Slice[],
@@ -817,7 +823,6 @@ export function sliceShape(
   })
 }
 
-/** Value twin of {@link FlattenShape} / {@link FlattenCheck}. */
 export function flattenShape(
   shape: readonly number[],
   from: number,
@@ -848,7 +853,6 @@ export function flattenShape(
   ]
 }
 
-/** Value twin of {@link UnflattenShape} / {@link UnflattenCheck}. */
 export function unflattenShape(
   shape: readonly number[],
   dim: number,
@@ -874,7 +878,6 @@ export function unflattenShape(
   return [...shape.slice(0, dim), ...sizes, ...shape.slice(dim + 1)]
 }
 
-/** Value twin of {@link Permute}. `order` must already be normalized. */
 export function permuteShape(
   shape: readonly number[],
   order: readonly number[],
@@ -901,7 +904,7 @@ export function broadcastToShape(
 
 type ConvSpan<H extends number, K extends number, P extends number> = DimSub<DimAdd<H, DimMul<2, P>>, K>
 
-/** Extent of one spatial axis after a convolution. `floor` and `trunc` agree here only because {@link ConvCheck} rules out a negative span. */
+/** floor and trunc agree here only because ConvCheck rules out a negative span. */
 export type ConvOut<H extends number, K extends number, S extends number, P extends number> =
     number extends H ? number
   : number extends K ? number
@@ -909,10 +912,9 @@ export type ConvOut<H extends number, K extends number, S extends number, P exte
   : number extends P ? number
   : DimAdd<DimDiv<ConvSpan<H, K, P>, S>, 1>
 
-/** Pooling is a convolution with no padding. */
 export type PoolOut<H extends number, K extends number, S extends number> = ConvOut<H, K, S, 0>
 
-/** Tests the span, never the quotient: `Numbers.Div` truncates toward zero, so a negative quotient would diverge from `floor`. */
+/** Tests the span, never the quotient: Numbers.Div truncates toward zero, which would diverge from floor. */
 type ConvFits<H extends number, K extends number, S extends number, P extends number> =
     IsExact<H, number> extends true ? true
   : IsExact<K, number> extends true ? true
@@ -929,10 +931,8 @@ export type ConvCheck<
   Axis extends string = "spatial",
 > = ConvFits<H, K, S, P> extends false ? ErrorMessage<`conv: kernel ${K} with padding ${P} does not fit a ${Axis} extent of ${H}`> : unknown
 
-/** `[B, C, H, W] -> [B, C*H*W]`: keeps the batch axis, folds the rest with {@link Prod}. */
 export type FlattenFrom<S extends Shape> = S extends [infer B extends number, ...infer R extends number[]] ? [B, Prod<R>] : S
 
-/** Value twin of {@link ConvOut}. */
 export function ConvOut<
   const H extends number,
   const K extends number,
@@ -942,7 +942,6 @@ export function ConvOut<
   return (Math.trunc((h + 2 * p - k) / s) + 1) as any
 }
 
-/** Value twin of {@link PoolOut}. */
 export function PoolOut<const H extends number, const K extends number, const S extends number>(
   h: H,
   k: K,
@@ -951,7 +950,6 @@ export function PoolOut<const H extends number, const K extends number, const S 
   return ConvOut(h, k, s, 0) as any
 }
 
-/** Value twin of {@link FlattenFrom}. A rank-0 shape is its own flatten. */
 export function flattenFrom<const S extends Shape>(s: S): FlattenFrom<S> {
   if (s.length === 0) return [...s] as any
   return [s[0]!, prod(s.slice(1))] as any

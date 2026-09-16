@@ -1,23 +1,6 @@
-/**
- * Conv / pool spatial algebra, asserted against the real exports in
- * `src/shape.ts`. Nothing here runs (vitest only collects `*.test.ts`);
- * this is a pure typecheck fixture. The runtime twins are driven from the
- * same tables in `test/shape.test.ts`'s "conv shapes" block.
- *
- * The two traps:
- *
- *   (a) hotscript's `Numbers.Div` truncates toward zero rather than
- *       flooring, so a check written on the quotient reads `ConvOut<4, 5,
- *       2, 0>` as a legal `1`. `ConvCheck` tests the span `H + 2P - K`
- *       instead; `_trapIsAnError` below pins exactly that difference.
- *
- *   (b) a deferred check whose other branch is an `ErrorMessage` is
- *       fail-closed no matter which polarity it is written in, unless the
- *       chain has a guard TypeScript can decide eagerly for a naked type
- *       parameter. `ConvFits`'s four `IsExact<_, number>` tests are that
- *       guard; `test/polarity.test-d.ts` carries the companion negatives.
- */
-import { Linear } from "../src/nn.ts"
+// Conv and pool spatial algebra against the real `src/shape.ts` exports. `ConvCheck`
+// tests the span `H + 2P - K`, because hotscript's `Numbers.Div` truncates toward zero.
+import { Linear } from "../src/nn/index.ts"
 import type { ConvCheck, ConvOut, ErrorMessage, FlattenFrom, PoolOut, Shape } from "../src/shape.ts"
 import type { Tensor } from "../src/tensor.ts"
 import { CONV_FIT_FAIL_CASES } from "./shape-cases.ts"
@@ -25,14 +8,7 @@ import { CONV_FIT_FAIL_CASES } from "./shape-cases.ts"
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 type Expect<T extends true> = T
 
-// The shared case tables in `test/shape-cases.ts` are run through the type
-// algebra in `types.test-d.ts` and the value twins in `shape.test.ts`.
-// What is below is the part that does not fit a table: the two traps, the
-// wildcards, and the layer shells the algebra exists for.
-
-// Trap (a): the check tests the span, so every non-fitting row errors,
-// including the two whose truncated quotient looks like a legal 1-wide
-// output; a quotient-based check answers `unknown` for those.
+// Every non-fitting row errors, including the rows whose truncated quotient looks like a legal 1-wide output.
 
 type IsErrorMessage<T> = T extends ErrorMessage ? true : false
 type XCase = typeof CONV_FIT_FAIL_CASES
@@ -41,20 +17,17 @@ type _tx1 = Expect<IsErrorMessage<ConvCheck<XCase[1]["h"], XCase[1]["k"], XCase[
 type _tx2 = Expect<IsErrorMessage<ConvCheck<XCase[2]["h"], XCase[2]["k"], XCase[2]["s"], XCase[2]["p"]>>>
 type _tx3 = Expect<IsErrorMessage<ConvCheck<XCase[3]["h"], XCase[3]["k"], XCase[3]["s"], XCase[3]["p"]>>>
 
-// The trap, spelled out: a 5-wide kernel at stride 2 on a 4-wide input.
-// `ConvOut` reports `1` (trunc(-1/2) + 1) where the true floor answer is
-// `0`, and `ConvCheck` errors anyway because it never looks at that number.
+// The trap spelled out: `ConvOut` reports 1 here (trunc(-1/2) + 1) where the true floor
+// answer is 0, and `ConvCheck` errors anyway because it never looks at that number.
 type _trapOutLooksLegal = Expect<Equal<ConvOut<4, 5, 2, 0>, 1>>
 type _trapIsAnError = Expect<
   Equal<ConvCheck<4, 5, 2, 0>, ErrorMessage<"conv: kernel 5 with padding 0 does not fit a spatial extent of 4">>
 >
 type _trapIsNotOpen = Expect<Equal<Equal<ConvCheck<4, 5, 2, 0>, unknown>, false>>
-// the same trap on the pooling path
 type _poolTrapOutLooksLegal = Expect<Equal<PoolOut<2, 4, 4>, 1>>
 type _poolTrapIsAnError = Expect<IsErrorMessage<ConvCheck<2, 4, 4, 0>>>
 
-// The wide `number` is a wildcard, never an error: a dynamically shaped
-// tensor checks nothing rather than failing.
+// A wide `number` is a wildcard, so the check answers `unknown` rather than failing.
 type _wildOut = Expect<Equal<ConvOut<number, 3, 1, 0>, number>>
 type _wildCheck = Expect<Equal<ConvCheck<number, 3, 1, 0>, unknown>>
 type _wildKernel = Expect<Equal<ConvCheck<28, number, 1, 0>, unknown>>
@@ -90,7 +63,7 @@ declare class Flatten {
   forward<S extends Shape>(x: Tensor<S>): Tensor<FlattenFrom<S>>
 }
 
-// six-layer CNN chain, literal end to end, through the real `Linear`
+// A six-layer CNN chain, literal end to end, through the real `Linear`.
 declare const mnist: Tensor<[64, 1, 28, 28]>
 
 function _cnn() {
@@ -109,7 +82,7 @@ function _cnn() {
   return { flat, h1, h2, out, p1, p2 }
 }
 
-// "same" padding and a strided block, the other two shapes real models use
+// The other two shapes real models use: "same" padding and a strided block.
 function _samePadding(x: Tensor<[8, 3, 32, 32]>) {
   const same = new Conv2d(3, 16, 3, { padding: 1 }).forward(x)
   type _1 = Expect<Equal<typeof same.shape, [8, 16, 32, 32]>>
@@ -118,16 +91,14 @@ function _samePadding(x: Tensor<[8, 3, 32, 32]>) {
   return { same, strided }
 }
 
-// Trap (b): a conv inside a generic body, over naked generic spatial dims.
-// This must compile, and it must still resolve to literals when the
-// generic is instantiated.
+// Trap (b): a conv inside a generic body over naked generic spatial dims. It must compile
+// and still resolve to literals at instantiation, which needs the `IsExact` guards.
 function _genericSpatialDims<B extends number, H extends number, W extends number>(t: Tensor<[B, 1, H, W]>) {
   return new Conv2d(1, 8, 3).forward(t)
 }
 type _g1 = Expect<Equal<ReturnType<typeof _genericSpatialDims<4, 28, 28>>, Tensor<[4, 8, 26, 26]>>>
 
-// The same for pooling, and for a whole generic block: the checks stay open
-// all the way down a chain whose extents nobody knows yet.
+// The same for pooling and for a whole generic block: the checks stay open down the chain.
 function _genericBlock<B extends number, H extends number, W extends number>(t: Tensor<[B, 1, H, W]>) {
   const c = new Conv2d(1, 8, 3).forward(t)
   const p = new MaxPool2d(2).forward(c)
@@ -147,8 +118,6 @@ function _negatives() {
   // through
   new Conv2d(1, 8, 5, { stride: 2 }).forward(four)
 
-  // the flattened head is [64, 400]; a Linear built for 256 is a width
-  // mismatch that MatMulCheck catches at the seam conv hands off at
   const flat = new Flatten().forward(new MaxPool2d(2).forward(four))
   // @ts-expect-error [64, 4] does not matmul with [256, 10]
   new Linear(256, 10).forward(flat)

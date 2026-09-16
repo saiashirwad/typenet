@@ -4,8 +4,7 @@ import { fileURLToPath } from "node:url"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
-/** vite-node's CLI entry: scenarios are TypeScript and this project has no
- * build step, so a plain `node <file>.ts` can't run them. */
+/** vite-node's CLI entry: scenarios are TypeScript and the project has no build step. */
 const viteNodeBin = path.resolve(here, "../node_modules/vite-node/dist/cli.mjs")
 
 export interface SmallStackResult {
@@ -15,10 +14,8 @@ export interface SmallStackResult {
   stderr: string
 }
 
-/** Runs `test/scenarios/<scenario>.ts` in a fresh Node process with a
- * small V8 stack (`--stack-size=256`). A 256 KB stack blows
- * on a few thousand JS frames, so an algorithm that recurses per node on
- * a deep graph fails here even though it passes under vitest's own stack. */
+/** Runs test/scenarios/<scenario>.ts in a fresh Node process with a small V8 stack
+ *  (--stack-size=256), so an algorithm that recurses per node fails there but passes under vitest. */
 export function runOnSmallStack(scenario: string): Promise<SmallStackResult> {
   const scenarioPath = path.resolve(here, "scenarios", `${scenario}.ts`)
   return new Promise((resolve, reject) => {

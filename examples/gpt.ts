@@ -1,28 +1,7 @@
 "use tsover"
 
-/**
- * A typed GPT on the pieces that exist today.
- *
- * A transformer is where a shape-typed library earns its keep: the head
- * split (`D -> H * (D/H)`), the position-embedding broadcast
- * (`[B,T,D] + [T,D]`), the weight tie between a `[V,D]` table and a
- * `D -> V` head, and a loss that reads its target shape off the logits.
- * Each is a compile error at the line that causes it.
- *
- * `forward` is generic in the batch size, so `GPT` is written once and
- * typechecks for every `B`; the only literals in the file are the ones the
- * config names. `_compileTimeErrors()` at the bottom is never called; it
- * exists so four mistakes are *proved* rejected, since `@ts-expect-error`
- * fails the build when the error stops firing.
- *
- * The data is generated here, so the example runs offline and a fixed
- * `configure({ seed })` replays the whole loss curve exactly.
- *
- * The loop is the plain `zeroGrad` / `backward` / `step` triple rather
- * than a compiled step: `compile()` bakes the optimizer's `lr` into the
- * traced graph as a constant, and the warmup-cosine schedule below has to
- * move.
- */
+// A typed GPT built from the library's own layers. The four cases in `_compileTimeErrors()`
+// are never run; each quotes `tsc`, and `test/examples-gpt.test.ts` recompiles to check the quotes.
 
 import {
   AdamW,
@@ -44,19 +23,8 @@ import {
   warmupCosine,
 } from "../index.ts"
 
-// The model
-
-/**
- * `GPT<V, T, D, H>`: vocabulary, context length, model width, heads.
- *
- * All four are type parameters rather than fields-of-type-`number`, so the
- * shapes inside `forward` are the shapes the constructor was given. `H`
- * carries `DimDivCheck<D, H>` on the constructor's own parameter: a head
- * count that does not divide the model width is rejected at the
- * construction site. The check is forwarded to `TransformerBlock` with
- * EXPLICIT type arguments, or inference would re-derive `H` from the
- * intersection and discharge the check against itself.
- */
+// H carries DimDivCheck<D, H>, and the explicit type arguments on TransformerBlock below keep
+// inference from re-deriving H and discharging that check against itself.
 class GPT<
   V extends number,
   T extends number,
@@ -68,8 +36,7 @@ class GPT<
   readonly blocks: ModuleList<TransformerBlock<D, H>>
   readonly lnf: LayerNorm<D>
   readonly head: TiedLinear<D, V>
-  /** `0..T-1`, a buffer rather than a free variable: it rides along in
-   * `stateDict()` and is never collected as a parameter. */
+  // A buffer, so it rides along in stateDict() and is never collected as a parameter.
   readonly pos: IndexTensor<[T]>
 
   constructor(cfg: {
@@ -90,44 +57,21 @@ class GPT<
       () => new TransformerBlock<D, H>(d, h, { causal: true, dropout: p }),
     )
     this.lnf = new LayerNorm(d)
-    // Weight tying: the head SHARES `wte`'s `[V, D]` buffer and transposes
-    // it in the GEMM. `new Linear(d, vocab)` does NOT typecheck (`[D, V]`
-    // is not `[V, D]`), which is why `TiedLinear.of` exists. `parameters()`
-    // reports the shared table once, so it is updated once per `step()`.
+    // The head shares wte's [V, D] table, which `parameters()` reports once, and transposes it
+    // in the GEMM. `new Linear(d, vocab)` would need a [D, V] weight, so `TiedLinear.of` exists.
     this.head = TiedLinear.of(this.wte)
     this.pos = this.registerBuffer("pos", functional.arangeIndex(block))
-    // GPT-2's own embedding init. Through a TIED head, `Embedding`'s
-    // default N(0, 1) would make the first logits ~sqrt(D) wide and the
-    // first loss an order of magnitude above ln(V): the tie couples the
-    // table's scale to the output scale.
+    // GPT-2's embedding std: with a tied head, the default N(0, 1) would start the loss well above ln(V).
     init.normal_(this.wte.weight, { std: 0.02 })
     init.normal_(this.wpe.weight, { std: 0.02 })
   }
 
-  /**
-   * `[B, T] token ids -> [B, T, V] logits`, generic in the batch size.
-   *
-   * `idx` is an {@link IndexTensor}, not a float tensor: `Embedding` takes
-   * the branded index type, so passing activations where token ids belong
-   * is a compile error rather than a lookup on `Math.round`ed floats.
-   */
   forward<B extends number>(idx: IndexTensor<[B, T]>): Tensor<[B, T, V]> {
-    // `[B, T, D] + [T, D]`: the position embedding broadcasts over the
-    // batch, so no `unsqueeze(0)`, no `expand`, and a `wpe` built at the
-    // wrong width would not broadcast at all.
     let h: Tensor<[B, T, D]> = this.wte.forward(idx) + this.wpe.forward(this.pos)
-    // The running tensor keeps its type through every iteration because
-    // each block is an endomorphism on `[B, T, D]`.
     for (const block of this.blocks) h = block.forward(h)
     return this.head.forward(this.lnf.forward(h))
   }
 }
-
-// The data
-// A char-level corpus, written here so the example runs offline. The
-// alphabet is a fixed literal set rather than "whatever characters the
-// text happens to contain", because `V` has to be a literal type for
-// `Embedding<V, D>` to carry it.
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz ,.;'\n"
 const VOCAB = 32
@@ -148,15 +92,12 @@ const encoded = [...CORPUS.toLowerCase()].flatMap(c => {
   return code === undefined ? [] : [code]
 })
 
-// The configuration
-
-const BLOCK = 32 // context length T
+const BLOCK = 32
 const D_MODEL = 64
-const HEADS = 4 // 64 / 4 = 16 per head, derived
+const HEADS = 4
 const LAYERS = 2
 const BATCH = 16
-// 20 steps is the run the README quotes; `test/examples-gpt.test.ts`
-// overrides it so the smoke test exercises this file rather than a copy.
+// 20 steps is the run the README quotes; the tests override it.
 const STEPS = Number(process.env["TYPENET_EXAMPLE_STEPS"] ?? 20)
 
 configure({ seed: 1234 })
@@ -173,11 +114,6 @@ const model = new GPT({
 const opt = new AdamW(model.parameters(), { lr: 3e-3, weightDecay: 0.1, betas: [0.9, 0.95] })
 const schedule = warmupCosine({ base: 3e-3, warmupSteps: 5, totalSteps: STEPS })
 
-/**
- * One `[BATCH, BLOCK]` window of ids and the same window shifted by one:
- * the next-token objective, as two index tensors. Deterministic in `step`
- * so the curve replays.
- */
 function batchAt(step: number): {
   x: IndexTensor<[typeof BATCH, typeof BLOCK]>
   y: IndexTensor<[typeof BATCH, typeof BLOCK]>
@@ -197,12 +133,10 @@ function batchAt(step: number): {
   }
 }
 
-// The loop
-
 const params = model.parameters()
 console.log(
   `GPT: vocab ${VOCAB}, context ${BLOCK}, width ${D_MODEL}, `
-    + `${HEADS} heads, ${LAYERS} layers — ${params.length} tensors, `
+    + `${HEADS} heads, ${LAYERS} layers, ${params.length} tensors, `
     + `${params.reduce((n, p) => n + p.numel, 0).toLocaleString("en-US")} parameters `
     + `(the ${VOCAB}x${D_MODEL} token table is counted once: the LM head shares it)`,
 )
@@ -215,10 +149,7 @@ let last = 0
 for (let step = 0; step < STEPS; step++) {
   const { x, y } = batchAt(step)
 
-  const logits = model.forward(x) // Tensor<[16, 32, 32]>
-  // `crossEntropy` reads the target shape off the logits: `[B, T, V]`
-  // logits want `[B, T]` ids. Flattening either side by hand is not just
-  // unnecessary, it is a compile error.
+  const logits = model.forward(x)
   const loss = crossEntropy(logits, y)
 
   opt.lr = schedule(step)
@@ -229,8 +160,6 @@ for (let step = 0; step < STEPS; step++) {
 
   last = loss.item()
   if (step === 0) first = last
-  // Every step on the 20-step default (the whole curve is the output);
-  // thinned out on a longer run so the log stays readable.
   const every = STEPS <= 25 ? 1 : 10
   if (step % every === 0 || step === STEPS - 1) {
     console.log(
@@ -241,8 +170,6 @@ for (let step = 0; step < STEPS; step++) {
 
 const elapsed = (performance.now() - started) / 1000
 
-// `eval()` turns dropout off everywhere in the tree, so the reported
-// number is the model, not a sample of it.
 model.eval()
 const held = batchAt(STEPS + 1)
 const heldLoss = crossEntropy(model.forward(held.x), held.y).item()
@@ -251,53 +178,23 @@ console.log(
   `\nloss ${first.toFixed(4)} -> ${last.toFixed(4)} in ${STEPS} steps `
     + `(${elapsed.toFixed(1)}s, eager); held-out ${heldLoss.toFixed(4)}`,
 )
-// Eager mode never serialises a graph, so nothing can have fallen off the
-// native path; printed rather than assumed.
 console.log(`native fallbacks: ${jsCounters().nativeFallbacks}`)
 
-// The mistakes, written down
-// Never called. Each line below exists to be REJECTED: `@ts-expect-error`
-// fails the build if the error ever stops firing. The `// tsc(NNNN):`
-// comment above each one quotes what the compiler actually prints;
-// `test/examples-gpt.test.ts` strips the directives, recompiles this
-// file, and checks the quotes against the real diagnostics.
-
 function _compileTimeErrors(): void {
-  // (1) 4 heads divide a width of 64; 5 do not. Caught at the construction
-  //     site rather than inside the head split at run time.
-  //
-  //     The message is the one thing the shape algebra cannot carry here:
-  //     `DimDivCheck<64, 5>` IS the sentence "attention: 64 is not
-  //     divisible by 5", but a parameter typed `H & DimDivCheck<D, H>`
-  //     intersects a numeric literal with a string one, and that is
-  //     `never`. The rejection lands on the right line; the sentence shows
-  //     on hover over `DimDivCheck`, not in the diagnostic.
-  //
   // tsc(2322): Type 'number' is not assignable to type 'never'.
   // @ts-expect-error
   new GPT({ vocab: VOCAB, block: BLOCK, dModel: 64, heads: 5, layers: 2 })
 
-  // (2) Token ids are branded. A float tensor of exactly the right shape is
-  //     still not something an embedding table can be indexed by.
-  //
   // tsc(2345): Argument of type 'Tensor<[16, 32]>' is not assignable to parameter of type 'IndexTensor<[16, 32]>'.
   // tsc(2345): Property '[INDEX]' is missing in type 'Tensor<[16, 32]>' but required in type '{ readonly [INDEX]: true; }'.
   // @ts-expect-error
   model.forward(Tensor.zeros([BATCH, BLOCK]))
 
-  // (3) The context length is part of the model's type, so a window longer
-  //     than the position embedding is a compile error and not a gather off
-  //     the end of a table.
-  //
   // tsc(2345): Argument of type 'IndexTensor<[16, 64]>' is not assignable to parameter of type 'IndexTensor<[16, 32]>'.
   // tsc(2345): Type '64' is not assignable to type '32'.
   // @ts-expect-error
   model.forward(Tensor.indices(new Array(BATCH * 64).fill(0), [BATCH, 64]))
 
-  // (4) `[16, 32, 32]` logits want `[16, 32]` targets: the class axis is the
-  //     one `crossEntropy` reduces, never one the caller supplies, and the
-  //     target shape is read off the logits rather than restated.
-  //
   // tsc(2345): Argument of type 'IndexTensor<[16]>' is not assignable to parameter of type 'IndexTensor<[16, 32]>'.
   // tsc(2345): Type '[16]' is not assignable to type '[16, 32]'.
   // @ts-expect-error

@@ -12,7 +12,6 @@ export type { BinaryOp, RandomKind, ReduceOp, UnaryOp }
 
 export type TypedArray = Float32Array | Float64Array | Int32Array | BigInt64Array
 
-/** Typed arrays that store JS numbers; int64 storage is {@link BigInt64Array}. */
 export type NumericArray = Float32Array | Float64Array | Int32Array
 
 type CpuStorage = {
@@ -38,9 +37,7 @@ type LazyNodeBody =
   | {
     op: "reduce"
     kind: ReduceOp
-    /**
-     * Axes to reduce, ascending, normalized against `input`'s rank.
-     */
+    /** Axes to reduce, ascending and normalized against the input's rank. */
     dims: number[]
     keepdim: boolean
     input: AnyTensor
@@ -81,8 +78,8 @@ type LazyNodeBody =
     // The node's own stream, so two random nodes in one graph never draw the same numbers.
     stream: number
   }
-  // Multi-output is a lowering concept, not an IR concept: a multi-output node yields
-  // one flat [total] tensor, and each real output is a `pick` node slicing it.
+  // Multi-output is a lowering concept: a node yields one flat [total] tensor, and
+  // each real output is a `pick` node slicing it.
   | { op: "gelu"; input: AnyTensor }
   | { op: "geluGrad"; grad: AnyTensor; input: AnyTensor }
   | { op: "silu"; input: AnyTensor }
@@ -90,7 +87,7 @@ type LazyNodeBody =
   | {
     op: "softmax"
     dim: number
-    /** Additive causal mask over the last two axes, folded into the kernel. */
+    /** Additive causal mask over the last two axes. */
     causal: boolean
     input: AnyTensor
   }
@@ -98,10 +95,9 @@ type LazyNodeBody =
     op: "softmaxGrad"
     dim: number
     grad: AnyTensor
-    /** The softmax OUTPUT, not its input: the rule is closed over `y`. */
+    /** The softmax output, not its input: the rule is closed over `y`. */
     input: AnyTensor
   }
-  /** `(y, mean, rstd)` over the last axis. */
   | {
     op: "layerNorm"
     eps: number
@@ -109,7 +105,6 @@ type LazyNodeBody =
     gamma: AnyTensor
     beta: AnyTensor
   }
-  /** `(dx, dgamma, dbeta)`. */
   | {
     op: "layerNormGrad"
     grad: AnyTensor
@@ -118,14 +113,12 @@ type LazyNodeBody =
     mean: AnyTensor
     rstd: AnyTensor
   }
-  /** `(y, rstd)` over the last axis. */
   | {
     op: "rmsNorm"
     eps: number
     input: AnyTensor
     gamma: AnyTensor
   }
-  /** `(dx, dgamma)`. */
   | {
     op: "rmsNormGrad"
     grad: AnyTensor
@@ -133,7 +126,6 @@ type LazyNodeBody =
     gamma: AnyTensor
     rstd: AnyTensor
   }
-  /** `(loss, dlogits)` over `[N, C]` logits and `[N]` class indices. */
   | {
     op: "crossEntropy"
     input: AnyTensor
@@ -145,29 +137,22 @@ type LazyNodeBody =
     keepdim: boolean
     input: AnyTensor
   }
-  /** Row gather on axis 0 with an index of any rank (`Embedding`). */
   | { op: "gatherRows"; input: AnyTensor; index: AnyTensor }
-  /** The transpose of `gatherRows`: accumulate into `rows` rows. */
   | {
     op: "scatterAddRows"
     rows: number
     input: AnyTensor
     index: AnyTensor
   }
-  /**
-   * `(y, mask)`. The mask is an output so backward multiplies by the same
-   * mask the forward drew (the runtime has no in-program RNG replay).
-   */
+  /** The mask is an output because the runtime has no in-program RNG replay. */
   | { op: "dropout"; p: number; stream: number; input: AnyTensor }
-  /** One output of a multi-output producer; `offset` into its flat buffer, fixed at graph-build time. */
+  /** One output of a multi-output producer; the offset is fixed at build time. */
   | {
     op: "pick"
     out: number
     offset: number
     input: AnyTensor
   }
-  /** Explicit materialisation; an identity on a runtime that copies anyway. */
-  | { op: "contiguous"; input: AnyTensor }
 
 type LazyNode = LazyNodeBody & {
   shape: number[]
@@ -200,7 +185,6 @@ function arrayCtor(
   }
 }
 
-/** Element data converted to `dtype`'s storage; BigInt64Array.from needs an explicit bigint map. */
 function convertData(
   data: ArrayLike<number> | ArrayLike<bigint>,
   dtype: DType,

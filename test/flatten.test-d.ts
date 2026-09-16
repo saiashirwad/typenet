@@ -1,11 +1,5 @@
-/**
- * `FlattenShape` / `UnflattenShape` and their checks, against the real
- * exports. These are the generic-dim reshape path: `view()` needs the
- * element count to reduce to a literal, so `[B, T, D] -> [B*T, D]` is
- * unavailable to it while `B` and `T` are generics. The attention body
- * (`gpt-adopted.test-d.ts`) is built out of exactly these two; the free
- * functions below are local stand-ins with the same signatures.
- */
+// `FlattenShape`, `UnflattenShape` and their checks against the real exports. `view()` needs
+// a literal element count, so this generic-dim reshape path is what the attention body uses.
 import { DimMul } from "../src/shape.ts"
 import type { FlattenCheck, FlattenShape, Shape, UnflattenCheck, UnflattenShape } from "../src/shape.ts"
 import type { Tensor } from "../src/tensor.ts"
@@ -33,7 +27,7 @@ type _tf1 = Expect<Equal<typeof _f1.shape, [6, 4]>>
 const _f2 = flatten(lit234, 1, 2)
 type _tf2 = Expect<Equal<typeof _f2.shape, [2, 12]>>
 
-// a one-axis window is the identity
+// A one-axis window is the identity.
 const _f3 = flatten(lit234, 1, 1)
 type _tf3 = Expect<Equal<typeof _f3.shape, [2, 3, 4]>>
 
@@ -54,7 +48,7 @@ const _uOutOfRange = unflatten(lit234, 5, [2, 2])
 // @ts-expect-error 2 * 3 is 6, and axis 2 is 4
 const _uWrongProduct = unflatten(lit234, 2, [2, 3])
 
-// generic dims are the point of the exercise
+// Generic dims are the point of the exercise.
 function _generic<B extends number, T extends number, D extends number, H extends number, Dh extends number>(
   x: Tensor<[B, T, D]>,
   idx: Tensor<[B, T]>,
@@ -82,13 +76,8 @@ function _generic<B extends number, T extends number, D extends number, H extend
   return [f1, u1, q4, m1, l1] as const
 }
 
-// A naked generic shape decides nothing and is therefore accepted; the
-// result is the residual, which re-fires at instantiation.
-//
-// Regression for the distribution triggers in `shape.ts`: a check whose
-// error branch is still reachable while `S` is unresolved rejects every
-// generic caller, because a deferred conditional in a parameter position
-// is satisfied only by a value assignable to all of its branches.
+// A naked generic shape decides nothing, so the call is accepted and the result stays a residual.
+// Regression for the distribution triggers: an error branch reachable while `S` is unresolved rejects every generic caller.
 function _naked<S extends Shape>(x: Tensor<S>) {
   return flatten(x, 0, 1)
 }
@@ -97,7 +86,6 @@ function _nakedUnflatten<S extends Shape>(x: Tensor<S>, n: number) {
   return unflatten(x, 0, [1, n])
 }
 
-// ...and so is the dynamic shape.
 function _dynamic(x: Tensor<number[]>) {
   const f = flatten(x, 0, 1)
   type _1 = Expect<Equal<typeof f.shape, number[]>>

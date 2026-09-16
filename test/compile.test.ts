@@ -3,7 +3,7 @@ import { disableNative, isNativeAvailable, preparedGraphCountNative, useNative }
 import { compile } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { Linear, mseLoss, sequential, Tanh } from "../src/nn.ts"
+import { Linear, mseLoss, sequential, Tanh } from "../src/nn/index.ts"
 import { Tensor } from "../src/tensor.ts"
 import { expectClose } from "./helpers.ts"
 
@@ -78,8 +78,8 @@ describe("compile (interpreter)", () => {
       ],
     )
     const [mm, rs] = compiled(tensor(xData), tensor(wData))
-    expectClose(tensor(xData).matmul(tensor(wData)), mm)
-    expectClose(tensor(xData).sum(1), rs)
+    expectClose(tensor(xData).matmul(tensor(wData)), mm!)
+    expectClose(tensor(xData).sum(1), rs!)
   })
 
   it("sees in-place updates to captured parameters", () => {

@@ -1,15 +1,5 @@
-// Run under `runOnSmallStack("deep-chain-4000-mixed")`: a depth-4000 chain
-// mixing elementwise ops with views (reshape, transpose) and a reduction
-// (sum) on a 256 KB V8 stack, so graph construction, forcing and backward
-// must stay iterative for these op kinds too.
-//
-// Every non-elementwise op is value-preserving (a view round-trip, or a sum
-// over a size-1 axis), so the expected result keeps the same closed form as
-// the plain chain; only the graph shape differs.
-//
-// No `printGraph` assertion, for the reason spelled out in
-// deep-chain-20000.ts: its column-width computation blows this stack well
-// under this file's ~12k-node graph.
+// Run under runOnSmallStack("deep-chain-4000-mixed"): a depth-4000 chain mixing elementwise ops with
+// views and a reduction on a 256 KB stack. Each non-elementwise op is value-preserving, so the closed form holds.
 import assert from "node:assert/strict"
 import { tensor } from "../../src/factories.ts"
 import { configure } from "../../src/lazy.ts"

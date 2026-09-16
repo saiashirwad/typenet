@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { tensor } from "../src/factories.ts"
-import { accuracy, crossEntropy, mseLoss } from "../src/nn.ts"
+import { accuracy, crossEntropy, mseLoss } from "../src/nn/index.ts"
 import { Tensor } from "../src/tensor.ts"
 
 describe("losses", () => {

@@ -3,8 +3,7 @@ import { NODE_OPS, type NodeOp } from "./ops.ts"
 import type { LazyNode } from "./storage.ts"
 import type { AnyTensor } from "./tensor.ts"
 
-/** What the native addon can run; an unsupported graph falls back to the JS interpreter. */
-export type Support =
+type Support =
   | { kind: "native" }
   /** The whole graph falls back; `reason` is what the user is told. */
   | { kind: "unsupported"; reason: string }
@@ -30,9 +29,9 @@ export const WIRE_OPS = [
 
 const WIRE_SET: ReadonlySet<string> = new Set(WIRE_OPS)
 
-const PHASE_A = (op: string): Support => ({
+const noNativeKernel = (op: string): Support => ({
   kind: "unsupported",
-  reason: `${op} has no native kernel on today's runtime (Phase A runs it on the JS interpreter; A-L1 lowers it, W4.2-W4.5 make it a kernel)`,
+  reason: `${op} has no native kernel on this runtime; the graph falls back to the JS interpreter`,
 })
 
 /** An unclassified new NODE_OPS member is a type error, not a test failure. */
@@ -54,26 +53,24 @@ export const SUPPORT: Record<NodeOp, Support> = {
   scatterAdd: { kind: "native" },
   random: { kind: "native" },
 
-  gelu: PHASE_A("gelu"),
-  geluGrad: PHASE_A("geluGrad"),
-  silu: PHASE_A("silu"),
-  siluGrad: PHASE_A("siluGrad"),
-  softmax: PHASE_A("softmax"),
-  softmaxGrad: PHASE_A("softmaxGrad"),
-  layerNorm: PHASE_A("layerNorm"),
-  layerNormGrad: PHASE_A("layerNormGrad"),
-  rmsNorm: PHASE_A("rmsNorm"),
-  rmsNormGrad: PHASE_A("rmsNormGrad"),
-  crossEntropy: PHASE_A("crossEntropy"),
-  logSumExp: PHASE_A("logSumExp"),
-  gatherRows: PHASE_A("gatherRows"),
-  scatterAddRows: PHASE_A("scatterAddRows"),
-  dropout: PHASE_A("dropout"),
-  pick: PHASE_A("pick"),
-  contiguous: PHASE_A("contiguous"),
+  gelu: noNativeKernel("gelu"),
+  geluGrad: noNativeKernel("geluGrad"),
+  silu: noNativeKernel("silu"),
+  siluGrad: noNativeKernel("siluGrad"),
+  softmax: noNativeKernel("softmax"),
+  softmaxGrad: noNativeKernel("softmaxGrad"),
+  layerNorm: noNativeKernel("layerNorm"),
+  layerNormGrad: noNativeKernel("layerNormGrad"),
+  rmsNorm: noNativeKernel("rmsNorm"),
+  rmsNormGrad: noNativeKernel("rmsNormGrad"),
+  crossEntropy: noNativeKernel("crossEntropy"),
+  logSumExp: noNativeKernel("logSumExp"),
+  gatherRows: noNativeKernel("gatherRows"),
+  scatterAddRows: noNativeKernel("scatterAddRows"),
+  dropout: noNativeKernel("dropout"),
+  pick: noNativeKernel("pick"),
 }
 
-/** Every node kind the wire cannot carry, for tests and diagnostics. */
 export const NON_WIRE_OPS: readonly NodeOp[] = NODE_OPS.filter(
   op => !WIRE_SET.has(op),
 )
@@ -82,7 +79,7 @@ export function supportOf(node: LazyNode): Support {
   return SUPPORT[node.op]
 }
 
-/** Wire encoding of a node: a multi-axis reduce expands to an ascending chain matching evalReduceDimsEager's order. */
+/** A multi-axis reduce expands to an ascending chain matching evalReduceDimsEager's order. */
 export function encodeForWire(
   node: LazyNode,
   ref: (t: AnyTensor) => number,
@@ -117,7 +114,7 @@ export function encodeForWire(
       shape: [...shape],
     })
   })
-  // keepdim is shape metadata, never accumulation order, so restoring the axes as 1s is one view.
+  // keepdim restores axis metadata only, so one trailing view is enough.
   if (!keepdim) return cursor
   return emit({
     op: "view",

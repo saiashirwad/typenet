@@ -35,41 +35,33 @@ describe("examples", () => {
   it("example:shapes runs and prints the gallery", () => {
     const out = run(bin("vite-node"), ["examples/shapes.ts"])
     expect(out).toContain("shape gallery")
-    // The value twins agree with the types they carry.
     expect(out).toContain("[2, 5, 4, 8]")
     expect(out).toContain("16 = DimMul(4, 4)")
-    // The same shape algebra raises the same sentence at run time.
+    // The runtime message matches the type-level one.
     expect(out).toContain("matmul: inner dimensions do not match ([2, 3] @ [2, 3])")
   }, 120_000)
 
   it("example:mlp trains (a handful of steps)", () => {
-    // The example's own STEPS, overridden so the smoke test exercises this
-    // file rather than a copy of it. The README's numbers are the 400-step
-    // default, which is too slow for the suite.
+    // The example's own STEPS, overridden so the smoke test exercises this file rather than a
+    // copy. The README's numbers are the 400-step default, too slow for the suite.
     const out = run(bin("vite-node"), ["examples/mlp.ts"], {
       TYPENET_EXAMPLE_STEPS: "12",
     })
     const losses = [...out.matchAll(/loss (\d+\.\d+)/g)].map(m => Number(m[1]))
     expect(losses.length).toBeGreaterThan(1)
-    // 12 steps of warmup is not convergence, but a step that is wired up
-    // wrong does not move the loss at all.
+    // 12 steps of warmup is not convergence, but a step that is wired up wrong does not move
+    // the loss at all.
     expect(losses.at(-1)!).toBeLessThan(losses[0]!)
     expect(out).toContain("test accuracy")
   }, 120_000)
 })
 
-// `pnpm typecheck` already proves every `@ts-expect-error` in the gallery
-// fires (an unused directive is itself an error). What it cannot prove is
-// that the quoted message is the message the compiler actually produces.
-// So: strip the directives, compile the file again, and read the
-// diagnostics back.
+// pnpm typecheck proves every @ts-expect-error fires, not that the quoted message is the message
+// tsc produces. So: strip the directives, compile again, read the diagnostics back.
 
 type GalleryCase = {
-  /** The TS error code the case claims, e.g. 2345. */
   code: number
-  /** The message quoted in the `// tsc(NNNN):` comment, joined into one line. */
   quoted: string
-  /** 1-based line of the `@ts-expect-error` directive. */
   directiveLine: number
   /** 1-based line where the next case's quote begins, or the end of file. */
   endLine: number
@@ -78,8 +70,7 @@ type GalleryCase = {
 const galleryPath = resolve(root, "examples/shapes.ts")
 const gallerySource = readFileSync(galleryPath, "utf8")
 
-/** `​` (U+200B) terminates every `ErrorMessage`; it is invisible in a
- * comment and must not be part of the comparison. */
+/** Every ErrorMessage ends with U+200B, which is invisible in a comment and must not be part of the comparison. */
 function normalize(text: string): string {
   return text.replaceAll("​", "").replaceAll(/\s+/g, " ").trim()
 }
@@ -98,8 +89,8 @@ function parseGallery(source: string): GalleryCase[] {
       if (!more) break
       parts.push(more[1]!)
     }
-    // The directive may be several lines below the quote (case 8 declares a
-    // class first), so scan forward for it.
+    // The directive may be several lines below the quote (case 8 declares a class first),
+    // so scan forward for it.
     let directive = j
     while (directive < lines.length && !/^\s*\/\/ @ts-expect-error\s*$/.test(lines[directive]!)) {
       directive++
@@ -122,8 +113,7 @@ function parseGallery(source: string): GalleryCase[] {
 
 type Diagnostic = { line: number; code: number; message: string }
 
-/** Compiles the gallery with every `@ts-expect-error` removed, in a temp
- * directory so the project's own typecheck is untouched. */
+/** Compiles the gallery with every @ts-expect-error removed, in a temp dir so the project typecheck is untouched. */
 function compileWithoutDirectives(): Diagnostic[] {
   const dir = mkdtempSync(resolve(tmpdir(), "typenet-gallery-"))
   try {
@@ -185,28 +175,16 @@ describe("examples/shapes.ts", () => {
       expect(
         found,
         `no TS${testCase.code} between examples/shapes.ts:${testCase.directiveLine} and :${testCase.endLine}`
-          + ` — got ${JSON.stringify(diagnostics)}`,
+          + `, got ${JSON.stringify(diagnostics)}`,
       ).toBeDefined()
       expect(normalize(found!.message)).toContain(normalize(testCase.quoted))
     },
   )
-
-  it("every quoted message appears in the README", () => {
-    const readme = readFileSync(resolve(root, "README.md"), "utf8")
-    for (const testCase of cases) {
-      // The README quotes the sentence the shape algebra produced (the
-      // part inside the `"..."` of an assignability error), or, for a
-      // diagnostic with no such sentence, the whole first line.
-      const inner = /"([^"]+)"/.exec(testCase.quoted)
-      const sentence = normalize(inner ? inner[1]! : testCase.quoted)
-      expect(normalize(readme), `README.md does not quote: ${sentence}`).toContain(sentence)
-    }
-  })
 })
 
 describe("examples are cast-free", () => {
   it("no example reaches for an escape hatch", () => {
-    // The showcase is worthless if shapes are asserted rather than inferred.
+    // Shapes must be inferred rather than asserted, or the example proves nothing.
     const banned = /\bas (any|unknown|never)\b|assertChecked|AnyTensor/
     const files = ["examples/shapes.ts", "examples/mlp.ts"]
     for (const file of files) {

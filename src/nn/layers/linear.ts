@@ -23,9 +23,8 @@ export class Linear<
     super()
     this.inFeatures = inFeatures
     this.outFeatures = outFeatures
-    // `weight` is `[In, Out]` (matmul order), transposed relative to
-    // PyTorch's `[Out, In]`; fanMode "fanOut" makes the fan table land
-    // on fanIn = inFeatures.
+    // `weight` is `[In, Out]` (matmul order), transposed relative to PyTorch's
+    // `[Out, In]`; fanMode "fanOut" makes the fan table land on fanIn = inFeatures.
     this.weight = init.kaimingUniform_(
       // Explicit type argument: inferring `Sh` through the outer generic
       // call widens it to bare `Shape` instead of the tuple.
@@ -42,11 +41,9 @@ export class Linear<
   forward<S extends Shape>(
     x: Tensor<S> & MatMulCheck<S, [In, Out]>,
   ): Tensor<MatMul<S, [In, Out]>> {
-    // The cast only bridges generic deferral: for a generic `S`, TS
-    // cannot reduce MatMulCheck to `unknown` on its own.
+    // Both casts bridge generic deferral: for a generic `S`, TS cannot reduce
+    // MatMulCheck to `unknown` or Broadcast<..., [Out]> to `MatMul<...>` on its own.
     const y = x.matmul(this.weight as Tensor<[In, Out]> & MatMulCheck<S, [In, Out]>)
-    // Generic `S` does not reduce Broadcast<..., [Out]> to `MatMul<...>`,
-    // so the bias branch needs a double cast rather than an erasing `as any`.
     return (this.bias ? y.add(this.bias) : y) as unknown as Tensor<
       MatMul<S, [In, Out]>
     >
@@ -66,7 +63,6 @@ export class TiedLinear<D extends number, V extends number> extends Module {
     this.weight = weight
   }
 
-  /** Ties the LM head to `embedding`'s own weight; no second parameter is created. */
   static of<V extends number, D extends number>(embedding: Embedding<V, D>): TiedLinear<D, V> {
     return new TiedLinear<D, V>(embedding.weight)
   }

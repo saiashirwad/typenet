@@ -11,7 +11,6 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
   : false
 type Expect<T extends true> = T
 
-/** Exact equality, element for element. */
 function expectExact(a: AnyTensor, b: AnyTensor): void {
   expect(b.shape).toEqual(a.shape)
   expect(Array.from(b.data)).toEqual(Array.from(a.data))
@@ -58,8 +57,7 @@ describe("layers", () => {
     })
 
     it("a non-integral / non-index tensor is a compile error", () => {
-      // Uncalled function: the line below is type-checked by `tsc`
-      // but never runs.
+      // Uncalled function: type-checked by tsc, never run.
       function _typeOnly(table: Embedding<10, 3>, x: Tensor<[4]>) {
         // @ts-expect-error a plain (non-index) Tensor is not an IndexTensor
         table.forward(x)
@@ -68,9 +66,8 @@ describe("layers", () => {
     })
 
     it("its shape effect (appendDim) composes with a mapLast layer inside sequential", () => {
-      // Embedding first (a real IndexTensor input), then a norm that owns
-      // the appended axis: appendDim followed by mapLast, in a chain that
-      // actually runs.
+      // Embedding first (a real IndexTensor input), then a norm that owns the appended axis:
+      // appendDim followed by mapLast, in a chain that actually runs.
       const net = sequential(new Embedding(8, 5), new LayerNorm(5))
       const out = net.forward(Tensor.indices([0, 1, 2, 3], [1, 4]))
       type _1 = Expect<Equal<typeof out.shape, [1, 4, 5]>>
@@ -220,8 +217,7 @@ describe("layers", () => {
     })
   })
 
-  // nn.functional: same semantics as the layers, so a hand-rolled block
-  // gets the fused kernels too.
+  // nn.functional: the same semantics as the layers, so a hand-rolled block gets the fused kernels too.
   describe("nn.functional", () => {
     it("gelu/silu are the exact functions GELU/SiLU are built out of", () => {
       const x = sample(24, [4, 6])
@@ -248,10 +244,9 @@ describe("layers", () => {
       expectExact(functional.dropout(x, 0) as AnyTensor, x)
     })
 
-    it("softmax is the fused node — agrees with, but is not the composed spelling `Softmax` still uses", () => {
-      // The `Softmax` layer keeps the composed `Tensor.prototype.softmax`
-      // spelling so it stays on the native fast path, so this is
-      // `expectClose` at 1e-6, not `expectExact`.
+    it("softmax is the fused node: agrees with, but is not the composed spelling `Softmax` still uses", () => {
+      // The Softmax layer keeps the composed Tensor.prototype.softmax spelling to stay on the
+      // native fast path, so this is expectClose at 1e-6, not expectExact.
       const x = sample(24, [4, 6])
       expectClose(
         functional.softmax(x, -1) as AnyTensor,

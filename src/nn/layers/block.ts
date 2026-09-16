@@ -14,7 +14,7 @@ import { LayerNorm } from "./norm.ts"
 // `"use tsover"` lets the residual adds be written `x + y` (the same
 // Broadcast-checked overload `.add` uses).
 
-/** Pre-norm transformer block: `h = x + attn(ln1(x))`, then `y = h + drop(proj(gelu(fc(ln2(h)))))`. */
+// Pre-norm block: h = x + attn(ln1(x)); y = h + drop(proj(gelu(fc(ln2(h))))).
 export class TransformerBlock<D extends number, H extends number> extends Module {
   declare readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: D]
 

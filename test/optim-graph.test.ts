@@ -3,7 +3,7 @@ import { disableNative, isNativeAvailable, useNative } from "../src/backends/nat
 import { compile } from "../src/compile.ts"
 import { tensor } from "../src/factories.ts"
 import { configure } from "../src/lazy.ts"
-import { Adam, clipGradNorm, SGD } from "../src/optim.ts"
+import { Adam, clipGradNorm, SGD } from "../src/optim/index.ts"
 import { Tensor } from "../src/tensor.ts"
 import { expectClose } from "./helpers.ts"
 import { makeXorNet } from "./xor-net.ts"
@@ -187,11 +187,8 @@ describe("compiled training step (forward + backward + optimizer)", () => {
     expect(losses[losses.length - 1]!).toBeLessThan(0.05)
   })
 
-  // Adam's bias correction depends on the step count, which a graph
-  // traced once cannot hold as a constant. It rides along as a leaf
-  // instead, so a compiled Adam step has to advance in lockstep with an
-  // eager one, including over the first few steps where the corrections
-  // are furthest from 1.
+  // Adam's bias correction depends on the step count, which a graph traced once cannot hold as a
+  // constant; it rides along as a leaf, so a compiled step must advance in lockstep with an eager one.
   it("tracks eager Adam step by step when compiled", () => {
     const reference = makeXorNet()
     const compiled = makeXorNet()
@@ -234,8 +231,7 @@ describe("compiled training step (forward + backward + optimizer)", () => {
   })
 
   it("clips gradients inside a compiled step", () => {
-    // A loss scaled up hard produces gradients far above the clip, so
-    // every step is clipped and the parameter moves by exactly
+    // A loss scaled up hard puts every gradient far above the clip, so the parameter moves by
     // lr * maxNorm / ||g|| along the gradient, matching eager.
     const reference = makeXorNet()
     const compiled = makeXorNet()
@@ -302,7 +298,7 @@ describe("clipGradNorm", () => {
     ;(a.grad!.data as Float32Array).set([3])
     ;(b.grad!.data as Float32Array).set([4])
     expect(clipGradNorm([a, b], 5).item()).toBeCloseTo(5, 5)
-    // already at the limit, so unchanged bar the 1e-6 epsilon
+    // Already at the limit, so unchanged apart from the 1e-6 epsilon.
     expect(a.grad!.get(0)).toBeCloseTo(3, 4)
     expect(b.grad!.get(0)).toBeCloseTo(4, 4)
   })
@@ -433,11 +429,8 @@ describe.skipIf(!available)(
 )
 
 describe("scalar optimizer options inside a compiled step", () => {
-  // Expected red, on purpose: the graph path reads `this.lr` once at
-  // trace time and bakes it into a constant leaf, so reassigning `opt.lr`
-  // after the first call changes nothing about later calls to the same
-  // compiled function. A live correctness bug, tracked as a rebindable
-  // always-dirty scalar leaf.
+  // Expected red on purpose: the graph path reads this.lr once at trace time and bakes it into a
+  // constant leaf, so reassigning opt.lr afterwards changes nothing. Tracked as a rebindable scalar leaf.
   it.fails("lr is live: opt.lr takes effect on the next compiled step", () => {
     const net = makeXorNet()
     const opt = new SGD(net.params, { lr: 1e-3 })
@@ -466,7 +459,7 @@ describe("scalar optimizer options inside a compiled step", () => {
     step(net.x, net.y)
     const delta2 = Math.abs(net.params[0]!.data[0]! - before2)
 
-    // lr grew 100x (1e-3 -> 1e-1); the parameter delta should follow.
+    // lr grew 100x (1e-3 -> 1e-1), so the parameter delta should follow.
     expect(delta2 / delta1).toBeCloseTo(100, 0)
   })
 })

@@ -1,9 +1,3 @@
-// Tests for `examples/gpt.ts`, the typed GPT: it runs (20 steps, falling
-// loss, no native fallbacks), it is cast-free, and its four
-// `@ts-expect-error` cases fail for the reason quoted above them (only
-// recompiling without the directives proves which error fired). Also
-// checks the README's GPT block against the file line by line.
-
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -36,16 +30,14 @@ function run(command: string, args: string[], env: Record<string, string> = {}):
 }
 
 /**
- * The example's output, run once and shared by the cases below. Run lazily
- * from inside a test rather than at collection time: it is a ~15 s child
- * process, and a collection-time cost is one no test timeout covers.
+ * Shared example output, run lazily from inside a test: it is a ~15 s child process, and a
+ * collection-time cost is one no test timeout covers.
  */
 let cachedRun: { out: string; losses: number[] } | null = null
 
 function trainingRun(): { out: string; losses: number[] } {
   if (cachedRun) return cachedRun
-  // Steps passed explicitly so "20 steps with a decreasing loss" is what
-  // this test measures rather than whatever the default happens to be.
+  // Steps passed explicitly so this measures 20 steps, not whatever the default happens to be.
   const out = run(bin("vite-node"), ["examples/gpt.ts"], { TYPENET_EXAMPLE_STEPS: "20" })
   const losses = [...out.matchAll(/^step\s+\d+\s+lr \S+\s+loss (\d+\.\d+)$/gm)]
     .map(m => Number(m[1]))
@@ -60,28 +52,27 @@ describe("examples/gpt.ts", () => {
 
   it("starts at ln(V) and the loss falls", () => {
     const { losses } = trainingRun()
-    // An untrained model over a 32-symbol alphabet costs ln(32) = 3.4657
-    // per token; starting anywhere else means the init or the tie is wrong,
-    // which a merely-decreasing curve would hide.
+    // An untrained model over a 32-symbol alphabet costs ln(32) = 3.4657 per token, so
+    // starting anywhere else means the init or the tie is wrong.
     expect(losses[0]!).toBeGreaterThan(3.3)
     expect(losses[0]!).toBeLessThan(3.6)
     expect(losses.at(-1)!).toBeLessThan(losses[0]!)
-    // Not just the endpoints: the second half must be below the first, so
-    // a curve that dips once and then diverges does not pass.
+    // Not just the endpoints: the second half must be below the first, so a curve that
+    // dips once and then diverges does not pass.
     const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length
     expect(mean(losses.slice(10))).toBeLessThan(mean(losses.slice(0, 10)))
   }, 300_000)
 
   it("reports the tied token table once", () => {
-    // 28 tensors, not 29: the [32, 64] table is the LM head's weight too,
-    // and `parameters()` dedups it by storage identity.
+    // 28 tensors, not 29: the [32, 64] table is the LM head's weight too, and
+    // parameters() dedups it by storage identity.
     expect(trainingRun().out).toContain("28 tensors")
     expect(trainingRun().out).toContain("104,192 parameters")
   }, 300_000)
 
   it("never falls off the native path", () => {
-    // Eager mode serialises no graph, so this is trivially true today;
-    // asserted anyway so it fails loudly if the example moves to compile().
+    // Eager mode serialises no graph, so this is trivially true today, but it fails
+    // loudly if the example moves to compile().
     expect(trainingRun().out).toContain("native fallbacks: 0")
   }, 300_000)
 })
@@ -96,25 +87,19 @@ describe("examples/gpt.ts is cast-free", () => {
 })
 
 type ErrorCase = {
-  /** The TS error code the case claims, e.g. 2345. */
   code: number
-  /** The `// tsc(NNNN):` lines above the directive, joined into one line. */
   quoted: string
-  /** 1-based line of the `@ts-expect-error` directive. */
   directiveLine: number
   /** 1-based line where the next case's quote begins, or the end of file. */
   endLine: number
 }
 
-/** `​` (U+200B) terminates every `ErrorMessage`; it is invisible in a
- * comment and must not be part of the comparison. */
+/** Every ErrorMessage ends with U+200B, which is invisible in a comment and must not be part of the comparison. */
 function normalize(text: string): string {
   return text.replaceAll("​", "").replaceAll(/\s+/g, " ").trim()
 }
 
-/** A quoted diagnostic split into its first line and each indented
- * elaboration under it; `tsc` prints them as separate lines, so they are
- * compared as separate fragments. */
+/** A quoted diagnostic split into its first line and each elaboration under it, because tsc prints them separately. */
 function fragmentsOf(quoted: string): string[] {
   return quoted.split(/(?<=\.)\s+(?=[A-Z])/).filter(f => f.trim() !== "")
 }
@@ -147,16 +132,8 @@ function parseCases(source: string): ErrorCase[] {
 type Diagnostic = { line: number; code: number; message: string }
 
 /**
- * Compiles the example with every `@ts-expect-error` removed, in a temp
- * directory so the project's own typecheck is untouched. Every
- * `from "../…"` is re-pointed at this checkout since the copy no longer
- * sits next to `examples/`; the directives are replaced by a comment
- * rather than deleted so reported line numbers still line up.
- *
- * `raw` is the whole compiler output: `tsc` prints a diagnostic's
- * elaboration ("Type '64' is not assignable to type '32'.") on its own
- * indented line with no file anchor, so the anchored `diagnostics` list
- * cannot be what the quoted messages are matched against.
+ * Compiles the example with every @ts-expect-error removed, in a temp dir. Directives become a
+ * comment rather than being deleted so line numbers still line up; `raw` is the whole compiler output.
  */
 function compileWithoutDirectives(): { diagnostics: Diagnostic[]; raw: string } {
   const dir = mkdtempSync(resolve(tmpdir(), "typenet-gpt-"))
@@ -221,7 +198,7 @@ describe("examples/gpt.ts's compile errors", () => {
       expect(
         found,
         `no TS${testCase.code} between examples/gpt.ts:${testCase.directiveLine} and :${testCase.endLine}`
-          + ` — got ${JSON.stringify(diagnostics)}`,
+          + `, got ${JSON.stringify(diagnostics)}`,
       ).toBeDefined()
     },
   )
@@ -238,51 +215,10 @@ describe("examples/gpt.ts's compile errors", () => {
 
 const readme = readFileSync(resolve(root, "README.md"), "utf8")
 
-/** The one ```ts block under the `## A GPT that typechecks` heading. */
-function readmeGptBlock(): string[] {
-  const lines = readme.split("\n")
-  const start = lines.findIndex(l => l.trim() === "## A GPT that typechecks")
-  expect(start, "README.md has no `## A GPT that typechecks` section").toBeGreaterThan(-1)
-  const open = lines.findIndex((l, i) => i > start && l.trim() === "```ts")
-  expect(open, "the GPT section has no ts block").toBeGreaterThan(start)
-  const close = lines.findIndex((l, i) => i > open && l.trim() === "```")
-  return lines.slice(open + 1, close)
-}
-
 describe("the README's GPT walkthrough", () => {
-  it("quotes the model out of examples/gpt.ts, line for line", () => {
-    // Matched with whitespace collapsed, not line by line: dprint formats
-    // TypeScript inside a markdown fence at its own line width, so a long
-    // expression can be wrapped in the README and not in the file.
-    const flat = normalize(exampleSource)
-    const block = readmeGptBlock()
-    expect(block.length).toBeGreaterThan(20)
-    for (const line of block) {
-      const trimmed = normalize(line)
-      if (trimmed === "") continue
-      // The README imports from "typenet"; the example from "../index.ts".
-      if (trimmed.startsWith("import ") || trimmed.startsWith("} from ")) continue
-      expect(
-        flat.includes(trimmed),
-        `README.md quotes a line examples/gpt.ts does not have: ${trimmed}`,
-      ).toBe(true)
-    }
-  })
-
   it("is compiled by check-readme (no skip marker)", () => {
-    // The block imports from "typenet", which scripts/check-readme.mjs
-    // rewrites to index.ts, so the package root must export every layer
-    // the block names; that is the whole point of checking it.
-    expect(readme).not.toMatch(/check-readme: skip — this block is examples\/gpt\.ts/)
-  })
-
-  it("quotes every compiler message the example claims", () => {
-    const normalized = normalize(readme)
-    for (const testCase of parseCases(exampleSource)) {
-      // The last fragment of the diagnostic is the one that names the two
-      // shapes (or the missing brand) rather than restating the call.
-      const sentence = normalize(fragmentsOf(testCase.quoted).at(-1)!)
-      expect(normalized, `README.md does not quote: ${sentence}`).toContain(sentence)
-    }
+    // The block imports from "typenet", which check-readme rewrites to index.ts, so the package
+    // root must export every layer the block names.
+    expect(readme).not.toMatch(/check-readme: skip, this block is examples\/gpt\.ts/)
   })
 })

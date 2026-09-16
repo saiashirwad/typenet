@@ -1,17 +1,11 @@
-// Weight tying and the transposed LM head.
-//
-// `TiedLinear.of(embedding)` exists because plain `tie()` cannot relate an
-// `Embedding<V, D>`'s `[V, D]` weight to a `Linear<D, V>`'s `[D, V]` weight
-// (see the `@ts-expect-error` in test/types.test-d.ts): the two shapes are
-// transposes of each other, not the same shape `tie<S>` requires.
-// `TiedLinear` stores the embedding's own `Parameter` object, so the "tie"
-// is object identity, not a runtime alias table.
+// TiedLinear.of(embedding) exists because plain tie() cannot relate an Embedding's [V, D] weight to
+// a Linear<D, V>'s [D, V] weight: transposes, not the same shape. The tie is object identity.
 
 import { describe, expect, it } from "vitest"
 import { printGraph } from "../src/compile.ts"
 import { configure } from "../src/lazy.ts"
 import { Embedding, Linear, Module, TiedLinear } from "../src/nn/index.ts"
-import { SGD } from "../src/optim.ts"
+import { SGD } from "../src/optim/index.ts"
 import type { IndexTensor } from "../src/shape.ts"
 import { Tensor } from "../src/tensor.ts"
 import { expectClose } from "./helpers.ts"
@@ -19,7 +13,7 @@ import { expectClose } from "./helpers.ts"
 const V = 3
 const D = 2
 
-// [V, D], deterministic so the two models below start bit-identical.
+// Deterministic, so the two models below start bit-identical.
 const initEmbedding = () =>
   Tensor.of([
     [1, 2],
@@ -43,8 +37,7 @@ class TiedNet extends Module {
   }
 }
 
-/** The untied reference: two independently-owned copies of the same initial
- * values, one used only by the gather, one only by the transposed matmul. */
+/** Untied reference: two independent copies of the same initial values. */
 class UntiedNet extends Module {
   readonly wte: Embedding<typeof V, typeof D>
   readonly head: Linear<typeof D, typeof V>
@@ -91,9 +84,8 @@ describe("weight tying (TiedLinear)", () => {
     tied.forward(ids).sum().backward()
     untied.forward(ids).sum().backward()
 
-    // `untied.head.weight` is `[D, V]`; its gradient transposed back to
-    // `[V, D]` plus `untied.wte.weight`'s own gradient (the gather path)
-    // is what one shared leaf should have accumulated.
+    // untied.head.weight is [D, V]; its gradient transposed back to [V, D] plus the gather
+    // path's own gradient is what one shared leaf should have accumulated.
     const byHand = untied.wte.weight.grad!.add(untied.head.weight.grad!.transpose(0, 1))
     expectClose(tied.wte.weight.grad!, byHand, 1e-6)
 
@@ -135,7 +127,7 @@ describe("weight tying (TiedLinear)", () => {
         const leafLines = lines.filter(l => /^wte\s+= leaf\b/.test(l))
         expect(leafLines).toHaveLength(1)
 
-        // one permute of it, never a second buffer
+        // One permute of it, never a second buffer.
         const permuteLines = lines.filter(l => /= permute\(wte\)/.test(l))
         expect(permuteLines).toHaveLength(1)
       } finally {

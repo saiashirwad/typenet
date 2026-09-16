@@ -6,7 +6,6 @@ import { Module } from "./module.ts"
 /** Declares a layer's shape effect so `sequential` need not infer it from `forward`. A runtime Symbol because computed property names cannot be spelled through `import type`. */
 export const SHAPE_EFFECT: unique symbol = Symbol("typenet.nn.SHAPE_EFFECT")
 
-/** `"identity"` preserves the shape, `["mapLast", In, Out]` rewrites the last axis, `["appendDim", D]` grows the rank by one. */
 export type ShapeEffect =
   | "identity"
   | [effect: "mapLast", In: number, Out: number]
@@ -22,7 +21,6 @@ type ApplyEffect<E extends ShapeEffect, S extends Shape> =
   : E extends [effect: "appendDim", D: infer D extends number] ? [...S, D]
   : S
 
-/** What one layer does to a shape: declared {@link SHAPE_EFFECT} first, then `Linear`'s special case, then a structural probe of `forward`. */
 type ApplyLayer<L, S extends Shape> =
     L extends { readonly [SHAPE_EFFECT]: infer E extends ShapeEffect } ? ApplyEffect<E, S>
   : number[] extends S ? number[]
@@ -43,7 +41,6 @@ type ChainShapeCheck<L extends readonly unknown[], S extends Shape> = [ChainShap
   ? ErrorMessage<`sequential: input shape does not fit the layer chain`>
   : unknown
 
-/** Typed as the tuple of its layers, so `forward` composes their shapes. */
 export class Sequential<
   const L extends readonly unknown[],
 > extends Module {
@@ -63,7 +60,7 @@ export class Sequential<
   }
 }
 
-/** The width a layer demands of the axis it is handed, or `undefined`; only `mapLast` contributes. */
+/** The width a layer demands of the axis it is handed, or `undefined`. Only `mapLast` contributes. */
 type LayerIn<L> =
     L extends { readonly [SHAPE_EFFECT]: [effect: "mapLast", In: infer In extends number, Out: number] } ? In
   : L extends { readonly [SHAPE_EFFECT]: ShapeEffect } ? undefined
@@ -72,7 +69,7 @@ type LayerIn<L> =
     : undefined
   : undefined
 
-/** The width a layer leaves on the last axis, or `undefined` to carry the previous width through. */
+/** The width a layer leaves on the last axis, or `undefined` to carry the previous one through. */
 type LayerOut<L> =
     L extends { readonly [SHAPE_EFFECT]: [effect: "mapLast", In: number, Out: infer Out extends number] } ? Out
   : L extends { readonly [SHAPE_EFFECT]: [effect: "appendDim", D: infer D extends number] } ? D

@@ -1,13 +1,5 @@
-// MultiHeadAttention, TransformerBlock, sdpa, ModuleList, Residual.
-//
-// The whole-block gradcheck lives at the bottom of this file: it gradchecks
-// against an eager central-difference reference on all four paths (eager /
-// lazy / native / compiled). "Native" here means the graph is handed to
-// `serializeLazyGraph`, which returns `null` for any graph containing
-// `layerNorm`/`softmax`/`gelu`/`dropout` (no lowering yet) and routes the
-// whole thing to the JS interpreter. That is a real, distinct code path,
-// asserted as a fallback through `jsCounters()`, not quietly run twice and
-// called two paths.
+// "Native" here goes through serializeLazyGraph, which returns null for graphs with
+// layerNorm/softmax/gelu/dropout and routes them to the JS interpreter; jsCounters() asserts that fallback.
 
 import { afterEach, describe, expect, it } from "vitest"
 import { noGrad } from "../src/autograd.ts"
@@ -27,8 +19,6 @@ afterEach(() => {
   disableNative()
 })
 
-// mulberry32: the same small seeded PRNG the rest of the suite uses, so
-// every tensor in this file is reproducible and nothing here is flaky.
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
   return () => {
@@ -53,7 +43,6 @@ function filled(shape: number[], seed: number, grad = false): AnyTensor {
   return grad ? (t.requiresGrad() as AnyTensor) : t
 }
 
-/** Overwrite every parameter of `m` with reproducible, away-from-zero values. */
 function seedParameters(m: Module, seed: number): void {
   const rand = mulberry32(seed)
   for (const p of m.parameters()) {
@@ -62,7 +51,6 @@ function seedParameters(m: Module, seed: number): void {
   }
 }
 
-/** The lazy node ops and the leaf shapes of a graph, for structural assertions. */
 function graphShape(root: AnyTensor): {
   ops: string[]
   leafShapes: number[][]
@@ -81,10 +69,8 @@ function count(xs: readonly string[], op: string): number {
   return xs.filter(x => x === op).length
 }
 
-// An independent reference: plain JS loops over the layer's own weights,
-// with no typenet op in sight. Comparing `MultiHeadAttention` against a
-// composition of typenet ops would only prove the layer calls the ops it
-// calls; this proves it computes attention.
+// Independent reference: plain JS over the layer's own weights. Comparing against a
+// composition of typenet ops would only prove the layer calls the ops it calls.
 function referenceAttention(
   x: Float32Array,
   dims: { B: number; T: number; D: number; H: number },
@@ -157,10 +143,7 @@ describe("MultiHeadAttention", () => {
     expect(mha.d).toBe(384)
     expect(mha.h).toBe(6)
     expect(mha.headDim).toBe(64)
-    // The property carries a plain number at run time; the type-level half
-    // (`h: H`, never `H & DimDivCheck<D, H>`) is asserted in
-    // test/types.test-d.ts, where a poisoned property type would show up
-    // as a downstream error rather than as a wrong value here.
+    // The type-level half (h: H, not the check intersection) is asserted in test/types.test-d.ts.
     expect(typeof mha.h).toBe("number")
   })
 
@@ -210,7 +193,6 @@ describe("MultiHeadAttention", () => {
       seedParameters(mha, 4242)
       const x = filled([dims.B, dims.T, dims.D], 11)
       const before = Float32Array.from((mha.forward(x as never) as AnyTensor).data as Float32Array)
-      // Rewrite the LAST token only.
       const d = x.data as Float32Array
       for (let i = (dims.T - 1) * dims.D; i < dims.T * dims.D; i++) d[i] = -d[i]! * 3 + 0.7
       const after = Float32Array.from((mha.forward(x as never) as AnyTensor).data as Float32Array)
@@ -218,13 +200,12 @@ describe("MultiHeadAttention", () => {
     }
 
     const causal = run(true)
-    // Every position before the last is bit-identical: `toBe`, not a
-    // tolerance, because a causal mask that leaks is not a rounding
-    // difference.
+    // Every position before the last is bit-identical. `toBe`, not a tolerance, because a
+    // causal mask that leaks is not a rounding difference.
     for (let i = 0; i < (dims.T - 1) * dims.D; i++) {
       expect(causal.after[i], `causal position ${Math.floor(i / dims.D)}`).toBe(causal.before[i])
     }
-    // ...and the last position did move, so the test is not vacuous.
+    // The last position must move too, or the test is vacuous.
     let moved = false
     for (let i = (dims.T - 1) * dims.D; i < dims.T * dims.D; i++) {
       if (causal.after[i] !== causal.before[i]) moved = true
@@ -245,8 +226,7 @@ describe("MultiHeadAttention", () => {
     const fused = new MultiHeadAttention(D, H, { causal: true })
     const split = new MultiHeadAttention(D, H, { causal: true, qkvFused: false })
     seedParameters(fused, 5)
-    // Copy the fused `[D, 3D]` block into the three `[D, D]` projections
-    // column-wise, which is exactly the cut `narrow(2, k*D, D)` makes.
+    // Column-wise: this is the cut narrow(2, k*D, D) makes on the fused block.
     const w = fused.qkv!.weight.data as Float32Array
     const b = fused.qkv!.bias!.data as Float32Array
     const parts = [split.wq!, split.wk!, split.wv!]
@@ -285,12 +265,11 @@ describe("MultiHeadAttention", () => {
     expect(count(train.ops, "dropout")).toBe(1)
     mha.eval()
     const evalOps = graphShape(mha.forward(x as never) as AnyTensor)
-    // Not "a dropout node that happens to be the identity": no node at all.
+    // No dropout node at all, not a node that happens to be the identity.
     expect(count(evalOps.ops, "dropout")).toBe(0)
   })
 })
 
-// sdpa, the rank-4 escape hatch
 describe("sdpa", () => {
   it("is softmax(q@k / sqrt(dh)) @ v", () => {
     const B = 2, H = 2, T = 3, K = 4
@@ -298,9 +277,7 @@ describe("sdpa", () => {
     const kT = filled([B, H, K, T], 2)
     const v = filled([B, H, T, K], 3)
     const got = sdpa(q as never, kT as never, v as never) as AnyTensor
-    // The fused `softmax` NODE, not `Tensor.prototype.softmax`'s composed
-    // max/sub/exp/sum/div spelling: `sdpa` emits the node, and comparing
-    // it against a different arithmetic would only be a tolerance check.
+    // Reference uses functional.softmax, the same fused node sdpa emits, so the comparison is exact.
     const want = (functional.softmax(
       (q.matmul(kT as never) as AnyTensor).mul(1 / Math.sqrt(K)) as never,
       -1,
@@ -318,9 +295,8 @@ describe("sdpa", () => {
     const v = filled([B, H, T, K], 23)
     const got = (sdpa(q as never, kT as never, v as never, { causal: true }) as AnyTensor).data as Float32Array
     const vd = v.data as Float32Array
-    // Row 0's only unmasked weight is 1.0, so the context is v's first
-    // row bit for bit: `exp(-Infinity)` is exactly 0 and the row
-    // normalises to a single 1. No `-1e9` fudge could make this exact.
+    // Row 0's only unmasked weight is 1.0, so the context is v's first row bit for bit:
+    // exp(-Infinity) is exactly 0 and the row normalises to a single 1.
     for (let j = 0; j < K; j++) expect(got[j]).toBe(vd[j])
   })
 
@@ -355,15 +331,10 @@ describe("the attention graph itself", () => {
     const T = 7
     const { ops, leafShapes } = graphShape(build(T))
     expect(count(ops, "softmax")).toBe(1)
-    // Nothing in the graph is `[T, T]`-shaped, and nothing is `T`-sized at
-    // all beyond the activations: every leaf is a weight, the input, or
-    // the `1/sqrt(dh)` scalar.
+    // No leaf is [T, T] or T-sized: every leaf is a weight, the input, or the 1/sqrt(dh) scalar.
     for (const shape of leafShapes) {
-      expect(shape, `leaf of shape [${shape.join(", ")}] — a materialised mask?`).not.toEqual([T, T])
+      expect(shape, `leaf of shape [${shape.join(", ")}], a materialised mask?`).not.toEqual([T, T])
     }
-    // Every leaf, enumerated: the input, the fused `[D, 3D]` projection
-    // and its bias, the output projection and its bias, and the
-    // `1/sqrt(dh)` scalar. Six, and not one of them depends on T.
     const show = (ss: number[][]): string[] => ss.map(s2 => `[${s2.join(", ")}]`).sort()
     expect(show(leafShapes)).toEqual(
       show([[2, T, 8], [8, 24], [24], [8, 8], [8], []]),
@@ -373,11 +344,10 @@ describe("the attention graph itself", () => {
   it("costs exactly four permutes: three head splits and one merge", () => {
     configure({ lazy: true })
     const { ops } = graphShape(build(5))
-    // Four, not five: `sdpa` takes `k` ALREADY transposed, so the score
-    // matmul adds no permute of its own on top of the three the head
-    // split pays for and the one that merges the heads back.
+    // Four, not five: sdpa takes k ALREADY transposed, so the score matmul adds no permute
+    // on top of the three the head split pays for and the one that merges the heads back.
     expect(count(ops, "permute")).toBe(4)
-    expect(count(ops, "matmul")).toBe(4) // qkv, scores, context, out proj
+    expect(count(ops, "matmul")).toBe(4)
   })
 
   it("the graph is structurally identical at every sequence length", () => {
@@ -431,9 +401,8 @@ describe("TransformerBlock: the attention block", () => {
   })
 
   it("falls back to the JS interpreter, loudly and countably, under the native backend", () => {
-    // A block containing layerNorm/softmax/gelu/dropout cannot reach the
-    // addon, and it must say so: a silent interpreter fallback on a
-    // transformer is the 30x regression `jsCounters()` exists to catch.
+    // A block with layerNorm/softmax/gelu/dropout cannot reach the addon, and it must say so:
+    // a silent interpreter fallback is the 30x regression jsCounters() exists to catch.
     if (!isNativeAvailable()) return
     const blk = makeBlock(3)
     const x = filled([DIMS.B, DIMS.T, DIMS.D], 4)
@@ -443,8 +412,7 @@ describe("TransformerBlock: the attention block", () => {
     ;(blk.forward(x as never) as AnyTensor).data
     const c = jsCounters()
     expect(c.nativeFallbacks).toBeGreaterThan(0)
-    // Whichever semantic op the topological order reaches first is the one
-    // that reports; every one of them is a real reason.
+    // The first semantic op in topological order reports; every one of them is a real reason.
     expect(Object.keys(c.fallbacksByOp).length).toBeGreaterThan(0)
     for (const op of Object.keys(c.fallbacksByOp)) {
       expect(["layerNorm", "softmax", "gelu", "dropout", "pick"]).toContain(op)
@@ -455,19 +423,14 @@ describe("TransformerBlock: the attention block", () => {
 const EPS = 1e-3
 const TOL = 3e-3
 
-/** `tanh().sum()` rather than `.sum()`: a bare sum of a residual stream is
- *  nearly linear in every weight, which makes the central difference's own
- *  cancellation, not the gradient, the thing under test. */
+/** tanh().sum() rather than .sum(): a bare sum of a residual stream is nearly linear
+ *  in every weight, so the central difference's own cancellation would dominate. */
 function blockLoss(blk: TransformerBlock<4, 2>, x: AnyTensor): AnyTensor {
   return (blk.forward(x as never) as AnyTensor).tanh().sum() as AnyTensor
 }
 
-/**
- * Central differences over every scalar of `x` and every parameter,
- * computed EAGERLY once. Every mode is then compared against this one
- * reference: comparing a mode's numeric noise against its own analytic
- * gradient would hide exactly the regressions this gate is for.
- */
+/** Central differences over every scalar of x and every parameter, computed eagerly once.
+ *  Comparing a mode against its own analytic gradient would hide the regressions this gate is for. */
 function numericGradients(blk: TransformerBlock<4, 2>, x: AnyTensor): Float32Array[] {
   const targets = [x, ...blk.parameters().map(p => p as AnyTensor)]
   configure({ lazy: false })
@@ -533,11 +496,8 @@ describe("the whole attention block gradchecks", () => {
   })
 
   it("compiled", () => {
-    // `compile()` traces forward AND backward into one graph, so the
-    // gradients it returns are graph outputs rather than a replay of the
-    // eager tape. The input is a placeholder and therefore not a
-    // differentiable leaf; parameter gradients are the whole of what a
-    // compiled training step ever needs, and they are what is checked.
+    // compile() traces forward and backward into one graph, so these gradients are graph
+    // outputs. The input is a placeholder, not a differentiable leaf.
     blk.zeroGrad()
     const params = blk.parameters().map(p => p as AnyTensor)
     const step = compile((xIn: AnyTensor) => {
@@ -568,10 +528,8 @@ describe("a compiled attention step traces once", () => {
     const step = compile((xIn: AnyTensor) => mha.forward(xIn as never) as AnyTensor)
     try {
       for (let i = 0; i < 1000; i++) step(x)
-      // `serializeLazyGraph` runs exactly once, at trace time, and is the
-      // only place `noteFallback` can fire, so a fallback count of one
-      // after a thousand steps is "prepares === 1" for a graph that
-      // cannot reach the addon yet.
+      // serializeLazyGraph runs exactly once, at trace time, and is the only place
+      // noteFallback can fire, so one fallback after a thousand steps means prepares === 1.
       expect(jsCounters().nativeFallbacks).toBe(1)
       expect((nativeCounters().prepares as number) - preparesBefore).toBe(0)
     } finally {
@@ -589,8 +547,6 @@ describe("ModuleList (attention block containers)", () => {
     const names = [...stack.namedParameters().keys()]
     expect(names).toContain("items.0.attn.qkv.weight")
     expect(names).toContain("items.2.ln1.gamma")
-    // Three blocks, three independent parameter sets: `of` calls `make`
-    // once per index rather than sharing one module.
     expect(names.filter(n => n.endsWith("attn.qkv.weight")).length).toBe(3)
   })
 
@@ -624,8 +580,7 @@ describe("Residual (attention block containers)", () => {
   })
 
   it("is the runtime twin of ResidualCheck for an undeclared inner layer", () => {
-    // `Linear` declares no SHAPE_EFFECT, so the type side is fail-open
-    // here by design; the value side has to catch it, and name it.
+    // Linear declares no SHAPE_EFFECT, so the type side is fail-open by design and the value side must catch it.
     const res = new Residual(new Linear(4, 8))
     expect(() => res.forward(filled([2, 4], 1) as never)).toThrow(
       /Residual: Linear maps \[2, 4\] to \[2, 8\]/,

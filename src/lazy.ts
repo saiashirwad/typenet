@@ -4,7 +4,6 @@ import {
   evalBinaryEager,
   evalBroadcastToEager,
   evalCatEager,
-  evalContiguousEager,
   evalCrossEntropyEager,
   evalDropoutEager,
   evalGatherRowsEager,
@@ -32,7 +31,7 @@ import {
   evalSoftmaxGradEager,
   evalUnaryEager,
 } from "./eager.ts"
-import { isLazyMode, nodeInputs, OP_DESC, type SerializedNode, setLazyMode, topoOrder } from "./ir.ts"
+import { isLazyMode, OP_DESC, type SerializedNode, setLazyMode, topoOrder } from "./ir.ts"
 import { getActiveSeed, nextSeed, reseed, setActiveSeed } from "./kernels.ts"
 import { encodeForWire, supportOf } from "./lower-native.ts"
 import { type CpuStorage, type LazyNode, type LazyStorage, prod, showShape } from "./storage.ts"
@@ -40,15 +39,11 @@ import { _internal, type AnyTensor } from "./tensor.ts"
 
 export function configure(options: {
   lazy?: boolean
-  /** Reseeds every RNG path (rand/randn, Tensor.rand/r.randn); same seed, same replay. */
+  /** The same seed replays the same numbers. */
   seed?: number
 }): void {
   if (options.lazy !== undefined) setLazyMode(options.lazy)
   if (options.seed !== undefined) reseed(options.seed)
-}
-
-export function isLazy(): boolean {
-  return isLazyMode()
 }
 
 function eagerly<T>(fn: () => T): T {
@@ -61,7 +56,6 @@ function eagerly<T>(fn: () => T): T {
   }
 }
 
-/** Replays one IR node through the eager kernels, forcing inputs first. */
 function evalNode(node: LazyNode): AnyTensor {
   switch (node.op) {
     case "binary":
@@ -226,13 +220,10 @@ function evalNode(node: LazyNode): AnyTensor {
         node.offset,
         node.shape,
       )
-    case "contiguous":
-      return evalContiguousEager(force(node.input))
   }
 }
 
 function evalInterpreted(roots: AnyTensor[]): void {
-  // One seed per evaluation pass; a replay of the same graph draws different numbers.
   setActiveSeed(nextSeed())
   for (const t of topoOrder(roots)) {
     const source = _internal.sourceOf(t)
@@ -255,11 +246,10 @@ function force(t: AnyTensor): AnyTensor {
   return t
 }
 
-// Graphs up to this many elements run on the native fused loop evaluator;
-// above the cap, per-element dispatch makes candle the faster default.
+// Below the cap the native fused loop evaluator wins; above it, per-element dispatch
+// makes candle the faster default.
 const LOOP_EVALUATOR_MAX_WORK = 65536
 
-/** Native target for a graph of `work` elements: loop evaluator below the cap, else the configured device. */
 function pickTarget(work: number): "loops" | "cpu" | "gpu" {
   if (work <= LOOP_EVALUATOR_MAX_WORK) return "loops"
   return nativeBackend.nativeDeviceMode()
@@ -288,7 +278,6 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     const source = _internal.sourceOf(t)
     if (source.kind !== "lazy" || _internal.hasValue(t)) {
       if (t.dtype === "float64") {
-        // Native compute is f32-only.
         throw new Error(
           `native backend requires float32 CPU leaves; got a ${t.dtype} leaf. `
             + "Keep the graph in float32 or call disableNative().",
@@ -322,13 +311,13 @@ function serializeLazyGraph(roots: AnyTensor[]): {
     const node = (source as LazyStorage).node
     const support = supportOf(node)
     if (support.kind === "unsupported") {
-      // Capability gaps fall back to the interpreter via `null` and are counted; user errors below throw.
+      // Capability gaps return null and are counted; user errors below throw.
       noteFallback(node.op, support.reason)
       return null
     }
     work += prod(node.shape)
     // Inputs precede `t` topologically, so their indices exist; `encodeForWire` may
-    // append several wire nodes, and the index it returns is the one consumers reference.
+    // append wire nodes, so the index it returns is the one consumers reference.
     index.set(
       t,
       encodeForWire(
@@ -397,7 +386,6 @@ type ForcePlan = {
 // a hit requires the same root list by identity, otherwise the plan is replaced.
 const forcePlans = new WeakMap<AnyTensor, ForcePlan>()
 
-// Frees the native handle when the keyed root is collected (PLAN_HANDLES is the explicit-release map).
 const planRegistry = new FinalizationRegistry<number>(
   handle => nativeBackend.releaseGraphNative(handle),
 )
@@ -424,7 +412,7 @@ function evalNativeMany(roots: AnyTensor[]): boolean {
       serialized.json,
     )
     if (plan) {
-      // Free the old handle now; unregister so collection of the old plan cannot double-free.
+      // Unregister before releasing so collection of the old plan cannot double-free.
       planRegistry.unregister(plan)
       nativeBackend.releaseGraphNative(plan.handle)
     }

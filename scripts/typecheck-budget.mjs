@@ -1,8 +1,6 @@
 #!/usr/bin/env node
-// Typecheck budget: measures Instantiations / Types from
-// `tsc -p tsconfig.budget.json --noEmit --extendedDiagnostics` against the
-// checked-in typecheck-budget.json baseline and fails over the limits in
-// the constants below. `--reseed --reason "<why>"` rewrites the baseline.
+// Measures Instantiations and Types from `tsc -p tsconfig.budget.json --extendedDiagnostics`
+// against typecheck-budget.json and fails over the limits below. --reseed rewrites the baseline.
 
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
@@ -37,7 +35,6 @@ function tscBinary() {
   return existsSync(local) ? local : "tsc"
 }
 
-// Exported for reuse by bench/typecheck.ts.
 export function parseExtendedDiagnostics(output) {
   const grab = (label) => {
     const re = new RegExp(`^${label}:\\s+([\\d.]+)(?:K|s)?\\s*$`, "m")
@@ -53,9 +50,7 @@ export function parseExtendedDiagnostics(output) {
   }
 }
 
-// Runs tsc over the budget file set and returns the parsed counters. Throws
-// with the raw tsc output attached as `.output` on a compile error or on
-// unparseable output.
+// Throws with the raw tsc output attached as `.output` when tsc fails.
 export function measureBudget() {
   const tsc = tscBinary()
   let output
@@ -166,7 +161,7 @@ function main() {
     lines.push(
       `  check time:     ${measured.checkTimeSeconds}s vs baseline ${baseline.checkTimeSeconds}s  -> ${
         ratio(measured.checkTimeSeconds, baseline.checkTimeSeconds).toFixed(3)
-      }x (not gated, D31: wall clock is noise)`,
+      }x (not gated: wall clock is noise)`,
     )
   }
   if (measured.totalTimeSeconds !== undefined && baseline.totalTimeSeconds !== undefined) {

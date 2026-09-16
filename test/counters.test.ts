@@ -74,15 +74,15 @@ describe.skipIf(!available)("native counters", () => {
     expect(typeof c.phaseNs).toBe("object")
   })
 
-  it("deviceInfo() reports every declared switch, wired or not", () => {
+  it("deviceInfo() reports exactly the wired switches, and every one of them is wired", () => {
     const info = nativeDeviceInfo()
     const switches = info.switches as Record<string, { value: unknown; wired: boolean }>
-    expect(switches.TYPENET_NO_FUSION!.wired).toBe(true)
-    expect(switches.TYPENET_PARALLEL_MIN!.wired).toBe(true)
-    expect(switches.TYPENET_CHUNK!.wired).toBe(true)
-    // Declared-not-wired switches still show up, honestly labeled.
-    for (const name of ["TYPENET_NO_ARENA", "TYPENET_NO_PEEPHOLE", "TYPENET_NO_SIMD", "TYPENET_NO_PARALLEL", "TYPENET_THREADS", "TYPENET_TRACE"]) {
-      expect(switches[name]!.wired).toBe(false)
+    // The declared set is exactly the switches the addon consults: a switch
+    // that is reported but never read would advertise a compiler pass that
+    // does not exist.
+    expect(Object.keys(switches).sort()).toEqual(["TYPENET_CHUNK", "TYPENET_NO_FUSION", "TYPENET_PARALLEL_MIN"])
+    for (const [name, sw] of Object.entries(switches)) {
+      expect(sw.wired, `${name} is reported but not wired`).toBe(true)
     }
   })
 

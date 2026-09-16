@@ -1,12 +1,11 @@
 import { Operator } from "tsover-runtime"
-import { type GradNode, noGrad, runBackward, withGrad } from "./autograd.ts"
+import { type GradNode, runBackward, withGrad } from "./autograd.ts"
 import { _activeUpdateTrace, tensorNames } from "./compile.ts"
 import { isTracing } from "./context.ts"
 import {
   rawBinary,
   rawBroadcastTo,
   rawCat,
-  rawContiguous,
   rawCrossEntropy,
   rawDropout,
   rawGatherRows,
@@ -59,6 +58,7 @@ import {
   type Last,
   type MatMul,
   type MatMulCheck,
+  type NarrowCheck,
   type NestedArray,
   type Permute,
   type PermuteCheck,
@@ -69,6 +69,7 @@ import {
   type ResolveView,
   type Shape,
   type Slice,
+  type SliceCheck,
   type SliceShape,
   type Squeeze,
   type SqueezeDim,
@@ -136,7 +137,6 @@ export function makeRaw(
   return makeStorage({ kind: "cpu", data }, shape, dtype)
 }
 
-/** CPU tensor from a flat buffer, converted into `dtype`'s storage. */
 export function fromFlat<const Sh extends Shape>(
   data: ArrayLike<number> | ArrayLike<bigint>,
   shape: Sh,
@@ -158,10 +158,15 @@ export function makeStorage(
   )
 }
 
+/** JSON.stringify throws on a bigint, so int64 leaves render as decimal strings. */
+function bigintReplacer(_key: string, value: unknown): unknown {
+  return typeof value === "bigint" ? value.toString() : value
+}
+
 type Dim0<S extends Shape> = S extends [infer A extends number, ...any[]] ? A : never
 type Dim1<S extends Shape> = S extends [any, infer B extends number, ...any[]] ? B : never
 
-/** Exact equality, no broadcasting: `copy_`/`addScaled_` never broadcast. Typed on a fresh `S2` because `other: Tensor<S>` would resolve `S` and break every `*Check` site. */
+/** Exact equality, no broadcasting. A fresh S2 keeps `other: Tensor<S>` from resolving S and breaking every `*Check` site. */
 type IsSameType<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
 
 type SameShapeCheck<S extends Shape, S2 extends Shape> =
@@ -171,11 +176,10 @@ type SameShapeCheck<S extends Shape, S2 extends Shape> =
   : ErrorMessage<"shape does not match the receiver">
 
 /** Populated by a static block inside `Tensor`, the only scope that can reach its `#` fields. */
-export interface TensorInternal {
+interface TensorInternal {
   sourceOf(t: AnyTensor): TensorStorage
   cpuOf(t: AnyTensor): TypedArray | null
   setCpu(t: AnyTensor, data: TypedArray): void
-  /** Drop a lazy tensor's materialized value so a replay recomputes it. */
   resetCpu(t: AnyTensor): void
   hasValue(t: AnyTensor): boolean
   gradNodeOf(t: AnyTensor): GradNode | null
@@ -190,9 +194,7 @@ type StackCheck<T extends readonly AnyTensor[]> = T[number] extends Tensor<Shape
   : ErrorMessage<"stack: all tensors must have the same shape">
 
 export class Tensor<S extends Shape> {
-  /** A CPU buffer or a lazy graph node; forcing fills `#cpu` rather than rewriting this. */
   readonly #source: TensorStorage
-  /** The materialized CPU buffer; for lazy sources, filled by force. */
   #cpu: TypedArray | null
   #gradNode: GradNode | null = null
   readonly shape: S
@@ -273,7 +275,6 @@ export class Tensor<S extends Shape> {
     return this._requiresGrad || this.#gradNode !== null
   }
 
-  /** Whether an autograd tape reaches this tensor. */
   get taped(): boolean {
     return this.#gradNode !== null
   }
@@ -319,7 +320,6 @@ export class Tensor<S extends Shape> {
     return Tensor.full(shape, 1)
   }
 
-  /** Uniform values in [0, 1), drawn once. `configure({ seed })` makes the fill reproducible. */
   static rand<const Sh extends Shape>(
     shape: Sh,
   ): Tensor<Sh> {
@@ -336,7 +336,6 @@ export class Tensor<S extends Shape> {
     ) as any
   }
 
-  /** Standard normal values, drawn once. See {@link rand}. */
   static randn<const Sh extends Shape>(
     shape: Sh,
   ): Tensor<Sh> {
@@ -377,7 +376,6 @@ export class Tensor<S extends Shape> {
     ) as any
   }
 
-  /** An {@link IndexTensor} leaf built directly from data, checking integrality at runtime. */
   static indices<const Sh extends Shape>(
     data: ArrayLike<number>,
     shape: Sh,
@@ -392,7 +390,6 @@ export class Tensor<S extends Shape> {
     return fromFlat(data, shape, "int32") as unknown as IndexTensor<Sh>
   }
 
-  /** A new leaf with gradients enabled; like {@link detach}, the receiver is untouched. */
   requiresGrad(): Tensor<S> {
     const leaf = _internal.makeView(
       this as AnyTensor,
@@ -451,7 +448,7 @@ export class Tensor<S extends Shape> {
   }
 
   toString(): string {
-    return `Tensor(shape=${showShape(this.shape)}, dtype=${this.dtype}, data=${JSON.stringify(this.toArray())})`
+    return `Tensor(shape=${showShape(this.shape)}, dtype=${this.dtype}, data=${JSON.stringify(this.toArray(), bigintReplacer)})`
   }
 
   detach(): Tensor<S> {
@@ -477,33 +474,30 @@ export class Tensor<S extends Shape> {
       throw new Error(
         `${method}() cannot mutate a tensor while compile() is tracing`
           + (label ? ` (mutating "${label}")` : "")
-          + " — read snapshot() for a safe copy, or mutate outside the trace",
+          + ", read snapshot() for a safe copy, or mutate outside the trace",
       )
     }
     if (this.taped) {
       throw new Error(
         `${method}() cannot mutate a tensor of shape ${showShape(this.shape)} `
-          + "while an autograd tape is recording through it — call snapshot() "
+          + "while an autograd tape is recording through it, call snapshot() "
           + "for a safe copy, or detach() the tensor first",
       )
     }
   }
 
-  /** Overwrite every element with `v`, converted to this tensor's dtype. */
   fill_(v: number): this {
     this.assertMutable("fill_")
     this.#cpu = filledData(this.numel, this.dtype, v)
     return this
   }
 
-  /** `fill_(0)`. */
   zero_(): this {
     this.assertMutable("zero_")
     this.#cpu = filledData(this.numel, this.dtype, 0)
     return this
   }
 
-  /** Overwrite with `other`'s data, converting dtype if they differ. Shapes must match exactly. */
   copy_<S2 extends Shape>(other: Tensor<S2> & SameShapeCheck<S, S2>): this
   copy_(other: AnyTensor): this {
     this.assertMutable("copy_")
@@ -520,7 +514,6 @@ export class Tensor<S extends Shape> {
     return this
   }
 
-  /** `this += alpha * other` in place. Shapes must match exactly, like {@link copy_}. */
   addScaled_<S2 extends Shape>(other: Tensor<S2> & SameShapeCheck<S, S2>, alpha: number): this
   addScaled_(other: AnyTensor, alpha: number): this {
     this.assertMutable("addScaled_")
@@ -546,20 +539,19 @@ export class Tensor<S extends Shape> {
     return this
   }
 
-  /** A copy that never aliases this tensor's storage and is allowed during a `compile()` trace. */
+  /** A copy that never aliases this tensor's storage, allowed during a `compile()` trace. */
   snapshot(): NumericArray {
     force(this as AnyTensor)
     return (this.#cpu as NumericArray).slice() as NumericArray
   }
 
-  /** Brand as an {@link IndexTensor}, checking integrality at runtime; returns the same tensor. */
   toIndex(): IndexTensor<S> {
     if (this.dtype !== "int32" && this.dtype !== "int64") {
       const data = this.data
       for (let i = 0; i < data.length; i++) {
         if (!Number.isInteger(data[i])) {
           throw new Error(
-            `toIndex(): element ${i} is ${data[i]}, not an integer — `
+            `toIndex(): element ${i} is ${data[i]}, not an integer, `
               + "index tensors must be int32/int64 or an integral float",
           )
         }
@@ -568,7 +560,7 @@ export class Tensor<S extends Shape> {
     return this as unknown as IndexTensor<S>
   }
 
-  // Debug label, shown by printGraph().
+  // A debug label that printGraph() shows.
   named(name: string): this {
     tensorNames.set(this as AnyTensor, name)
     return this
@@ -673,7 +665,7 @@ export class Tensor<S extends Shape> {
     ])
   }
 
-  /** Gradient goes wholly to the winning operand; ties go to the left one. */
+  /** Ties go to the left operand. */
   maximum(other: number): Tensor<S>
   maximum<S2 extends Shape>(
     other: Tensor<S2> & BroadcastCheck<S, S2>,
@@ -713,7 +705,7 @@ export class Tensor<S extends Shape> {
     ])
   }
 
-  /** Clamp into `[min, max]`; `null` is an open end. Gradient is 1 inside, 0 outside. */
+  /** Gradient is 1 inside the clamp and 0 outside. */
   clamp(
     min: number | null,
     max: number | null = null,
@@ -882,17 +874,11 @@ export class Tensor<S extends Shape> {
     const A = self.rank === 1 ? self.unsqueeze(0) : self
     const B = b.rank === 1 ? b.unsqueeze(-1) : b
     let out = matmul2(A, B)
-    if (b.rank === 1) out = out.squeezeDim(-1)
+    if (b.rank === 1) out = out.squeeze(-1)
     if (self.rank === 1) {
-      out = out.squeezeDim((b.rank === 1 ? -1 : -2) as any)
+      out = out.squeeze((b.rank === 1 ? -1 : -2) as any)
     }
     return out as any
-  }
-
-  dot<S2 extends Shape>(
-    other: Tensor<S2> & MatMulCheck<S, S2>,
-  ): Tensor<MatMul<S, S2>> {
-    return this.matmul(other)
   }
 
   sum(): Tensor<[]>
@@ -973,7 +959,6 @@ export class Tensor<S extends Shape> {
     return rawOneHot(this, classes) as any
   }
 
-  /** Expand-only: `shape` must be exactly what broadcasting this tensor against it yields. */
   broadcastTo<const V extends Shape>(
     shape: V & BroadcastToCheck<S, V>,
   ): Tensor<V> {
@@ -989,9 +974,8 @@ export class Tensor<S extends Shape> {
     ]) as any
   }
 
-  /** Multi-axis narrow: one {@link Slice} entry per axis. */
   slice<const Spec extends readonly Slice[]>(
-    spec: Spec & { length: S["length"] },
+    spec: Spec & SliceCheck<S, Spec>,
   ): Tensor<SliceShape<S, Spec>> {
     if (spec.length !== this.shape.length) {
       throw new Error(
@@ -1013,14 +997,14 @@ export class Tensor<S extends Shape> {
     return out as any
   }
 
-  narrow<L extends number>(
-    dim: 0,
-    start: number,
+  narrow<Start extends number, L extends number>(
+    dim: 0 & NarrowCheck<S, 0, Start, L>,
+    start: Start,
     length: L,
   ): Tensor<ResizeDim<S, 0, L>>
-  narrow<D extends number, L extends number>(
-    dim: D & DimCheck<S, D>,
-    start: number,
+  narrow<D extends number, Start extends number, L extends number>(
+    dim: D & DimCheck<S, D> & NarrowCheck<S, D, Start, L>,
+    start: Start,
     length: L,
   ): Tensor<ResizeDim<S, D, L>>
   narrow(
@@ -1052,7 +1036,7 @@ export class Tensor<S extends Shape> {
     })
   }
 
-  /** `index` is a rank-1 {@link IndexTensor}; its length becomes the size of `dim`. Gradients flow to the gathered tensor, never to the index. */
+  /** Gradients flow to the gathered tensor, never to the index. */
   indexSelect<E extends number>(
     index: IndexTensor<[E]>,
   ): Tensor<ResizeDim<S, 0, E>>
@@ -1074,7 +1058,6 @@ export class Tensor<S extends Shape> {
     ])
   }
 
-  /** Row `j` of this tensor is added into row `index[j]` of a zero-filled output of `length` rows; the reverse of {@link indexSelect}. */
   scatterAdd<L extends number>(
     index: IndexTensor<[Dim0<S>]>,
     length: L,
@@ -1111,12 +1094,12 @@ export class Tensor<S extends Shape> {
     ])
   }
 
-  view<const V extends number[]>(
+  view<const V extends readonly number[]>(
     shape: V & ViewCheck<S, V>,
   ): Tensor<ResolveView<S, V>> {
     const resolved = resolveView(
       [...this.shape],
-      shape as number[],
+      shape,
     )
     const out = reshapeRaw(this, resolved)
     return withGrad(out, "view", [this], g => [
@@ -1124,18 +1107,10 @@ export class Tensor<S extends Shape> {
     ]) as any
   }
 
-  reshape<const V extends number[]>(
-    shape: V & ViewCheck<S, V>,
-  ): Tensor<ResolveView<S, V>> {
-    return this.view(shape as any) as any
-  }
-
-  /** Collapse axes `from..to` (inclusive); works on generic dims where `view()` needs a literal element count. */
   flatten<const F extends number, const T extends number>(
     from: F & FlattenCheck<S, F, T>,
     to: T,
   ): Tensor<FlattenShape<S, F, T>>
-  /** Fold every axis into one. */
   flatten(): Tensor<[Prod<S>]>
   flatten(from?: number, to?: number): AnyTensor {
     const target = from === undefined
@@ -1147,8 +1122,7 @@ export class Tensor<S extends Shape> {
     ]) as any
   }
 
-  /** Split axis `dim` into `sizes`, the inverse of {@link flatten}. */
-  unflatten<const D extends number, const Sizes extends number[]>(
+  unflatten<const D extends number, const Sizes extends readonly number[]>(
     dim: D & UnflattenCheck<S, D, Sizes>,
     sizes: Sizes,
   ): Tensor<UnflattenShape<S, D, Sizes>> {
@@ -1182,13 +1156,6 @@ export class Tensor<S extends Shape> {
     ])
   }
 
-  /** @deprecated use `squeeze(dim)` */
-  squeezeDim<D extends number>(
-    dim: D & SqueezeDimCheck<S, D>,
-  ): Tensor<SqueezeDim<S, D>> {
-    return this.squeeze(dim as any) as any
-  }
-
   unsqueeze<D extends number>(
     dim: D & UnsqueezeCheck<S, D>,
   ): Tensor<Unsqueeze<S, D>> {
@@ -1217,7 +1184,7 @@ export class Tensor<S extends Shape> {
     return this.permuteRaw(order) as any
   }
 
-  get T(): S["length"] extends 2 ? Tensor<Transpose<S, 0, 1>> : ErrorMessage<".T is only defined for rank-2 tensors — use transpose(d0, d1)"> {
+  get T(): S["length"] extends 2 ? Tensor<Transpose<S, 0, 1>> : ErrorMessage<".T is only defined for rank-2 tensors, use transpose(d0, d1)"> {
     if (this.shape.length !== 2) {
       throw new Error(
         ".T is only defined for rank-2 tensors",
@@ -1226,17 +1193,17 @@ export class Tensor<S extends Shape> {
     return this.permuteRaw([1, 0]) as any
   }
 
-  permute<const O extends number[]>(
+  permute<const O extends readonly number[]>(
     ...order: O & PermuteCheck<S, O>
   ): Tensor<Permute<S, O>> {
     const rank = this.shape.length
-    const normalized = (order as number[]).map(d => normalizeDim(d, rank))
+    const normalized = (order as readonly number[]).map(d => normalizeDim(d, rank))
     if (
       normalized.length !== rank
       || new Set(normalized).size !== rank
     ) {
       throw new Error(
-        `permute(${(order as number[]).join(", ")}) is not a permutation of ${showShape(this.shape)}`,
+        `permute(${(order as readonly number[]).join(", ")}) is not a permutation of ${showShape(this.shape)}`,
       )
     }
     return this.permuteRaw(normalized) as any
@@ -1302,7 +1269,6 @@ export class Tensor<S extends Shape> {
     b?: any,
     dim?: number,
   ): any {
-    // The n-ary form is a fold over the binary cat.
     if (Array.isArray(a)) {
       const d = (b as number | undefined) ?? 0
       let acc = a[0]! as AnyTensor
@@ -1424,7 +1390,6 @@ export class Tensor<S extends Shape> {
   }
 }
 
-/** `numel` copies of `v`, through {@link convertData} so int64 storage gets the same integrality error as every other dtype boundary. */
 function filledData(numel: number, dtype: DType, v: number): TypedArray {
   return convertData(new Array(numel).fill(v), dtype)
 }
@@ -1504,7 +1469,7 @@ function cat2(
   ])
 }
 
-/** GELU, tanh approximation. */
+/** The tanh approximation of GELU. */
 export function gelu<S extends Shape>(x: Tensor<S>): Tensor<S> {
   const a = x as AnyTensor
   const out = rawGelu(a)
@@ -1513,7 +1478,6 @@ export function gelu<S extends Shape>(x: Tensor<S>): Tensor<S> {
   ]) as Tensor<S>
 }
 
-/** SiLU / swish: `x * sigmoid(x)`. */
 export function silu<S extends Shape>(x: Tensor<S>): Tensor<S> {
   const a = x as AnyTensor
   const out = rawSilu(a)
@@ -1522,7 +1486,7 @@ export function silu<S extends Shape>(x: Tensor<S>): Tensor<S> {
   ]) as Tensor<S>
 }
 
-/** Softmax as a single node. `causal: true` folds the decoder mask into the node and requires the last axis of a rank>=2 score matrix. */
+/** causal: true folds the decoder mask into the node and needs the last axis of a rank>=2 score matrix. */
 export function softmax<
   S extends Shape,
   const D extends number,
@@ -1539,7 +1503,6 @@ export function softmax<
   ]) as Tensor<S>
 }
 
-/** LayerNorm over the last axis. */
 export function layerNorm<S extends Shape>(
   x: Tensor<S>,
   gamma: Tensor<[Last<S>]>,
@@ -1558,7 +1521,6 @@ export function layerNorm<S extends Shape>(
   return withGrad(y, "layerNorm", [a, w, b], g => rawLayerNormGrad(g, a, w, mean, rstd)) as Tensor<S>
 }
 
-/** RMSNorm: LayerNorm without the mean subtraction, `(y, rstd)`. */
 export function rmsNorm<S extends Shape>(
   x: Tensor<S>,
   gamma: Tensor<[Last<S>]>,
@@ -1573,7 +1535,6 @@ export function rmsNorm<S extends Shape>(
   return withGrad(y, "rmsNorm", [a, w], g => rawRmsNormGrad(g, a, w, rstd)) as Tensor<S>
 }
 
-/** Mean cross-entropy of `[N, C]` logits against `[N]` class indices. */
 export function crossEntropy<
   N extends number,
   C extends number,
@@ -1591,7 +1552,7 @@ export function crossEntropy<
   ]) as Tensor<[]>
 }
 
-/** `log(sum(exp(x), dim))`, shifted by the row maximum so it never overflows. */
+/** Shifted by the row maximum so it never overflows. */
 export function logSumExp<
   S extends Shape,
   const D extends number,
@@ -1625,13 +1586,12 @@ export function logSumExp(
   })
 }
 
-/** Rows of `table` addressed by an index of any rank. */
 export function gatherRows<
   S extends Shape,
   I extends Shape,
 >(
   table: Tensor<S>,
-  index: Tensor<I>,
+  index: IndexTensor<I>,
 ): Tensor<[...I, ...Drop<S, 1>]> {
   const t = table as AnyTensor
   const idx = index as AnyTensor
@@ -1640,24 +1600,6 @@ export function gatherRows<
   return withGrad(out, "gatherRows", [t], g => [
     rawScatterAddRows(g, idx, rows),
   ]) as Tensor<[...I, ...Drop<S, 1>]>
-}
-
-/** The transpose of {@link gatherRows}: accumulate into `rows` rows. */
-export function scatterAddRows<
-  S extends Shape,
-  I extends Shape,
-  const R extends number,
->(
-  src: Tensor<S>,
-  index: Tensor<I>,
-  rows: R,
-): Tensor<[R, ...Drop<S, I["length"] & number>]> {
-  const s = src as AnyTensor
-  const idx = index as AnyTensor
-  const out = rawScatterAddRows(s, idx, rows)
-  return withGrad(out, "scatterAddRows", [s], g => [
-    rawGatherRows(g, idx),
-  ]) as Tensor<[R, ...Drop<S, I["length"] & number>]>
 }
 
 /** Inverted dropout: survivors are scaled by `1/(1-p)` so the expectation is the identity. */
@@ -1670,13 +1612,4 @@ export function dropout<S extends Shape>(
   return withGrad(y, "dropout", [a], g => [
     rawBinary(g, mask, "mul"),
   ]) as Tensor<S>
-}
-
-/** Explicit materialisation; a no-op on this runtime. */
-export function contiguous<S extends Shape>(
-  x: Tensor<S>,
-): Tensor<S> {
-  const a = x as AnyTensor
-  const out = rawContiguous(a)
-  return withGrad(out, "contiguous", [a], g => [g]) as Tensor<S>
 }

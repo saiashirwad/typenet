@@ -3,7 +3,6 @@ import { nextStream } from "./kernels.ts"
 import type { Shape } from "./shape.ts"
 import { Tensor } from "./tensor.ts"
 
-/** Free-function aliases of the static factories. */
 export const tensor = Tensor.of
 export const zeros = Tensor.zeros
 export const ones = Tensor.ones
@@ -19,7 +18,6 @@ export type ResampleOptions = {
   resample?: "once" | "perCall"
 }
 
-/** Uniform values in [0, 1), seeded by `configure({ seed })`, not `Math.random`. See {@link ResampleOptions}. */
 export function rand<const Sh extends Shape>(
   shape: Sh,
   options?: ResampleOptions,
@@ -35,7 +33,6 @@ export function rand<const Sh extends Shape>(
   return Tensor.rand(shape)
 }
 
-/** Standard normal values. See {@link rand} for `resample`. */
 export function randn<const Sh extends Shape>(
   shape: Sh,
   options?: ResampleOptions,

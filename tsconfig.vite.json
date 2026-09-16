@@ -4,5 +4,5 @@
   // type-level test files (*.test-d.ts) are the bulk of that cost and
   // are never executed, so they are checked by `pnpm typecheck` only.
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "native", "bench/results", "test/**/*.test-d.ts"]
+  "exclude": ["node_modules", "native", "test/**/*.test-d.ts"]
 }

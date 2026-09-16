@@ -1,9 +1,5 @@
 import { Linear, Module, type Tensor, tensor } from "../index.ts"
 
-/**
- * The shared 2 -> 8 -> 1 XOR MLP used by the examples (tanh hidden,
- * sigmoid output).
- */
 export class XorNet extends Module {
   hidden = new Linear(2, 8)
   out = new Linear(8, 1)

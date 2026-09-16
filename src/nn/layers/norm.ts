@@ -4,7 +4,6 @@ import { Module } from "../module.ts"
 import { type Parameter, parameter } from "../parameter.ts"
 import { SHAPE_EFFECT } from "../sequential.ts"
 
-/** LayerNorm over the last axis, emitting the single fused `layerNorm` node. */
 export class LayerNorm<D extends number> extends Module {
   declare readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: D]
 
@@ -13,7 +12,7 @@ export class LayerNorm<D extends number> extends Module {
   readonly dim: D
   readonly eps: number
 
-  constructor(dim: D, options: { eps?: number } = {}) {
+  constructor(dim: D, options: { eps?: number | undefined } = {}) {
     super()
     this.dim = dim
     this.eps = options.eps ?? 1e-5
@@ -34,7 +33,6 @@ export class LayerNorm<D extends number> extends Module {
   }
 }
 
-/** LayerNorm without the mean subtraction: one `rmsNorm` node, one learnable `gamma`. */
 export class RMSNorm<D extends number> extends Module {
   declare readonly [SHAPE_EFFECT]: [effect: "mapLast", In: D, Out: D]
 
@@ -42,7 +40,7 @@ export class RMSNorm<D extends number> extends Module {
   readonly dim: D
   readonly eps: number
 
-  constructor(dim: D, options: { eps?: number } = {}) {
+  constructor(dim: D, options: { eps?: number | undefined } = {}) {
     super()
     this.dim = dim
     this.eps = options.eps ?? 1e-5

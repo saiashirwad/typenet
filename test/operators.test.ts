@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest"
 import { tensor } from "../src/factories.ts"
-import { mseLoss } from "../src/nn.ts"
+import { mseLoss } from "../src/nn/index.ts"
 import { Tensor } from "../src/tensor.ts"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
@@ -28,8 +28,8 @@ type _op3 = Expect<Equal<typeof _scalarRhs.shape, [2, 3]>>
 const _scalarLhs = 1 - _a
 type _op4 = Expect<Equal<typeof _scalarLhs.shape, [2, 3]>>
 
-// type-only: incompatible shapes must not resolve. Wrapped in an uncalled
-// function so the @ts-expect-error is checked but the expression never runs.
+// Type-only: incompatible shapes must not resolve. The expression sits in an uncalled function,
+// so the directive on the line below is checked but never runs.
 function _incompatibleShapes() {
   // @ts-expect-error [2,1] and [3,2] do not broadcast
   _col

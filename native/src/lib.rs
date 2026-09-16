@@ -14,21 +14,16 @@ fn to_napi_err(err: candle_core::Error) -> Error {
 #[derive(Default)]
 struct Counters {
     prepares: AtomicU64,
-    /// u32 index conversions (cache misses in `cached_index`).
     index_builds: AtomicU64,
-    /// Live nodes across plans actually built.
     instrs: AtomicU64,
     fused_regions: AtomicU64,
-    /// Nodes absorbed into fusion groups beyond their leaders.
     fusion_matches: AtomicU64,
     gemm_calls: AtomicU64,
-    /// Fires of the GEMV-sum rewrite in `eval_reduce`.
     rowwise_calls: AtomicU64,
     candle_dispatches: AtomicU64,
     program_cache_hits: AtomicU64,
     program_cache_misses: AtomicU64,
     program_cache_evictions: AtomicU64,
-    /// Wall time spent inside `prepareGraph` / `evalPrepared`.
     prepare_ns: AtomicU64,
     eval_ns: AtomicU64,
 }
@@ -57,13 +52,11 @@ fn program_count() -> u64 {
         .len() as u64
 }
 
-/// Not yet measurable: always -1, never 0, so callers can tell the two apart.
+// Not yet measurable: always -1, never 0, so callers can tell the two apart.
 fn unmeasured() -> serde_json::Value {
     serde_json::Value::from(-1i64)
 }
 
-/// BTreeMap keeps JSON key order stable regardless of any
-/// `serde_json/preserve_order` feature.
 #[napi(js_name = "counters")]
 pub fn counters() -> String {
     let mut m: BTreeMap<String, serde_json::Value> = BTreeMap::new();
@@ -99,14 +92,8 @@ pub fn counters() -> String {
 
 struct Switches {
     no_fusion: bool,
-    no_arena: bool,
-    no_peephole: bool,
-    no_simd: bool,
-    no_parallel: bool,
-    threads: Option<usize>,
     parallel_min: Option<usize>,
     chunk: Option<usize>,
-    trace: Option<String>,
 }
 
 impl Switches {
@@ -115,14 +102,8 @@ impl Switches {
         let num = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<usize>().ok());
         Switches {
             no_fusion: flag("TYPENET_NO_FUSION"),
-            no_arena: flag("TYPENET_NO_ARENA"),
-            no_peephole: flag("TYPENET_NO_PEEPHOLE"),
-            no_simd: flag("TYPENET_NO_SIMD"),
-            no_parallel: flag("TYPENET_NO_PARALLEL"),
-            threads: num("TYPENET_THREADS"),
             parallel_min: num("TYPENET_PARALLEL_MIN"),
             chunk: num("TYPENET_CHUNK"),
-            trace: std::env::var("TYPENET_TRACE").ok(),
         }
     }
 }
@@ -142,7 +123,6 @@ fn opt_num(v: Option<usize>) -> serde_json::Value {
     v.map(|v| serde_json::Value::from(v as u64)).unwrap_or(serde_json::Value::Null)
 }
 
-/// Device plus every declared `TYPENET_*` switch and whether it is wired.
 #[napi(js_name = "deviceInfo")]
 pub fn device_info() -> String {
     let s = switches();
@@ -152,18 +132,6 @@ pub fn device_info() -> String {
     sw.insert("TYPENET_NO_FUSION".into(), SwitchInfo { value: s.no_fusion.into(), wired: true });
     sw.insert("TYPENET_PARALLEL_MIN".into(), SwitchInfo { value: opt_num(s.parallel_min), wired: true });
     sw.insert("TYPENET_CHUNK".into(), SwitchInfo { value: opt_num(s.chunk), wired: true });
-    sw.insert("TYPENET_NO_ARENA".into(), SwitchInfo { value: s.no_arena.into(), wired: false });
-    sw.insert("TYPENET_NO_PEEPHOLE".into(), SwitchInfo { value: s.no_peephole.into(), wired: false });
-    sw.insert("TYPENET_NO_SIMD".into(), SwitchInfo { value: s.no_simd.into(), wired: false });
-    sw.insert("TYPENET_NO_PARALLEL".into(), SwitchInfo { value: s.no_parallel.into(), wired: false });
-    sw.insert("TYPENET_THREADS".into(), SwitchInfo { value: opt_num(s.threads), wired: false });
-    sw.insert(
-        "TYPENET_TRACE".into(),
-        SwitchInfo {
-            value: s.trace.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
-            wired: false,
-        },
-    );
     out.insert("switches".into(), serde_json::to_value(&sw).unwrap());
     serde_json::to_string(&out).unwrap()
 }
@@ -190,9 +158,6 @@ pub fn device_name() -> String {
     }
 }
 
-/// Graph format: a topological node list; inputs reference earlier
-/// indices; leaves index the `leaves` buffer as contiguous prod(shape)
-/// slices.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 enum Node {
@@ -200,8 +165,6 @@ enum Node {
         leaf: usize,
         offset: usize,
         shape: Vec<usize>,
-        /// "float32" (default) | "int32" | "int64"; integers are gather/scatter
-        /// indices only.
         #[serde(default)]
         dtype: Option<String>,
     },
@@ -274,7 +237,6 @@ enum Node {
         #[serde(default)]
         shape: Option<Vec<usize>>,
     },
-    /// Gather rows: out[j] = input[index[j]] along `dim`.
     IndexSelect {
         dim: usize,
         input: usize,
@@ -282,8 +244,6 @@ enum Node {
         #[serde(default)]
         shape: Option<Vec<usize>>,
     },
-    /// Scatter-add rows into a zero tensor of `length` rows along `dim`:
-    /// out[index[j]] += input[j].
     ScatterAdd {
         dim: usize,
         length: usize,
@@ -292,8 +252,6 @@ enum Node {
         #[serde(default)]
         shape: Option<Vec<usize>>,
     },
-    /// Random values, drawn fresh on every evaluation from a hash of
-    /// (eval seed, stream, element index) — see `random_data`.
     Random {
         kind: String,
         stream: u32,
@@ -304,24 +262,16 @@ enum Node {
 #[derive(Debug, Deserialize)]
 struct Graph {
     nodes: Vec<Node>,
-    /// Output node indices; defaults to the last node.
     #[serde(default)]
     roots: Option<Vec<usize>>,
-    /// Evaluator the JS side picked — see `Target`.
     #[serde(default)]
     device: Option<String>,
 }
 
-/// Where a graph runs, chosen by the JS side because it knows the graph's
-/// total size before anything crosses the FFI boundary.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Target {
-    /// Fused loop evaluator on plain buffers; wins below a few tens of
-    /// thousands of elements, where a kernel launch dominates.
     Loops,
-    /// candle on CPU (Accelerate matmul on macOS).
     Cpu,
-    /// candle on the best accelerator (Metal where available).
     Accelerator,
 }
 
@@ -342,8 +292,6 @@ fn prod(shape: &[usize]) -> usize {
     shape.iter().product()
 }
 
-/// Storage type of a leaf; integer leaves are gather/scatter indices read
-/// at native width, so no f32 mantissa limit applies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum LeafTy {
     F32,
@@ -371,7 +319,6 @@ impl LeafTy {
     }
 }
 
-/// The byte slice of one leaf, bounds-checked against the buffer.
 fn leaf_bytes(
     leaves: &[u8],
     leaf: usize,
@@ -393,9 +340,7 @@ fn leaf_bytes(
     })
 }
 
-/// A scalar type read back out of a leaf byte buffer.
 trait LeafScalar: Copy {
-    /// Decode one value from a `size_of::<Self>()`-byte little-endian chunk.
     fn from_le_bytes(bytes: &[u8]) -> Self;
 }
 
@@ -420,8 +365,6 @@ impl LeafScalar for i64 {
     }
 }
 
-/// Native-endian decode: little on every platform typenet runs on, matching
-/// the JS packing. Bounds live in `leaf_bytes`.
 fn decode_le<T: LeafScalar>(bytes: &[u8], n: usize) -> Vec<T> {
     bytes
         .chunks_exact(std::mem::size_of::<T>())
@@ -430,8 +373,6 @@ fn decode_le<T: LeafScalar>(bytes: &[u8], n: usize) -> Vec<T> {
         .collect()
 }
 
-/// Read a leaf as f32; integer leaves convert exactly because
-/// loop-evaluator graphs stay far below f32's exact-integer limit.
 fn read_leaf_f32(
     leaves: &[u8],
     leaf: usize,
@@ -473,7 +414,6 @@ fn read_leaf_i64(
     Ok(decode_le::<i64>(bytes, n))
 }
 
-/// Indices of the nodes a node directly reads.
 fn node_inputs(node: &Node) -> Vec<usize> {
     match node {
         Node::Leaf { .. } => vec![],
@@ -494,7 +434,6 @@ fn node_inputs(node: &Node) -> Vec<usize> {
     }
 }
 
-/// Plain broadcast of two dim lists (align right, max-or-error), no tensors.
 fn broadcast_dim_vecs(a: &[usize], b: &[usize]) -> candle_core::Result<Vec<usize>> {
     let rank = a.len().max(b.len());
     let mut out = vec![0usize; rank];
@@ -511,7 +450,6 @@ fn broadcast_dim_vecs(a: &[usize], b: &[usize]) -> candle_core::Result<Vec<usize
     Ok(out)
 }
 
-/// The shape the JS side serialized for a node, when it sent one.
 fn sent_shape(node: &Node) -> Option<&Vec<usize>> {
     match node {
         Node::Leaf { shape, .. } => Some(shape),
@@ -532,8 +470,6 @@ fn sent_shape(node: &Node) -> Option<&Vec<usize>> {
     }
 }
 
-/// Recomputed shapes are compared against the JS-sent ones in debug
-/// builds and under TYPENET_CHECK_SHAPES=1; release trusts JS.
 fn shape_check_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
     *FLAG.get_or_init(|| {
@@ -624,12 +560,8 @@ fn node_shapes(graph: &Graph) -> candle_core::Result<Vec<Vec<usize>>> {
     Ok(shapes)
 }
 
-// Counter-based RNG matching src/kernels.ts: element i of stream s under
-// seed k is a pure hash of (k, s, i), no state. Uniforms match bit-for-bit,
-// normals to f32 rounding. The seed is an eval argument, not graph JSON, so
-// a replayed plan stays valid.
-
-/// murmur3's 32-bit finalizer, Stafford 13 variant.
+// Counter-based RNG matching src/kernels.ts: uniforms agree bit-for-bit, normals
+// to f32 rounding. The seed travels per eval, so a cached plan stays valid.
 #[inline]
 fn hash32(mut x: u32) -> u32 {
     x ^= x >> 16;
@@ -639,7 +571,6 @@ fn hash32(mut x: u32) -> u32 {
     x ^ (x >> 16)
 }
 
-/// Uniform in [0, 1) from 24 mantissa bits of a hashed counter.
 #[inline]
 fn unit_float(seed: u32, stream: u32, i: u32) -> f32 {
     let mixed = hash32(hash32(seed ^ stream.wrapping_mul(0x9e37_79b9)) ^ i);
@@ -649,8 +580,6 @@ fn unit_float(seed: u32, stream: u32, i: u32) -> f32 {
 fn random_data(kind: &str, n: usize, stream: u32, seed: u32) -> candle_core::Result<Vec<f32>> {
     match kind {
         "uniform" => Ok((0..n).map(|i| unit_float(seed, stream, i as u32)).collect()),
-        // Box-Muller per element from two draws, so element i does not
-        // depend on earlier draws; f64 transcendentals, like the JS side.
         "normal" => Ok((0..n)
             .map(|i| {
                 let u = 1.0 - unit_float(seed, stream, 2 * i as u32) as f64;
@@ -668,8 +597,6 @@ fn is_elementwise(node: &Node) -> bool {
     matches!(node, Node::Binary { .. } | Node::Unary { .. })
 }
 
-/// Broadcast both operands to their common shape so elementwise
-/// (non-broadcast-aware) kernels work on identical layouts.
 fn broadcast_pair(a: &Tensor, b: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
     let shape = a.shape().broadcast_shape_binary_op(b.shape(), "binary")?;
     Ok((a.broadcast_as(&shape)?, b.broadcast_as(shape)?))
@@ -684,7 +611,6 @@ fn elementwise(
     f(&a.contiguous()?, &b.contiguous()?)
 }
 
-/// Candle comparisons return U8 masks; cast to F32 for arithmetic.
 fn mask_f32(t: &Tensor) -> candle_core::Result<Tensor> {
     t.to_dtype(DType::F32)
 }
@@ -705,15 +631,12 @@ fn eval_binary(kind: &str, parameter: f64, a: &Tensor, b: &Tensor) -> candle_cor
         "negDiv" => elementwise(a, b, |x, y| x.neg()? / y),
         "halfDiv" => elementwise(a, b, |x, y| (x * 0.5)? / y),
         "mulSign" => elementwise(a, b, |x, y| x * &y.sign()?),
-        // sign(y).relu() is a y > 0 mask without a separate comparison.
         "reluGrad" => elementwise(a, b, |x, y| x * &y.sign()?.relu()?),
         "leakyReluGrad" => elementwise(a, b, |x, y| {
-            // where y > 0: x, else parameter * x
             let m = mask_f32(&y.gt(&y.zeros_like()?)?)?;
             let weights = (&m + &(m.ones_like()? - &m)? * parameter)?;
             x * &weights
         }),
-        // affine(-1, 1) is 1 - y in one kernel.
         "sigmoidGrad" => elementwise(a, b, |x, y| (x * y)? * &y.affine(-1.0, 1.0)?),
         "tanhGrad" => elementwise(a, b, |x, y| x * &y.sqr()?.affine(-1.0, 1.0)?),
         other => Err(candle_core::Error::Msg(format!(
@@ -731,10 +654,7 @@ fn eval_unary(kind: &str, parameter: f64, a: &Tensor) -> candle_core::Result<Ten
         "sqrt" => a.sqrt(),
         "abs" => a.abs(),
         "relu" => a.relu(),
-        // relu(x) - p*relu(-x)
         "leakyRelu" => a.relu()? - (a.neg()?.relu()? * parameter)?,
-        // (tanh(x/2) + 1)/2: three kernels instead of five, and no
-        // overflow for large negative x.
         "sigmoid" => a.affine(0.5, 0.0)?.tanh()?.affine(0.5, 0.5),
         "tanh" => a.tanh(),
         "scalePowGrad" => a.powf(parameter - 1.0)? * parameter,
@@ -744,8 +664,6 @@ fn eval_unary(kind: &str, parameter: f64, a: &Tensor) -> candle_core::Result<Ten
     }
 }
 
-/// Elementwise op kinds, resolved from JSON names once at prepare time so
-/// the per-element eval loop never matches on strings.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Bin {
     Add,
@@ -783,8 +701,6 @@ enum Un {
     ScalePowGrad,
 }
 
-/// Single source of truth for the binary elementwise ops: JSON name, `Bin`
-/// variant, scalar f32 application. The JS parity test parses these arms.
 macro_rules! binary_ops {
     ($($name:literal => $variant:path => $apply:expr),* $(,)?) => {
         fn parse(kind: &str) -> candle_core::Result<Self> {
@@ -798,7 +714,6 @@ macro_rules! binary_ops {
             })
         }
 
-        /// Scalar application, mirroring `eval_binary`.
         #[inline(always)]
         fn apply(kind: Self, p: f32, a: f32, b: f32) -> f32 {
             match kind {
@@ -806,7 +721,6 @@ macro_rules! binary_ops {
             }
         }
 
-        /// Every binary op name, in listing order; the parity test walks it.
         #[cfg(test)]
         fn all() -> &'static [&'static str] {
             &[$($name,)*]
@@ -820,7 +734,6 @@ impl Bin {
         "sub" => Bin::Sub => |a: f32, b: f32, _p: f32| a - b,
         "mul" => Bin::Mul => |a: f32, b: f32, _p: f32| a * b,
         "div" => Bin::Div => |a: f32, b: f32, _p: f32| a / b,
-        // f32::max/min return the non-NaN operand; candle and JS propagate NaN.
         "maximum" => Bin::Maximum => |a: f32, b: f32, _p: f32| { if a >= b { a } else { b } },
         "minimum" => Bin::Minimum => |a: f32, b: f32, _p: f32| { if a <= b { a } else { b } },
         "gt" => Bin::Gt => |a: f32, b: f32, _p: f32| (a > b) as u8 as f32,
@@ -838,7 +751,6 @@ impl Bin {
     }
 }
 
-/// Unary elementwise ops, same shape as `binary_ops!`.
 macro_rules! unary_ops {
     ($($name:literal => $variant:path => $apply:expr),* $(,)?) => {
         fn parse(kind: &str) -> candle_core::Result<Self> {
@@ -876,15 +788,12 @@ impl Un {
         "abs" => Un::Abs => |x: f32, _p: f32| x.abs(),
         "relu" => Un::Relu => |x: f32, _p: f32| x.max(0.0),
         "leakyRelu" => Un::LeakyRelu => |x: f32, p: f32| { if x > 0.0 { x } else { p * x } },
-        // same value as eval_unary's tanh form, to f32 rounding
         "sigmoid" => Un::Sigmoid => |x: f32, _p: f32| 1.0 / (1.0 + (-x).exp()),
         "tanh" => Un::Tanh => |x: f32, _p: f32| x.tanh(),
         "scalePowGrad" => Un::ScalePowGrad => |x: f32, p: f32| p * x.powf(p - 1.0),
     }
 }
 
-/// One resolved elementwise operation: which op, and its scalar parameter
-/// (the exponent of `pow`, the slope of `leakyRelu`).
 #[derive(Clone, Copy)]
 enum Op {
     Bin(Bin, f32),
@@ -917,21 +826,11 @@ fn apply_un(kind: Un, p: f32, x: f32) -> f32 {
     Un::apply(kind, p, x)
 }
 
-// Tiny-graph CPU evaluator for graphs the JS side pins `device: "loops"`:
-// at that size candle's per-op dispatch dominates, so the graph runs
-// directly on Vec<f32> buffers, with maximal elementwise chains fused
-// into single passes.
-//
-// Fusion rule (always correct, never recomputes): a node joins its
-// consumer's group only if it is elementwise, live, broadcastable to the
-// group's output shape, single-consumer, and not a root. Same-shape
-// members share one scratch pass; smaller members evaluate into temps
-// first, so no value is computed twice.
-
+// The loops evaluator exists because candle's per-op dispatch dominates on tiny graphs.
+// A node joins its consumer's fusion group only if it is elementwise, live,
+// broadcastable to the group's output shape, single-consumer, and not a root.
 struct FusionPlan {
-    /// Group id per node, or None.
     group_of: Vec<Option<usize>>,
-    /// Members per group in topo order; the leader is last.
     groups: Vec<Vec<usize>>,
 }
 
@@ -950,8 +849,6 @@ fn plan_fusion(
     is_root: &[bool],
 ) -> (FusionPlan, Vec<usize>) {
     let n = graph.nodes.len();
-    // Consumer counts over live edges; a node read twice by one consumer
-    // counts twice, as the countdown needs.
     let mut consumers = vec![0usize; n];
     for (i, node) in graph.nodes.iter().enumerate() {
         if !live[i] {
@@ -962,14 +859,10 @@ fn plan_fusion(
         }
     }
     if switches().no_fusion {
-        // TYPENET_NO_FUSION=1: every elementwise node runs as its own
-        // kernel — the A/B baseline.
         return (FusionPlan { group_of: vec![None; n], groups: Vec::new() }, consumers);
     }
     let mut group_of: Vec<Option<usize>> = vec![None; n];
     let mut groups: Vec<Vec<usize>> = Vec::new();
-    // Reverse topo order: consumers become leaders before their inputs
-    // are claimed.
     for leader in (0..n).rev() {
         if !live[leader]
             || !is_elementwise(&graph.nodes[leader])
@@ -996,7 +889,6 @@ fn plan_fusion(
             }
         }
         if members.len() == 1 {
-            // A singleton group buys nothing over the plain candle path.
             group_of[leader] = None;
         } else {
             members.sort_unstable();
@@ -1006,8 +898,6 @@ fn plan_fusion(
     (FusionPlan { group_of, groups }, consumers)
 }
 
-/// Row-major strides of `shape` aligned against `out_shape` (broadcast:
-/// stride 0 on size-1 or missing-leading dims), for flat-index mapping.
 fn broadcast_strides(shape: &[usize], out_shape: &[usize]) -> Vec<usize> {
     let rank = out_shape.len();
     let offset = rank - shape.len();
@@ -1039,8 +929,6 @@ fn flat_to_coords(mut i: usize, shape: &[usize], coords: &mut [usize]) {
     }
 }
 
-/// Read element `i` (flat, in `out_shape` space) of a buffer whose own
-/// shape broadcasts to `out_shape` via `strides`.
 #[inline]
 fn read_bcast(data: &[f32], strides: &[usize], same_shape: bool, i: usize, coords: &[usize]) -> f32 {
     if same_shape {
@@ -1056,11 +944,6 @@ fn read_bcast(data: &[f32], strides: &[usize], same_shape: bool, i: usize, coord
     data[idx]
 }
 
-// Plan data derivable from the graph JSON, computed once and cached:
-// compile() replays the same JSON hundreds of times.
-
-/// Where a fused-pass input reads from: a graph buffer, a small-member
-/// temp, or a scratch slot (a same-shape member evaluated in this pass).
 enum ChildSource {
     Buffer(usize),
     Temp(usize),
@@ -1069,42 +952,23 @@ enum ChildSource {
 
 struct ChildRef {
     source: ChildSource,
-    /// Broadcast strides of the child's shape against the pass's target
-    /// shape (empty for Slot children, which are always same-shape).
     strides: Vec<usize>,
     same_shape: bool,
 }
 
-/// One elementwise operation with its inputs fully resolved: a fused
-/// group's member, or a standalone node that fusion left on its own.
 struct MemberPlan {
-    /// The resolved elementwise operation.
     op: Op,
-    /// Shape this pass produces (the group output shape for main members;
-    /// the member's own smaller shape for small members).
     out_shape: Vec<usize>,
-    /// Fully resolved inputs (1 for unary, 2 for binary).
     inputs: Vec<ChildRef>,
-    /// Every input already has the output shape, so the pass needs no
-    /// coordinate arithmetic.
     all_same: bool,
 }
 
 struct GroupPlan {
     leader: usize,
-    /// Global node indices this plan reads; ChildSource::Buffer holds an
-    /// index into this list (localized after prepare), so execution can
-    /// pack just these inputs instead of a whole-graph table.
     buffer_inputs: Vec<usize>,
     out_shape: Vec<usize>,
-    /// True when no member reads a broadcast input, so the pass can index
-    /// buffers directly instead of decomposing a flat index into coords.
     all_same: bool,
-    /// Members smaller than the output shape, topo order; temp index =
-    /// position. Their inputs can only be Buffer or earlier Temps.
     small_members: Vec<MemberPlan>,
-    /// Same-shape-as-output members, topo order; scratch slot = position;
-    /// the leader is last.
     main_members: Vec<MemberPlan>,
 }
 
@@ -1113,19 +977,11 @@ struct PreparedGraph {
     shapes: Vec<Vec<usize>>,
     roots: Vec<usize>,
     live: Vec<bool>,
-    /// Live readers per node; both evaluators drop a buffer when this
-    /// hits zero, keeping long rollouts from holding every activation.
     consumers: Vec<usize>,
-    /// True for nodes whose value is returned, so they are never dropped.
     is_root: Vec<bool>,
-    /// group index per member node (skip during the main loop); leaders
-    /// trigger execution.
     group_of: Vec<Option<usize>>,
     groups: Vec<GroupPlan>,
-    /// Per-node plans for standalone elementwise nodes, with the global
-    /// node indices their localized Buffer sources refer to.
     ewise: Vec<Option<(MemberPlan, Vec<usize>)>>,
-    /// Which evaluator this graph runs on, chosen by the JS side.
     target: Target,
 }
 
@@ -1162,7 +1018,6 @@ impl PreparedGraph {
         for members in &fusion.groups {
             let leader = *members.last().unwrap();
             let out_shape = shapes[leader].clone();
-            // slot/temp assignment mirrors execution order.
             let mut slot_of: Vec<Option<usize>> = vec![None; n];
             let mut temp_of: Vec<Option<usize>> = vec![None; n];
             let mut small_members: Vec<MemberPlan> = Vec::new();
@@ -1198,7 +1053,6 @@ impl PreparedGraph {
                         inputs,
                     });
                 } else {
-                    // Small members can only read buffers or earlier temps.
                     temp_of[m] = Some(small_members.len());
                     let target = shapes[m].clone();
                     let inputs: Vec<ChildRef> = inputs
@@ -1276,7 +1130,6 @@ impl PreparedGraph {
 
 static PLAN_CACHE: OnceLock<Mutex<HashMap<String, Arc<PreparedGraph>>>> = OnceLock::new();
 
-/// Parse + prepare, cached on the full JSON (which determines everything).
 fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
     let cache = PLAN_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(p) = cache.lock().unwrap().get(graph_json) {
@@ -1288,7 +1141,6 @@ fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
         .map_err(|e| Error::new(Status::InvalidArg, format!("invalid graph JSON: {e}")))?;
     let mut plan = PreparedGraph::prepare(graph).map_err(to_napi_err)?;
     localize(&mut plan);
-    // Program-size counters, once per plan built (not on cache hits).
     let live_instrs = plan.live.iter().filter(|&&l| l).count() as u64;
     COUNTERS.instrs.fetch_add(live_instrs, Ordering::Relaxed);
     COUNTERS.fused_regions.fetch_add(plan.groups.len() as u64, Ordering::Relaxed);
@@ -1300,7 +1152,6 @@ fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
     COUNTERS.fusion_matches.fetch_add(matched, Ordering::Relaxed);
     let prep = Arc::new(plan);
     let mut map = cache.lock().unwrap();
-    // Bounded: pathological callers just fall back to re-planning.
     if map.len() >= 128 {
         COUNTERS.program_cache_evictions.fetch_add(map.len() as u64, Ordering::Relaxed);
         map.clear();
@@ -1309,15 +1160,11 @@ fn prepared(graph_json: &str) -> Result<Arc<PreparedGraph>> {
     Ok(prep)
 }
 
-/// Handles let compile() replay a graph without re-shipping and re-hashing
-/// its (hundreds-of-KB) JSON on every call. A prepared plan plus its
-/// pinned leaf buffer; pins are copies owned by the handle (a borrowed JS
-/// buffer could be collected or detached while rayon reads it), and per
-/// eval only dirty leaves are copied again.
+// Pins are copies owned by the handle: a borrowed JS buffer could be collected
+// or detached while rayon reads it, and only dirty leaves are copied per eval.
 struct HandleState {
     prep: Arc<PreparedGraph>,
     leaves: Vec<u8>,
-    /// (byte offset, byte length) per JSON `leaf` index.
     offsets: Vec<(usize, usize)>,
 }
 
@@ -1351,7 +1198,6 @@ fn leaf_offsets(prep: &PreparedGraph) -> candle_core::Result<(Vec<(usize, usize)
     Ok((offsets, total))
 }
 
-/// Parse and plan a graph once, returning a handle for `evalPrepared`.
 #[napi(js_name = "prepareGraph")]
 pub fn prepare_graph(graph_json: String) -> Result<u32> {
     let started = std::time::Instant::now();
@@ -1373,7 +1219,6 @@ pub fn prepare_graph(graph_json: String) -> Result<u32> {
     Ok(handle)
 }
 
-/// Copy a leaf's current values into the handle's pinned buffer.
 #[napi(js_name = "pinLeaf")]
 pub fn pin_leaf(handle: u32, leaf: u32, data: Uint8Array) -> Result<()> {
     let mut map = handles().lock().unwrap();
@@ -1397,21 +1242,17 @@ pub fn pin_leaf(handle: u32, leaf: u32, data: Uint8Array) -> Result<()> {
     Ok(())
 }
 
-/// Drop a plan created by `prepareGraph`.
 #[napi(js_name = "releaseGraph")]
 pub fn release_graph(handle: u32) {
     handles().lock().unwrap().remove(&handle);
 }
 
-/// How many prepared-graph handles are currently held.
 #[napi(js_name = "preparedGraphCount")]
 pub fn prepared_graph_count() -> u32 {
     handles().lock().unwrap().len() as u32
 }
 
-/// Overlay dirty leaves (packed in increasing leaf index) onto the pins,
-/// then run. JS callers are single-threaded, so holding the handle lock
-/// through evaluation cannot deadlock.
+// JS callers are single-threaded, so holding the handle lock through evaluation cannot deadlock.
 #[napi(js_name = "evalPrepared")]
 pub fn eval_prepared(
     handle: u32,
@@ -1443,9 +1284,6 @@ pub fn eval_prepared(
     evaluate(&state.prep, &state.leaves, seed)
 }
 
-/// Rewrite every ChildSource::Buffer from a global node index to an
-/// index into the plan's own `buffer_inputs` list, so execution packs
-/// exactly the inputs a pass reads.
 fn localize_members(
     members: &mut [MemberPlan],
     locals: &mut Vec<usize>,
@@ -1480,14 +1318,11 @@ fn localize(prep: &mut PreparedGraph) {
     }
 }
 
-/// Shared storage plus view metadata; structural ops rewrite only the
-/// metadata, and `packed()` materializes row-major data.
 #[derive(Clone)]
 struct Buf {
     data: Arc<Vec<f32>>,
     offset: usize,
     shape: Vec<usize>,
-    /// Element strides; 0 on broadcast dims.
     strides: Vec<usize>,
 }
 
@@ -1515,8 +1350,6 @@ impl Buf {
         if self.is_contiguous() {
             return std::borrow::Cow::Borrowed(&self.data[self.offset..self.offset + n]);
         }
-        // Odometer walk: incremental index updates, and the innermost
-        // dim copied as a slice when it is unit-stride.
         let rank = self.shape.len();
         let mut out = vec![0f32; n];
         if rank == 0 {
@@ -1575,8 +1408,6 @@ fn read_ref(
     }
 }
 
-/// `read_ref` for a group where nothing broadcasts: the flat index is the
-/// only index there is.
 #[inline]
 fn read_flat(
     cr: &ChildRef,
@@ -1592,11 +1423,8 @@ fn read_flat(
     }
 }
 
-/// Elements per thread per chunk; overridable with `TYPENET_CHUNK`.
 const CHUNK_DEFAULT: usize = 8192;
 
-/// Below this many elements a pass stays on the calling thread;
-/// overridable with `TYPENET_PARALLEL_MIN`.
 const PARALLEL_MIN_DEFAULT: usize = 16384;
 
 fn chunk_size() -> usize {
@@ -1607,8 +1435,6 @@ fn parallel_min() -> usize {
     switches().parallel_min.unwrap_or(PARALLEL_MIN_DEFAULT)
 }
 
-/// Run `body` over `out` in parallel chunks (or in place if it is small),
-/// giving it each chunk together with the flat index the chunk starts at.
 fn over_chunks(out: &mut [f32], body: impl Fn(usize, &mut [f32]) + Send + Sync) {
     if out.len() < parallel_min() {
         body(0, out);
@@ -1620,7 +1446,6 @@ fn over_chunks(out: &mut [f32], body: impl Fn(usize, &mut [f32]) + Send + Sync) 
         .for_each(|(c, slice)| body(c * chunk, slice));
 }
 
-/// One elementwise op over its own output shape, into a fresh buffer.
 fn exec_member(
     plan: &MemberPlan,
     inputs_slices: &[&[f32]],
@@ -1673,11 +1498,7 @@ fn exec_member(
     out
 }
 
-/// A whole fused group in one pass: members evaluate per element into a
-/// scratch slot, so intermediates never reach memory. Only the leader's
-/// value is written out.
 fn exec_group(plan: &GroupPlan, inputs_slices: &[&[f32]]) -> Vec<f32> {
-    // Members smaller than the output shape evaluate first into temps.
     let mut temps: Vec<Vec<f32>> = Vec::with_capacity(plan.small_members.len());
     for sm in &plan.small_members {
         temps.push(exec_member(sm, inputs_slices, &temps));
@@ -1686,7 +1507,6 @@ fn exec_group(plan: &GroupPlan, inputs_slices: &[&[f32]]) -> Vec<f32> {
     let last = members.len() - 1;
     let shape = &plan.out_shape;
     let mut out = vec![0f32; prod(shape)];
-    // With no broadcast inputs, the flat index is the only index needed.
     if plan.all_same {
         over_chunks(&mut out, |base, slice| {
             let mut scratch = vec![0f32; members.len()];
@@ -1739,8 +1559,6 @@ fn exec_group(plan: &GroupPlan, inputs_slices: &[&[f32]]) -> Vec<f32> {
     out
 }
 
-/// Shared consumer countdown: once an input's count hits zero and it is
-/// not a root, free its buffer (and any cached index tensor).
 #[inline]
 fn release_input(
     remaining: &mut [usize],
@@ -1754,14 +1572,10 @@ fn release_input(
     }
 }
 
-/// Whole-graph execution from a prepared plan: leaf copies + raw loops,
-/// no parsing or planning. Returns all roots concatenated.
 fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Result<Vec<f32>> {
     let graph = &prep.graph;
     let n = graph.nodes.len();
     let mut buffers: Vec<Option<Buf>> = (0..n).map(|_| None).collect();
-    // Consumer countdown: drop a buffer once nothing else will read it.
-    // Views share the Arc, so storage frees with the last view.
     let mut remaining = prep.consumers.clone();
     let mut members_of: Vec<Vec<usize>> = vec![Vec::new(); prep.groups.len()];
     for i in 0..n {
@@ -1857,8 +1671,6 @@ fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Resul
                 tiny_reduce_all(kind, &get(*input)?.packed())?,
                 prep.shapes[idx].clone(),
             ),
-            // Structural ops are metadata rewrites; consumers needing
-            // packed data pay in `packed()`.
             Node::BroadcastTo { input, shape } => {
                 let src = get(*input)?;
                 let rank = shape.len();
@@ -1986,8 +1798,6 @@ fn execute(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> candle_core::Resul
     Ok(out)
 }
 
-// Accelerate's BLAS: candle links the same framework, and declaring sgemm
-// directly lets the CPU evaluator use it without a candle tensor.
 #[cfg(target_os = "macos")]
 #[link(name = "Accelerate", kind = "framework")]
 extern "C" {
@@ -2012,8 +1822,6 @@ extern "C" {
 const CBLAS_ROW_MAJOR: i32 = 101;
 const CBLAS_NO_TRANS: i32 = 111;
 
-/// Row-major C = A·B for contiguous slices. Rows of A are handed out in
-/// blocks so the work spreads over cores whatever BLAS decides to do.
 #[cfg(target_os = "macos")]
 fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
     if c.is_empty() || k == 0 {
@@ -2047,7 +1855,6 @@ fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
         .for_each(|(c, a)| run(a.len() / k.max(1), a, c));
 }
 
-/// Everywhere without Accelerate: a cache-friendly triple loop.
 #[cfg(not(target_os = "macos"))]
 fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
     if c.is_empty() || k == 0 {
@@ -2068,8 +1875,6 @@ fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
         });
 }
 
-/// Matmul with typenet's batch-dim broadcasting (candle does not do it
-/// either), each batch cell going through `gemm`.
 fn cpu_matmul(
     adata: &[f32],
     ashape: &[usize],
@@ -2105,7 +1910,6 @@ fn cpu_matmul(
     Ok(out)
 }
 
-/// Read an index buffer of integral f32s, bounds-checked against `rows`.
 fn read_indices(index: &[f32], rows: usize, what: &str) -> candle_core::Result<Vec<usize>> {
     index
         .iter()
@@ -2132,7 +1936,6 @@ fn tiny_index_select(
     let outer = prod(&shape[..dim]);
     let mut out = vec![0f32; outer * indices.len() * inner];
     let picked = indices.len();
-    // Output rows are independent, so hand them out in blocks.
     out.par_chunks_mut(inner.max(1) * 64)
         .enumerate()
         .for_each(|(c, slice)| {
@@ -2160,8 +1963,6 @@ fn tiny_scatter_add(
     let mut out = vec![0f32; outer * length * inner];
     let slice = length * inner;
 
-    // Colliding indices prevent splitting by output range; slices along
-    // the dims outside `dim` are independent, so parallelize over those.
     if outer > 1 {
         out.par_chunks_mut(slice.max(1)).enumerate().for_each(|(i, out)| {
             for (j, &row) in indices.iter().enumerate() {
@@ -2175,8 +1976,6 @@ fn tiny_scatter_add(
         return Ok(out);
     }
 
-    // Single slice (the usual dim-0 edge-list aggregation): one serial
-    // pass over the edges; parallel index pre-scans measured slower.
     for (j, &row) in indices.iter().enumerate() {
         let to = row * inner;
         let from = j * inner;
@@ -2210,8 +2009,6 @@ fn tiny_reduce(
     over_chunks(&mut out, |base_i, slice| {
         let mut coords = vec![0usize; rank];
         for (k, dst) in slice.iter_mut().enumerate() {
-            // Output element i maps to the input coords with the reduced
-            // coordinate pinned at 0; walking `step` from there sweeps it.
             let mut rem = base_i + k;
             for j in (0..rank).rev() {
                 let size = if j == dim { 1 } else { shape[j] };
@@ -2240,7 +2037,6 @@ fn tiny_reduce(
                     }
                     acc
                 }
-                // First index wins on ties, matching the eager kernel.
                 Reduce::Argmax => {
                     let mut best = 0usize;
                     let mut acc = data[base];
@@ -2297,7 +2093,6 @@ fn tiny_reduce_all(kind: &str, data: &[f32]) -> candle_core::Result<Vec<f32>> {
     }
 }
 
-/// Each output slice along `dim` is one block from each side, copied whole.
 fn tiny_cat(
     adata: &[f32],
     ashape: &[usize],
@@ -2345,15 +2140,12 @@ fn tiny_one_hot(classes: usize, data: &[f32]) -> candle_core::Result<Vec<f32>> {
     Ok(out)
 }
 
-// Candle's dim-reductions (sum/max/min) squeeze the dim; typenet's
-// keepdim semantics require re-inserting it.
 fn reinsert_dim(t: Tensor, dim: usize, keepdim: bool) -> candle_core::Result<Tensor> {
     if keepdim { t.unsqueeze(dim) } else { Ok(t) }
 }
 
-/// Above this, a dim-0 f32 sum runs as a ones-row matmul through
-/// Accelerate, which measures far faster than candle's sequential dim-0
-/// sum; it reassociates the addition (~1e-6 relative for f32).
+// Above this, a dim-0 f32 sum becomes a ones-row matmul: much faster than
+// candle's sequential sum, but it reassociates the additions (~1e-6 relative).
 const GEMV_SUM_MIN_ROWS: usize = 4096;
 
 fn eval_reduce(
@@ -2389,8 +2181,6 @@ fn eval_reduce(
         "sum" => reinsert_dim(a.sum(dim)?, dim, keepdim),
         "max" => reinsert_dim(a.max(dim)?, dim, keepdim),
         "argmax" => {
-            // First index of the max along `dim`: mask ties, take the min
-            // of (index or +inf) so the earliest index wins.
             let input = a.contiguous()?;
             let mut keep_shape = input.dims().to_vec();
             keep_shape[dim] = 1;
@@ -2436,13 +2226,10 @@ fn eval_one_hot(classes: usize, a: &Tensor) -> candle_core::Result<Tensor> {
     targets.eq(&range)?.to_dtype(DType::F32)
 }
 
-/// Indices arrive as f32 (exact to 16.7M) or int32/int64 (exact
-/// throughout); candle's gather/scatter kernels want U32, so cast.
 fn index_u32(index: &Tensor) -> candle_core::Result<Tensor> {
     index.contiguous()?.flatten_all()?.to_dtype(DType::U32)
 }
 
-/// Label a node by op kind for the profile table.
 fn op_kind(node: &Node) -> &str {
     match node {
         Node::Leaf { .. } => "leaf",
@@ -2463,8 +2250,6 @@ fn op_kind(node: &Node) -> &str {
     }
 }
 
-/// Value of a one-element f32 leaf, read from host memory: no device
-/// readback, since the leaf is not uploaded yet.
 fn scalar_leaf(graph: &Graph, leaves: &[u8], at: usize) -> Option<f32> {
     match &graph.nodes[at] {
         Node::Leaf {
@@ -2473,7 +2258,6 @@ fn scalar_leaf(graph: &Graph, leaves: &[u8], at: usize) -> Option<f32> {
             shape,
             dtype,
         } if prod(shape) == 1 => {
-            // Only f32 one-element leaves are constant-folded.
             if LeafTy::parse(dtype.as_deref()).ok()? != LeafTy::F32 {
                 return None;
             }
@@ -2486,7 +2270,6 @@ fn scalar_leaf(graph: &Graph, leaves: &[u8], at: usize) -> Option<f32> {
     }
 }
 
-/// The u32 form of an index node, converted on first use and kept.
 fn cached_index(
     cache: &mut [Option<Tensor>],
     at: usize,
@@ -2507,13 +2290,9 @@ fn run_graph(
 ) -> candle_core::Result<Vec<Tensor>> {
     let graph = &prep.graph;
     let n = graph.nodes.len();
-    // Liveness and consumer counts come from the plan; dead nodes are
-    // never touched.
     let mut remaining = prep.consumers.clone();
     let mut outputs: Vec<Option<Tensor>> = (0..n).map(|_| None).collect();
-    // Index tensors convert to u32 once and stay cached while alive.
     let mut indices: Vec<Option<Tensor>> = (0..n).map(|_| None).collect();
-    // Rows of ones for the gemv-style sums below, one per width needed.
     let mut ones: HashMap<usize, Tensor> = HashMap::new();
     for (idx, node) in graph.nodes.iter().enumerate() {
         if !prep.live[idx] {
@@ -2565,9 +2344,6 @@ fn run_graph(
                 b,
                 ..
             } => {
-                // Constant mul/add/sub via `affine`: candle's broadcast
-                // path measures ~6x slower per element, and the rewrite
-                // is exact.
                 let sa = scalar_leaf(graph, leaves, *a);
                 let sb = scalar_leaf(graph, leaves, *b);
                 match (kind.as_str(), sa, sb) {
@@ -2599,7 +2375,6 @@ fn run_graph(
                 let m = a.dim(ar - 2)?;
                 let k = a.dim(ar - 1)?;
                 let n = b.dim(br - 1)?;
-                // typenet broadcasts batch dims; candle does not.
                 let batch = candle_core::Shape::from_dims(&a.dims()[..ar - 2])
                     .broadcast_shape_binary_op(
                         &candle_core::Shape::from_dims(&b.dims()[..br - 2]),
@@ -2609,9 +2384,6 @@ fn run_graph(
                 a_shape.extend([m, k]);
                 let mut b_shape = batch.dims().to_vec();
                 b_shape.extend([k, n]);
-                // Materialize only when batch dims actually broadcast;
-                // eager contiguity here copied both operands in every
-                // gradient matmul.
                 let owned_a;
                 let a = if a.dims() == a_shape.as_slice() {
                     a
@@ -2705,7 +2477,6 @@ fn run_graph(
             );
         }
         outputs[idx] = Some(out);
-        // Release inputs nothing else will read.
         for input in node_inputs(node) {
             release_input(&mut remaining, &prep.is_root, input, |i| {
                 outputs[i] = None;
@@ -2771,8 +2542,6 @@ impl ToNapiValue for Readback {
     }
 }
 
-/// Zero-copy: the f32 Vec becomes a JS external ArrayBuffer, freed by
-/// `finalize_readback`.
 fn vec_readback(mut vec: Vec<f32>) -> Readback {
     let ptr = vec.as_mut_ptr() as *mut u8;
     let byte_len = vec.len() * std::mem::size_of::<f32>();
@@ -2790,7 +2559,6 @@ fn vec_readback(mut vec: Vec<f32>) -> Readback {
     }
 }
 
-/// Per-op-kind (name, seconds, elements, calls) rows.
 type ProfileRows = Vec<(String, f64, u64, u64)>;
 
 static PROFILE: Mutex<Option<ProfileRows>> = Mutex::new(None);
@@ -2813,7 +2581,6 @@ fn record(kind: &str, seconds: f64, elements: usize) {
     }
 }
 
-/// Op-kind timings gathered since the last call, as a text table.
 #[napi(js_name = "takeProfile")]
 pub fn take_profile() -> String {
     let mut guard = PROFILE.lock().unwrap();
@@ -2840,8 +2607,6 @@ pub fn take_profile() -> String {
     out
 }
 
-/// Overrides the JS side's evaluator choice, for measuring one against
-/// another: TYPENET_EVALUATOR=loops | cpu | gpu.
 fn forced_target() -> candle_core::Result<Option<Target>> {
     static CHOICE: OnceLock<Option<Target>> = OnceLock::new();
     if let Some(target) = CHOICE.get() {
@@ -2854,8 +2619,6 @@ fn forced_target() -> candle_core::Result<Option<Target>> {
     Ok(*CHOICE.get_or_init(|| parsed))
 }
 
-/// Row-major C = A·B for one packed f32 pair, via the same `gemm` the
-/// loop evaluator uses.
 #[napi(js_name = "sgemm")]
 pub fn sgemm_entry(
     a: Float32Array,
@@ -2881,7 +2644,6 @@ pub fn sgemm_entry(
     Ok(vec_readback(c))
 }
 
-/// Run a prepared graph on the evaluator it was planned for.
 fn evaluate(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> Result<Readback> {
     let started = std::time::Instant::now();
     let result = evaluate_inner(prep, leaves, seed);
@@ -2901,8 +2663,6 @@ fn evaluate_inner(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> Result<Read
         &Device::Cpu
     };
     let outputs = run_graph(prep, leaves, device, seed).map_err(to_napi_err)?;
-    // All roots read back as one concatenated f32 buffer; JS slices it
-    // per root using shapes it already knows.
     device.synchronize().map_err(to_napi_err)?;
     let mut flats: Vec<Tensor> = Vec::with_capacity(outputs.len());
     for output in &outputs {
@@ -2913,7 +2673,6 @@ fn evaluate_inner(prep: &PreparedGraph, leaves: &[u8], seed: u32) -> Result<Read
                 .map_err(to_napi_err)?,
         );
     }
-    // One cat + one readback; per-tensor Metal readbacks each cost a sync.
     let data = if flats.len() == 1 {
         flats.into_iter().next().unwrap()
     } else {
@@ -2929,8 +2688,6 @@ mod tests {
     use super::*;
     use candle_core::{Device, Tensor};
 
-    /// Run the tensor path for one binary op on two scalar inputs and read
-    /// back the single f32 result.
     fn eval_binary_scalar(name: &str, parameter: f64, x: f32, y: f32) -> f32 {
         let a = Tensor::new(x, &Device::Cpu).unwrap();
         let b = Tensor::new(y, &Device::Cpu).unwrap();
@@ -2948,9 +2705,6 @@ mod tests {
             .unwrap()
     }
 
-    /// Scalar and tensor kernels agree only to a few ulps (Accelerate
-    /// vectorization, tanh-based sigmoid); a wrong formula misses by far
-    /// more than this tolerance.
     fn assert_parity(scalar: f32, tensor: f32, what: &str) {
         let tol = 1e-5f32 * (1.0 + scalar.abs().max(tensor.abs()));
         let diff = (scalar - tensor).abs();
@@ -2980,7 +2734,6 @@ mod tests {
     #[test]
     fn unary_apply_matches_eval() {
         let default: &[(f32, f64)] = &[(0.75, 0.5), (-1.25, 2.0), (1.5, 2.0)];
-        // `log`/`sqrt` are only defined on the positive reals.
         let positive: &[(f32, f64)] = &[(0.75, 0.5), (1.5, 2.0)];
         for &name in Un::all() {
             let op = Un::parse(name).unwrap();

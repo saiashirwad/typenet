@@ -23,7 +23,7 @@ describe("rand({ resample: \"perCall\" })", () => {
     const u = rand([4096], { resample: "perCall" }) as AnyTensor
     const { mean, sd } = stats(u)
     expect(mean).toBeCloseTo(0.5, 1)
-    // sd of U(0,1) is 1/sqrt(12) = 0.2887
+    // sd of U(0,1) is 1/sqrt(12) = 0.2887.
     expect(sd).toBeCloseTo(0.2887, 2)
     for (const x of u.data) {
       expect(x).toBeGreaterThanOrEqual(0)
@@ -57,8 +57,8 @@ describe("rand({ resample: \"perCall\" })", () => {
   })
 
   it("matches a checked-in reference", () => {
-    // Golden values (1024 draws, seed 99, lazy interpreter): if these
-    // move, the RNG changed, not just a name.
+    // Golden values (1024 draws, seed 99, lazy interpreter): if these move, the RNG changed,
+    // not just a name.
     const data = withContext(
       { lazy: true, seed: 99 },
       () => Array.from((rand([1024], { resample: "perCall" }) as AnyTensor).data),
@@ -131,9 +131,10 @@ describe("random nodes in a graph", () => {
   })
 
   it("keep one value per evaluation, however many times it is read", () => {
-    // The mask is read twice in the same graph; both reads must see the
-    // same draw, or the "gate" would not be a gate at all.
-    const step = compile((x: Tensor<[256]>) => {
+    // The mask is read twice in the same graph; both reads must see the same draw, or the
+    // "gate" would not be a gate at all.
+    // The parameter is unused, but compile() infers the step's input type from it.
+    const step = compile((_x: Tensor<[256]>) => {
       const mask = (rand([256], { resample: "perCall" }) as AnyTensor).lt(0.5)
       return mask.sub(mask).abs().sum()
     })
@@ -164,8 +165,8 @@ describe.skipIf(!isNativeAvailable())(
   "random nodes, native",
   () => {
     it("match the interpreter draw for draw", () => {
-      // The uniform draw is pure integer mixing on both sides, so the
-      // values are identical rather than merely similarly distributed.
+      // The uniform draw is pure integer mixing on both sides, so the values are identical
+      // rather than merely similarly distributed.
       const interpreted = withContext(
         { lazy: true, seed: 99 },
         () => Array.from((rand([1024], { resample: "perCall" }) as AnyTensor).data),
@@ -234,9 +235,8 @@ describe("rand/randn are seeded", () => {
   })
 
   it("resample: \"once\" (default) draws a fixed leaf under compile(); \"perCall\" redraws", () => {
-    // compile() traces once under lazy semantics regardless of ambient
-    // mode: "once" is baked in at trace time, "perCall" is a graph node
-    // re-evaluated on every call.
+    // compile() traces once under lazy semantics regardless of ambient mode: "once" is baked
+    // in at trace time, "perCall" is a graph node re-evaluated on every call.
     const once = compile(() => randn([64]).add(0))
     expect(Array.from(once().data)).toEqual(Array.from(once().data))
 

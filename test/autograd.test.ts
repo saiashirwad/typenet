@@ -3,8 +3,7 @@ import { noGrad } from "../src/autograd.ts"
 import { tensor } from "../src/factories.ts"
 import { testing } from "../src/testing.ts"
 
-// Closed-form (analytic) gradient values; finite-difference checking lives
-// in gradcheck.test.ts.
+// Closed-form gradient values; finite-difference checking lives in gradcheck.test.ts.
 describe("autograd", () => {
   it("simple chain: ((x*y)+x)^2", () => {
     const x = tensor([1, 2]).requiresGrad()

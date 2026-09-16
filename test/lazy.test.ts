@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { eager, lazy } from "../src/context.ts"
 import { tensor } from "../src/factories.ts"
-import { configure, isLazy } from "../src/lazy.ts"
-import { crossEntropy } from "../src/nn.ts"
-import { SGD } from "../src/optim.ts"
+import { isLazyMode } from "../src/ir.ts"
+import { configure } from "../src/lazy.ts"
+import { crossEntropy } from "../src/nn/index.ts"
+import { SGD } from "../src/optim/index.ts"
 import { Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
 import { bothWays, expectClose } from "./helpers.ts"
@@ -35,22 +36,22 @@ function expectGradsClose(
 
 describe("lazy mode", () => {
   it("is off by default and toggles via configure", () => {
-    expect(isLazy()).toBe(false)
+    expect(isLazyMode()).toBe(false)
     configure({ lazy: true })
-    expect(isLazy()).toBe(true)
+    expect(isLazyMode()).toBe(true)
     configure({ lazy: false })
-    expect(isLazy()).toBe(false)
+    expect(isLazyMode()).toBe(false)
   })
 
   it("restores the previous flag when lazy() throws", () => {
-    expect(isLazy()).toBe(false)
+    expect(isLazyMode()).toBe(false)
     expect(() =>
       lazy(() => {
-        expect(isLazy()).toBe(true)
+        expect(isLazyMode()).toBe(true)
         throw new Error("boom")
       })
     ).toThrow("boom")
-    expect(isLazy()).toBe(false)
+    expect(isLazyMode()).toBe(false)
   })
 
   it("restores true when lazy() throws inside an outer lazy() scope", () => {
@@ -60,7 +61,7 @@ describe("lazy mode", () => {
           throw new Error("boom")
         })
       ).toThrow("boom")
-      expect(isLazy()).toBe(true)
+      expect(isLazyMode()).toBe(true)
     })
   })
 
@@ -265,7 +266,7 @@ describe("lazy mode", () => {
     }
     const { eager, lazy } = bothWays(run)
     expectGradsClose(eager, lazy)
-    // array targets build the one-hot mask eagerly (a graph leaf)
+    // Array targets build the one-hot mask eagerly, as a graph leaf.
     const withArrayTargets = () => {
       const logits = tensor([
         [2, 1, 0.1],
@@ -311,15 +312,14 @@ describe("lazy mode", () => {
       const w = z.sum()
       const loss = y.sum().add(w)
       loss.backward()
-      // y = 2x² + x² = 3x², dy/dx = 6x
+      // y = 2x^2 + x^2 = 3x^2, dy/dx = 6x.
       expect((x.grad as AnyTensor).toArray()).toEqual([
         6,
         12,
         18,
       ])
-      // Aliasing: forcing the graph swapped the storage of every alias
-      // of a shared node, so z (referenced by two parents plus sum) is
-      // materialized exactly once and all aliases agree.
+      // Aliasing: forcing the graph swapped the storage of every alias of a shared node, so z
+      // (referenced by two parents plus sum) is materialized once and all aliases agree.
       expect(testing.storageOf(z)).toBe("materialized")
       expect(z.toArray()).toEqual([1, 4, 9])
       expect(y.toArray()).toEqual([2, 8, 18])

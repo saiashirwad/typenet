@@ -77,17 +77,15 @@ function applyUnary(
   }
 }
 
-/** sqrt(2/pi), the constant of the tanh GELU approximation. */
+/** Constants of the tanh GELU approximation (Hendrycks & Gimpel). */
 const GELU_C = Math.sqrt(2 / Math.PI)
-/** The cubic coefficient of the same approximation (Hendrycks & Gimpel). */
 const GELU_A = 0.044715
 
-/** `0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3)))`. */
 function gelu(x: number): number {
   return 0.5 * x * (1 + Math.tanh(GELU_C * (x + GELU_A * x * x * x)))
 }
 
-/** d/dx of {@link gelu} times upstream `g`; the tanh approximation's derivative, not the erf one. */
+/** The tanh approximation's derivative, not the erf one. */
 function geluGrad(g: number, x: number): number {
   const inner = GELU_C * (x + GELU_A * x * x * x)
   const t = Math.tanh(inner)
@@ -95,12 +93,10 @@ function geluGrad(g: number, x: number): number {
   return g * (0.5 * (1 + t) + 0.5 * x * (1 - t * t) * dInner)
 }
 
-/** `x * sigmoid(x)`. */
 function silu(x: number): number {
   return x / (1 + Math.exp(-x))
 }
 
-/** `g * (s + x*s*(1-s))` with `s = sigmoid(x)`. */
 function siluGrad(g: number, x: number): number {
   const s = 1 / (1 + Math.exp(-x))
   return g * (s + x * s * (1 - s))

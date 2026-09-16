@@ -17,14 +17,13 @@ export function logSoftmax<
   return a.sub(lse) as Tensor<S>
 }
 
-/** `IndexTensor<[N]>` holding `0, 1, ..., N-1`, e.g. for position embeddings. */
 export function arangeIndex<const N extends number>(n: N): IndexTensor<[N]> {
   const data = new Array<number>(n)
   for (let i = 0; i < n; i++) data[i] = i
   return Tensor.indices(data, [n])
 }
 
-/** Scaled dot-product attention at rank 4. `k` arrives pre-transposed as `[B, H, K, T]`, and causal masking is a softmax option, not a materialised `[T, T]` buffer. */
+/** Scaled dot-product attention at rank 4. `k` arrives pre-transposed as `[B,H,K,T]`, and causal masking is a softmax option, not a materialised `[T,T]` buffer. */
 export function sdpa<
   B extends number,
   H extends number,
@@ -50,7 +49,7 @@ export function sdpa<
   const headDim = qa.shape[3]!
   if (ka.shape[2] !== headDim || va.shape[3] !== headDim) {
     throw new Error(
-      `sdpa: head dim disagrees — q ${showShape(qa.shape)}, k ${showShape(ka.shape)}, v ${showShape(va.shape)}`,
+      `sdpa: head dim disagrees, q ${showShape(qa.shape)}, k ${showShape(ka.shape)}, v ${showShape(va.shape)}`,
     )
   }
   // Scale the scores, not `q`: the PyTorch reference formula's spelling.

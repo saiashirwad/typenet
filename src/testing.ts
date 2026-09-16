@@ -1,7 +1,7 @@
 import type { GradNode } from "./autograd.ts"
 import { _internal, type AnyTensor } from "./tensor.ts"
 
-/** Test-only peepholes into Tensor's private fields; storageOf reports where a value stands. */
+/** Test-only peepholes into Tensor's private fields. */
 export const testing = {
   storageOf(
     t: AnyTensor,

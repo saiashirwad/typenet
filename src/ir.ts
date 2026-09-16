@@ -2,7 +2,6 @@ import {
   evalBinaryEager,
   evalBroadcastToEager,
   evalCatEager,
-  evalContiguousEager,
   evalCrossEntropyEager,
   evalDropoutEager,
   evalGatherRowsEager,
@@ -57,8 +56,7 @@ export function setLazyMode(value: boolean): void {
   lazyMode = value
 }
 
-/** The only way to build a lazy tensor: every node goes through here. */
-export function makeNode(
+function makeNode(
   body: LazyNodeBody,
   shape: readonly number[],
   dtype: DType,
@@ -80,7 +78,6 @@ type TensorField =
   | "b"
   | "input"
   | "index"
-  // Named operands keep `nodeInputs` / `formatLazyOp` / `serializeNode` generic.
   | "grad"
   | "gamma"
   | "beta"
@@ -311,14 +308,7 @@ export const OP_DESC: Record<LazyNode["op"], OpDesc> = {
     tensors: ["input"],
     json: ["out", "offset", "input", "shape"],
     printName: "op",
-    // `offset` is kernel plumbing; it stays out of the print.
     printAttrs: [{ key: "out" }],
-  },
-  contiguous: {
-    tensors: ["input"],
-    json: ["input", "shape"],
-    printName: "op",
-    printAttrs: [],
   },
 }
 
@@ -387,7 +377,7 @@ export function serializeNode(
   return out
 }
 
-/** Post-order over the lazy graph reachable from `roots`; iterative because real graphs run thousands of nodes deep. */
+/** Iterative because real graphs run thousands of nodes deep. */
 export function topoOrder(
   roots: readonly AnyTensor[],
 ): AnyTensor[] {
@@ -476,7 +466,6 @@ export function rawReduce(
   return rawReduceDims(a, [dim], keepdim, op)
 }
 
-/** The shape left by reducing every axis in `dims` (ascending, normalised). */
 function reduceDimsShape(
   shape: readonly number[],
   dims: readonly number[],
@@ -487,8 +476,8 @@ function reduceDimsShape(
     : shape.filter((_, i) => !dims.includes(i))
 }
 
-/** `dims` is normalised, de-duplicated and sorted ascending, so two structurally identical graphs serialise identically. */
-export function rawReduceDims(
+/** Normalised, de-duplicated and ascending, so structurally identical graphs serialise identically. */
+function rawReduceDims(
   a: AnyTensor,
   dims: readonly number[],
   keepdim: boolean,
@@ -683,7 +672,6 @@ export function reshapeRaw(
   return _internal.makeView(t, shape)
 }
 
-/** Sum `t` down to `shape`, the reverse of broadcasting. */
 export function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
   if (shapesEqual(t.shape, shape)) return t
   const offset = t.shape.length - shape.length
@@ -694,7 +682,6 @@ export function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
       dims.push(offset + i)
     }
   }
-  // Already broadcast-compatible: nothing to reduce.
   if (dims.length === 0) return t
   if (shapesEqual(reduceDimsShape(t.shape, dims, false), shape)) {
     return rawReduceDims(t, dims, false, "sum")
@@ -705,8 +692,8 @@ export function sumTo(t: AnyTensor, shape: number[]): AnyTensor {
     : reshapeRaw(reduced, shape)
 }
 
-// Multi-output ops: lazy mode is one producer node plus one `pick` per
-// output; eager mode slices the kernel's flat result by the same arithmetic.
+// Multi-output ops are one flat producer plus a slice per output; lazy mode turns
+// the slices into `pick` nodes, eager mode reads the kernel's buffer directly.
 
 function splitFlat(
   flat: AnyTensor,
@@ -799,7 +786,7 @@ export function rawSoftmax(
   requireFloat(a, "softmax")
   const d = normalizeDim(dim, a.shape.length)
   if (causal) {
-    // The mask lives in the node, not a materialised `[T, T]` buffer.
+    // The mask is folded into the kernel, not materialised as a [T, T] buffer.
     if (a.shape.length < 2 || d !== a.shape.length - 1) {
       throw new Error(
         `softmax{causal}: needs the last axis of a rank>=2 score matrix; got dim ${d} of ${showShape(a.shape)}`,
@@ -832,7 +819,7 @@ export function rawSoftmaxGrad(
   return evalSoftmaxGradEager(g, y, d)
 }
 
-/** `(y, mean, rstd)`; `mean`/`rstd` are saved for the backward rule. */
+/** mean and rstd are saved for the backward rule. */
 export function rawLayerNorm(
   x: AnyTensor,
   gamma: AnyTensor,
@@ -858,7 +845,6 @@ export function rawLayerNorm(
   )
 }
 
-/** `(dx, dgamma, dbeta)`. */
 export function rawLayerNormGrad(
   g: AnyTensor,
   x: AnyTensor,
@@ -881,7 +867,6 @@ export function rawLayerNormGrad(
   )
 }
 
-/** `(y, rstd)`. */
 export function rawRmsNorm(
   x: AnyTensor,
   gamma: AnyTensor,
@@ -901,7 +886,6 @@ export function rawRmsNorm(
   return splitFlat(evalRmsNormEager(x, gamma, eps), outShapes)
 }
 
-/** `(dx, dgamma)`. */
 export function rawRmsNormGrad(
   g: AnyTensor,
   x: AnyTensor,
@@ -947,7 +931,6 @@ function checkNormWeight(
   }
 }
 
-/** `(loss, dlogits)` over `[N, C]` logits and `[N]` class indices. */
 export function rawCrossEntropy(
   logits: AnyTensor,
   target: AnyTensor,
@@ -1040,7 +1023,7 @@ export function rawScatterAddRows(
   return evalScatterAddRowsEager(src, index, rows)
 }
 
-/** `(y, mask)`. `stream` is fixed at build time so the graph structure is stable; the per-evaluation seed is what makes the mask resample. */
+/** The stream is fixed at build time so the graph structure stays stable; the per-evaluation seed resamples the mask. */
 export function rawDropout(
   x: AnyTensor,
   p: number,
@@ -1065,15 +1048,4 @@ export function rawDropout(
     evalDropoutEager(x, p, stream, nextSeed()),
     outShapes,
   )
-}
-
-export function rawContiguous(a: AnyTensor): AnyTensor {
-  if (lazyMode) {
-    return makeNode(
-      { op: "contiguous", input: a },
-      a.shape,
-      a.dtype,
-    )
-  }
-  return evalContiguousEager(a)
 }

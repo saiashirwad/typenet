@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { Linear, Module } from "../src/nn.ts"
-import { Adam, AdamW, constant, cosine, linearDecay, oneCycle, Optimizer, SGD, stepDecay, warmup, warmupCosine } from "../src/optim.ts"
+import { Linear, Module } from "../src/nn/index.ts"
+import { Adam, AdamW, constant, cosine, linearDecay, oneCycle, SGD, stepDecay, warmup, warmupCosine } from "../src/optim/index.ts"
 import { type AnyTensor, Tensor } from "../src/tensor.ts"
 
 const closeArray = (actual: number[], expected: number[], digits = 6) => {
@@ -30,7 +30,7 @@ describe("optimizer lr is public and mutable", () => {
     ;(p.grad!.data as Float32Array).set([1])
     opt.step()
     const after2 = p.data[0]!
-    // a 100x jump
+    // A 100x jump.
     expect(Math.abs(after1 - 1)).toBeCloseTo(1e-3, 6)
     expect(Math.abs(after2 - after1)).toBeCloseTo(1e-1, 6)
   })
@@ -45,11 +45,8 @@ describe("AdamW (decoupled weight decay)", () => {
     const wd = 0.1
     const g = 0.5
 
-    // Independent reference: Loshchilov & Hutter 2019, eq. 12:
-    // theta_t = theta_{t-1} - lr*wd*theta_{t-1} - lr*mHat/(sqrt(vHat)+eps).
-    // `Math.fround` after each step mirrors the real parameter's float32
-    // storage (the moment estimates below stay double precision, exactly
-    // like the library's own Float64Array state).
+    // Independent reference from Loshchilov & Hutter 2019, eq. 12, with Math.fround after each step
+    // to mirror the parameter's float32 storage (the moment estimates stay double precision).
     let refP = Math.fround(1)
     let refM = 0
     let refV = 0

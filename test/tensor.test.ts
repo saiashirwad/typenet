@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "../src/compile.ts"
 import { arange, eye, ones, tensor, zeros } from "../src/factories.ts"
-import { Tensor } from "../src/tensor.ts"
+import { fromFlat, Tensor } from "../src/tensor.ts"
 
 // `pnpm typecheck` checks this file too; vitest never runs the types.
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
@@ -123,7 +123,7 @@ describe("matmul", () => {
 
   it("vector cases follow PyTorch semantics", () => {
     const v = tensor([1, 2, 3])
-    expect(v.dot(v).item()).toBe(14)
+    expect(v.matmul(v).item()).toBe(14)
     const m = tensor([
       [1, 2],
       [3, 4],
@@ -181,6 +181,56 @@ describe("shape manipulation", () => {
       [2, 5],
       [3, 6],
     ])
+  })
+
+  it("slice reads each axis: end index, window, null and undefined", () => {
+    const g = tensor([
+      [1, 2, 3, 4],
+      [5, 6, 7, 8],
+      [9, 10, 11, 12],
+    ])
+    // a plain number is an end index, so the window starts at 0
+    expect(g.slice([2, null]).toArray()).toEqual([
+      [1, 2, 3, 4],
+      [5, 6, 7, 8],
+    ])
+    expect(g.slice([null, [1, 3]]).toArray()).toEqual([
+      [2, 3],
+      [6, 7],
+      [10, 11],
+    ])
+    // undefined is the same keep-the-axis entry as null.
+    expect(g.slice([3, undefined]).toArray()).toEqual(g.toArray())
+  })
+
+  it("slice walks a multi-axis spec over a rank-3 tensor", () => {
+    const t3 = arange(24).view([2, 3, 4])
+    const win = t3.slice([null, [1, 3], [2, 4]])
+    expect(win.shape).toEqual([2, 2, 2])
+    expect(win.toArray()).toEqual([
+      [
+        [6, 7],
+        [10, 11],
+      ],
+      [
+        [18, 19],
+        [22, 23],
+      ],
+    ])
+  })
+
+  it("slice rejects the windows that are compile errors at a typed call site", () => {
+    const g = tensor([
+      [1, 2],
+      [3, 4],
+      [5, 6],
+    ])
+    // as any reaches the run-time floor: every spec below is a type error on the shipped
+    // signature, and the throw comes from the per-axis narrow.
+    expect(() => g.slice([[2, 0], null] as any)).toThrow(/out of range/)
+    expect(() => g.slice([4, null] as any)).toThrow(/out of range/)
+    expect(() => g.slice([-1, null] as any)).toThrow(/out of range/)
+    expect(() => g.slice([null] as any)).toThrow(/expects 2 entries, got 1/)
   })
 })
 
@@ -273,6 +323,22 @@ describe("dtype tags", () => {
       .add(tensor([2]))
     expect(out.dtype).toBe("float64")
   })
+
+  it("toString renders float and int64 storage", () => {
+    const f = tensor([
+      [1, 2],
+      [3, 4],
+    ])
+    expect(f.toString()).toBe(
+      "Tensor(shape=[2, 2], dtype=float32, data=[[1,2],[3,4]])",
+    )
+    // int64 lives in a BigInt64Array, whose elements JSON.stringify refuses, so the int64
+    // leaves render as decimal strings.
+    const i = fromFlat([1n, 2n, 3n], [3], "int64")
+    expect(i.dtype).toBe("int64")
+    expect(i.toString()).toContain("dtype=int64")
+    expect(i.toString()).toContain(String.raw`["1","2","3"]`)
+  })
 })
 
 describe("flatten / unflatten", () => {
@@ -287,7 +353,7 @@ describe("flatten / unflatten", () => {
     expect(t4.flatten(1, 2).shape).toEqual([2, 12, 2])
     expect(t4.flatten(1, 2).toArray()).toEqual(t4.view([2, 12, 2]).toArray())
 
-    // a one-axis window is the identity, same as view() with the same shape
+    // A one-axis window is the identity, the same as view() with the same shape.
     expect(t3.flatten(1, 1).shape).toEqual([2, 3, 4])
   })
 
@@ -320,7 +386,7 @@ describe("flatten / unflatten", () => {
     const heads = q.unflatten(2, [H, Dh]).permute(0, 2, 1, 3)
     expect(heads.shape).toEqual([B, H, T, Dh])
     type _headsType = Expect<Equal<(typeof heads)["shape"], [2, 2, 3, 2]>>
-    // b=1, h=1, t=2, dh=1 -> the same element as q[1, 2, 1*Dh + 1]
+    // b=1, h=1, t=2, dh=1, so this is the same element as q[1, 2, 1*Dh + 1].
     expect(heads.get(1, 1, 2, 1)).toBe(q.get(1, 2, 3))
   })
 

@@ -1,10 +1,5 @@
-/**
- * `LastDimCheck`, against the real export. The three `naked*` /
- * `generic*` functions below are a regression trap: they fail to compile
- * the moment the check is rewritten with the variadic-infer spelling
- * `S extends [...number[], infer L] ? ... : ErrorMessage<...>`, which
- * defers on a naked generic `S` and rejects every generic caller.
- */
+// The `naked*` and `generic*` functions below are the regression trap: the variadic-infer
+// spelling `S extends [...number[], infer L]` defers on a naked `S` and rejects every generic caller.
 import type { LastDimCheck, Shape } from "../src/shape.ts"
 import type { Tensor } from "../src/tensor.ts"
 
@@ -12,17 +7,15 @@ declare class LayerNormLike<D extends number> {
   forward<S extends Shape>(x: Tensor<S> & LastDimCheck<S, D>): Tensor<S>
 }
 
-// law 1: a naked generic shape is accepted
+// Law 1: a naked generic shape is accepted.
 function _naked<S extends Shape>(x: Tensor<S>, n: LayerNormLike<16>) {
   return n.forward(x)
 }
 
-// generic dims with a known arity are accepted
 function _genericDims<B extends number, T extends number>(x: Tensor<[B, T, 16]>, n: LayerNormLike<16>) {
   return n.forward(x)
 }
 
-// ...including when the feature width itself is the generic
 function _genericWidth<B extends number, T extends number, D extends number>(
   x: Tensor<[B, T, D]>,
   n: LayerNormLike<D>,
@@ -30,7 +23,7 @@ function _genericWidth<B extends number, T extends number, D extends number>(
   return n.forward(x)
 }
 
-// the dynamic shape is a wildcard, not an error
+// The dynamic shape is a wildcard, not an error.
 function _dynamic(x: Tensor<number[]>, n: LayerNormLike<16>) {
   return n.forward(x)
 }

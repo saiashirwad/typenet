@@ -47,7 +47,6 @@ export const RANDOM_KINDS = ["uniform", "normal"] as const
 
 export type RandomKind = (typeof RANDOM_KINDS)[number]
 
-/** Structural node kinds of the IR, `leaf` included (serialize-only). */
 export const NODE_OPS = [
   "leaf",
   "binary",
@@ -65,8 +64,8 @@ export const NODE_OPS = [
   "scatterAdd",
   "random",
 
-  // NODE kinds with attributes or multiple outputs, never new `unary` kinds;
-  // not yet lowered natively.
+  // Kinds with attributes or multiple outputs, never new `unary` kinds; not yet
+  // lowered natively.
   "gelu",
   "geluGrad",
   "silu",
@@ -83,8 +82,6 @@ export const NODE_OPS = [
   "scatterAddRows",
   "dropout",
   "pick",
-  "contiguous",
 ] as const
 
-/** Every structural node kind; the domain of `OP_DESC` and of `SUPPORT`. */
 export type NodeOp = (typeof NODE_OPS)[number]

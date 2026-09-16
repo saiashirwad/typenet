@@ -1,20 +1,7 @@
 "use tsover"
 
-/**
- * An MLP classifier. The point is the shape story, not the dataset: one
- * `sequential` whose widths are checked at construction, a `forward` that
- * infers `[64, 784] -> [64, 10]`, an `AdamW` driven by a warmup-cosine
- * schedule, and gradient clipping between `backward()` and `step()`.
- *
- * The data is synthetic and generated here (ten class prototypes plus
- * Gaussian noise) so the example runs offline and reproducibly: a fixed
- * `configure({ seed })` replays the whole loss curve exactly.
- *
- * The loop is the plain `zeroGrad` / `backward` / `step` triple rather
- * than a compiled step: `compile()` bakes the optimizer's `lr` into the
- * traced graph as a constant, so a schedule that actually moves needs the
- * eager loop today.
- */
+// An MLP classifier. `sequential` checks the widths at construction; the data is
+// generated here so the example runs offline and replays from a fixed seed.
 
 import { AdamW, clipGradNorm, configure, crossEntropy, Linear, randn, ReLU, sequential, Tensor, tensor, warmupCosine } from "../index.ts"
 import { accuracy } from "./util.ts"
@@ -24,44 +11,30 @@ const CLASSES = 10
 const BATCH = 64
 const TRAIN = 2048
 const TEST = 512
-// 400 steps is the run the README quotes. `test/examples.test.ts` overrides
-// it to a handful, so the smoke test exercises this file rather than a copy
-// of it.
+// 400 steps is the run the README quotes; the tests override it.
 const STEPS = Number(process.env["TYPENET_EXAMPLE_STEPS"] ?? 400)
 
 configure({ seed: 7 })
 
-// The data: one prototype vector per class; a sample is its class
-// prototype plus noise. Built with the library's own ops, so the shapes
-// are checked the same way the model's are: [N, 10] one-hot @ [10, 784]
-// -> [N, 784].
-
 const prototypes = randn([CLASSES, FEATURES]) * 0.12
 
-// The split size is a runtime quantity, so its dim stays the wildcard
-// `number`; `narrow` below pins the batch dim to the literal 64 the
-// model's shapes are actually checked against.
 function makeSplit(n: number): {
   x: Tensor<[number, typeof FEATURES]>
   labels: number[]
 } {
   const labels = Array.from({ length: n }, (_, i) => i % CLASSES)
-  // Deterministic interleaving by construction, then one shuffle, so that
-  // contiguous batches below are class-balanced without an index tensor.
+  // A seeded shuffle, since Math.random would not replay from the configured seed.
   for (let i = labels.length - 1; i > 0; i--) {
     const j = Math.floor(((i * 1103515245 + 12345) % 2147483648) / 2147483648 * (i + 1))
     ;[labels[i], labels[j]] = [labels[j]!, labels[i]!]
   }
-  const onehot = tensor(labels).oneHot(CLASSES) // Tensor<[number, 10]>
+  const onehot = tensor(labels).oneHot(CLASSES)
   const x = onehot.matmul(prototypes) + randn([n, FEATURES]) * 1.0
   return { x, labels }
 }
 
 const train = makeSplit(TRAIN)
 const test = makeSplit(TEST)
-
-// The model: the widths are checked where they are written. Swapping the
-// 256 in the second Linear for anything else is a compile error.
 
 const model = sequential(
   new Linear(FEATURES, 256),
@@ -72,22 +45,15 @@ const model = sequential(
 const opt = new AdamW(model.parameters(), { lr: 3e-4, weightDecay: 0.01 })
 const schedule = warmupCosine({ base: 3e-4, warmupSteps: 40, totalSteps: STEPS })
 
-// The loop
-
 const started = performance.now()
 let last = 0
 
 for (let step = 0; step < STEPS; step++) {
   const start = (step * BATCH) % (TRAIN - BATCH)
-  // `narrow` carries the literal length: a [64, 784] window of the
-  // [2048, 784] training set, typed as such.
   const x = train.x.narrow(0, start, BATCH)
-  // Class ids, not a plain array: `crossEntropy` takes a branded
-  // `IndexTensor` whose shape is the logits' shape minus the class axis,
-  // so [64] here against the [64, 10] logits below.
   const y = Tensor.indices(train.labels.slice(start, start + BATCH), [BATCH])
 
-  const logits = model.forward(x) // Tensor<[64, 10]>
+  const logits = model.forward(x)
   const loss = crossEntropy(logits, y)
 
   opt.lr = schedule(step)

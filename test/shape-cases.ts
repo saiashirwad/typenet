@@ -1,9 +1,6 @@
-// Shared shape tables: `types.test-d.ts` asserts the positive tables
-// through the type algebra while `shape.test.ts` runs every table through
-// the runtime value functions in `src/shape.ts`, so the two worlds cannot
-// drift. The `as [2, 3]` casts make each entry a *mutable* literal tuple,
-// which is what the type-level operators (constrained to `Shape = number[]`)
-// accept.
+// Shared shape tables: types.test-d.ts asserts the positive tables through the type algebra while
+// shape.test.ts runs the same tables through src/shape.ts, so the two worlds cannot drift.
+// The as [2, 3] casts make each entry a mutable literal tuple, which is what the type-level operators accept.
 
 export const BROADCAST_CASES = [
   { a: [2, 3] as [2, 3], b: [3] as [3], out: [2, 3] as [2, 3] },
@@ -62,18 +59,15 @@ export const SLICE_CASES = [
 ] as const
 
 export const SLICE_FAIL_CASES = [
-  // an end index past the axis
   { s: [4, 5] as [4, 5], spec: [7, 2] as [7, 2] },
-  // a window past the axis
   { s: [4, 5] as [4, 5], spec: [2, [1, 9]] as [2, [1, 9]] },
-  // a window that ends before it starts
   { s: [4, 5] as [4, 5], spec: [2, [3, 1]] as [2, [3, 1]] },
 ] as const
 
 export const FLATTEN_CASES = [
   { s: [2, 3, 4] as [2, 3, 4], from: 0 as const, to: 1 as const, out: [6, 4] as [6, 4] },
   { s: [2, 3, 4] as [2, 3, 4], from: 1 as const, to: 2 as const, out: [2, 12] as [2, 12] },
-  // a one-axis window is the identity
+  // A one-axis window is the identity.
   { s: [2, 3, 4] as [2, 3, 4], from: 1 as const, to: 1 as const, out: [2, 3, 4] as [2, 3, 4] },
   { s: [2, 3, 4] as [2, 3, 4], from: 0 as const, to: 2 as const, out: [24] as [24] },
 ] as const
@@ -100,7 +94,7 @@ export const DIM_DIV_CASES = [
   { a: 384 as const, b: 6 as const, out: 64 as const },
   { a: 12 as const, b: 4 as const, out: 3 as const },
   { a: 384 as const, b: 1 as const, out: 384 as const },
-  // truncation toward zero, in both worlds
+  // Truncation toward zero, in both worlds.
   { a: 7 as const, b: 2 as const, out: 3 as const },
 ] as const
 
@@ -123,63 +117,51 @@ export const BROADCAST_TO_CASES = [
 ] as const
 
 export const BROADCAST_TO_FAIL_CASES = [
-  // mutually broadcastable, but not expand-only
+  // Mutually broadcastable, but not expand-only.
   { from: [2, 3] as [2, 3], to: [3] as [3] },
 ] as const
 
 /**
- * Type-only companion to `BROADCAST_TO_FAIL_CASES`: the "cannot broadcast
- * at all" branch of `BroadcastToCheck` throws a different runtime message
- * than the expand-only row there, so it gets its own table. Exercised only
- * by `test/polarity.test-d.ts`.
+ * Type-only companion to BROADCAST_TO_FAIL_CASES: the "cannot broadcast at all" branch throws a
+ * different runtime message than the expand-only row there. Exercised by test/polarity.test-d.ts.
  */
 export const BROADCAST_TO_TYPE_FAIL_CASES = [
   { from: [2, 3] as [2, 3], to: [4] as [4] },
 ] as const
 
-/**
- * Conv / pool spatial arithmetic, driven by `types.test-d.ts` (the
- * `ConvOut`/`PoolOut`/`FlattenFrom` types) and by `shape.test.ts` (the
- * value twins), so a drift between the two worlds is a test failure.
- */
+/** Conv and pool spatial arithmetic, driven by types.test-d.ts (the type twins) and by
+ *  shape.test.ts (the value twins), so a drift between the two worlds is a test failure. */
 export const CONV_CASES = [
   { h: 28 as const, k: 3 as const, s: 1 as const, p: 0 as const, out: 26 as const },
   { h: 13 as const, k: 3 as const, s: 1 as const, p: 0 as const, out: 11 as const },
-  // "same" padding
+  // "Same" padding.
   { h: 32 as const, k: 3 as const, s: 1 as const, p: 1 as const, out: 32 as const },
   { h: 7 as const, k: 3 as const, s: 2 as const, p: 1 as const, out: 4 as const },
-  // the kernel exactly fills the input: a 1-wide output is legal
+  // The kernel exactly fills the input: a 1-wide output is legal.
   { h: 3 as const, k: 3 as const, s: 1 as const, p: 0 as const, out: 1 as const },
 ] as const
 
 export const POOL_CASES = [
   { h: 26 as const, k: 2 as const, s: 2 as const, out: 13 as const },
   { h: 11 as const, k: 2 as const, s: 2 as const, out: 5 as const },
-  // a stride that does not divide the extent drops the ragged tail
+  // A stride that does not divide the extent drops the ragged tail.
   { h: 5 as const, k: 2 as const, s: 2 as const, out: 2 as const },
 ] as const
 
 /**
- * Kernels that do not fit. `span` is `h + 2p - k`, the quantity `ConvCheck`
- * actually tests; `out` is what `ConvOut` reports anyway, because
- * `Numbers.Div` and `Math.trunc` both truncate toward zero rather than
- * flooring. A check written on the quotient instead of the span reads the
- * last rows as a legal 1-wide output and lets a 5-wide kernel onto a
- * 4-wide input; `test/conv-shapes.test-d.ts` pins that regression.
+ * Kernels that do not fit. `span` is `h + 2p - k`, what ConvCheck tests; `out` is what ConvOut reports
+ * anyway, because Div and trunc truncate toward zero. A check on the quotient would read these as legal.
  */
 export const CONV_FIT_FAIL_CASES = [
   { h: 2 as const, k: 5 as const, s: 1 as const, p: 0 as const, span: -3 as const, out: -2 as const },
   { h: 2 as const, k: 5 as const, s: 2 as const, p: 0 as const, span: -3 as const, out: 0 as const },
-  // the trap: trunc((4 - 5) / 2) + 1 == 1, while floor(-0.5) + 1 == 0
+  // The trap: trunc((4 - 5) / 2) + 1 == 1, while floor(-0.5) + 1 == 0.
   { h: 4 as const, k: 5 as const, s: 2 as const, p: 0 as const, span: -1 as const, out: 1 as const },
-  // the same trap on the pooling path: a 4-wide window on a 2-wide input
+  // The same trap on the pooling path: a 4-wide window on a 2-wide input.
   { h: 2 as const, k: 4 as const, s: 4 as const, p: 0 as const, span: -2 as const, out: 1 as const },
 ] as const
 
-/**
- * The classifier head's flatten. The rank-1 row folds an empty tail to
- * `1`, and the rank-0 row is its own flatten.
- */
+/** The classifier head's flatten. The rank-1 row folds an empty tail to 1, and the rank-0 row is its own flatten. */
 export const FLATTEN_FROM_CASES = [
   { s: [64, 16, 5, 5] as [64, 16, 5, 5], out: [64, 400] as [64, 400] },
   { s: [2, 3, 4] as [2, 3, 4], out: [2, 12] as [2, 12] },

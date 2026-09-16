@@ -1,0 +1,12 @@
+{
+  // Test files are excluded from tsconfig.json because of their deliberately unreferenced
+  // `type _x = Expect<...>` assertion aliases; this config puts them back in the program with the two
+  // unused-* flags off. Every other strictness flag from tsconfig.json still applies.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["test/**/*.ts"],
+  "exclude": ["node_modules"]
+}

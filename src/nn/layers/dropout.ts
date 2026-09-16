@@ -3,7 +3,7 @@ import { dropout as dropoutOp, Tensor } from "../../tensor.ts"
 import { Module } from "../module.ts"
 import { SHAPE_EFFECT } from "../sequential.ts"
 
-/** Inverted dropout keyed off `this.training`; eval returns `x` itself, so an eval graph is genuinely smaller, never a multiply-by-one. */
+/** Inverted dropout keyed off `this.training`. Eval returns `x` itself, so an eval graph is smaller instead of a multiply-by-one. */
 export class Dropout extends Module {
   declare readonly [SHAPE_EFFECT]: "identity"
 

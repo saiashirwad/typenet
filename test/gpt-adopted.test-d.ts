@@ -1,12 +1,7 @@
-/**
- * A GPT-style attention stack checked against the real `src/shape.ts`.
- * Layers that do not exist yet (LayerNorm, Embedding, Dropout, GELU, sdpa,
- * the index-typed crossEntropy) are `declare`d here; `Linear` and `Module`
- * are the real ones. This file is the proof that the shape algebra types
- * an attention block end to end.
- */
-import { assertChecked } from "../src/cast.ts"
-import { Linear, Module } from "../src/nn.ts"
+// A GPT-style attention stack checked against the real `src/shape.ts`. The layers that do
+// not exist yet are `declare`d here; `Linear` and `Module` are the real ones.
+import { Linear, Module } from "../src/nn/index.ts"
+import { assertChecked } from "../src/shape.ts"
 import { DimDiv, DimMul } from "../src/shape.ts"
 import type { DimDivCheck, FlattenCheck, FlattenShape, IndexTensor, Init, LastDimCheck, Shape, UnflattenCheck, UnflattenShape } from "../src/shape.ts"
 import type { Tensor } from "../src/tensor.ts"
@@ -88,7 +83,6 @@ class MultiHeadAttention<D extends number, H extends number> extends Module {
   }
 }
 
-// the head dim is derived, and the divisibility precondition is enforced
 const _mha = new MultiHeadAttention(384, 6)
 // @ts-expect-error 384 heads do not divide into 5
 const _mhaBad = new MultiHeadAttention(384, 5)
@@ -138,8 +132,7 @@ function _gpt<B extends number, T extends number, V extends number, D extends nu
   return loss
 }
 
-// the concrete end of the same path: `Init<S>` picks the target shape off
-// the logits with no manual reshape, at rank 3 and at rank 2
+// `Init<S>` picks the target shape off the logits with no manual reshape, at rank 3 and rank 2.
 declare const ids: IndexTensor<[8, 256]>
 declare const labels: IndexTensor<[8]>
 declare const logits3: Tensor<[8, 256, 65]>

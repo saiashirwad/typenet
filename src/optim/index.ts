@@ -1,13 +1,13 @@
 import { noGrad } from "../autograd.ts"
 import { _activeUpdateTrace, type GraphUpdate } from "../compile.ts"
-import { rawBinary, rawUnary } from "../ir.ts"
-import { forceMany, isLazy } from "../lazy.ts"
+import { isLazyMode, rawBinary, rawUnary } from "../ir.ts"
+import { forceMany } from "../lazy.ts"
 import { Module } from "../nn/module.ts"
 import { type AnyTensor, Tensor } from "../tensor.ts"
 
 export * from "./schedule.ts"
 
-/** Either numeric backing store optimizer state is read from: a `Float64Array` (eager) or a graph leaf's `Float32Array` (compiled/lazy). */
+/** Optimizer state lives in a `Float64Array` (eager) or a graph leaf's `Float32Array` (compiled/lazy). */
 type NumericLike = Float64Array | Float32Array
 
 function finishGraphUpdates(
@@ -30,7 +30,7 @@ function finishGraphUpdates(
 
 function useGraphStep(p: AnyTensor): boolean {
   return (
-    (_activeUpdateTrace() !== null || isLazy())
+    (_activeUpdateTrace() !== null || isLazyMode())
     && p.dtype === "float32"
   )
 }
@@ -55,9 +55,8 @@ const nums: Algebra<number> = {
   min1: a => Math.min(a, 1),
 }
 
-// A file-local untyped algebra over the raw dispatchers: optimizer
-// formulas relate shapes the public BroadcastCheck cannot see, and the
-// step runs under noGrad.
+// A file-local untyped algebra over the raw dispatchers: optimizer formulas
+// relate shapes the public BroadcastCheck cannot see, and the step runs under noGrad.
 const asTensor = (v: AnyTensor | number): AnyTensor => typeof v === "number" ? Tensor.scalar(v) as AnyTensor : v
 
 const tensors: Algebra<AnyTensor> = {
@@ -101,7 +100,7 @@ function sgdUpdate<T>(
   return { nextP: A.sub(p, A.mul(grad, lr)), nextV }
 }
 
-/** Shared Adam arithmetic. `decoupled` selects coupled L2 (decay folded into the gradient, so it rides through the moments) vs AdamW's decay applied to `p` directly after the moment step. */
+/** Shared Adam arithmetic. `decoupled` selects coupled L2, decay folded into the gradient and carried through the moments, or AdamW's decay applied to `p` after the moment step. */
 function adamUpdate<T>(
   A: Algebra<T>,
   p: T,
@@ -138,7 +137,7 @@ function adamUpdate<T>(
   return { nextP, nextM, nextV }
 }
 
-/** Scales gradients so their combined L2 norm is at most `maxNorm`; call between `backward()` and `step()`. Returns the pre-clipping norm as a scalar tensor. */
+/** Scales gradients so their combined L2 norm is at most `maxNorm`; call it between `backward()` and `step()`. Returns the pre-clipping norm. */
 export function clipGradNorm(
   params: AnyTensor[],
   maxNorm: number,
@@ -205,7 +204,6 @@ function paramNamesOf(
   return names
 }
 
-/** One optimizer's saved numeric state for a single named parameter. */
 export interface OptimizerStateEntry {
   readonly velocity?: readonly number[]
   readonly m?: readonly number[]
@@ -242,27 +240,25 @@ export abstract class Optimizer {
       }
       if (p.dtype === "int32" || p.dtype === "int64") {
         throw new Error(
-          `Optimizer cannot use ${p.dtype} parameters — parameters must be float32 or float64, integer storage cannot hold gradient updates`,
+          `Optimizer cannot use ${p.dtype} parameters, parameters must be float32 or float64, integer storage cannot hold gradient updates`,
         )
       }
     }
   }
 
-  /** Throws when a source `Module` has gained or lost a parameter since this optimizer was constructed. */
   protected checkParameterEpoch(): void {
     if (!this.#modules) return
     this.#modules.forEach((m, i) => {
       if (m.parameterEpoch !== this.#epochs![i]) {
         throw new Error(
           `Optimizer: ${m.constructor.name}'s parameter set changed after this `
-            + "optimizer was constructed — construct the optimizer only after every "
+            + "optimizer was constructed, construct the optimizer only after every "
             + "submodule is registered, not before.",
         )
       }
     })
   }
 
-  /** Applies `maxGradNorm` (if the optimizer was given one) before the update. */
   protected clipIfNeeded(): void {
     if (this.maxGradNorm !== undefined) {
       clipGradNorm(this.params, this.maxGradNorm)
@@ -276,6 +272,7 @@ export abstract class Optimizer {
   abstract step(): void
 }
 
+/** `lr` is required to mirror PyTorch, where `SGD` has no default but `Adam` does; the asymmetry is intentional. */
 export interface SGDOptions {
   lr: number
   momentum?: number
@@ -401,6 +398,7 @@ export class SGD extends Optimizer {
   }
 }
 
+/** `lr` is optional to mirror PyTorch, which requires one only for `SGD`; the asymmetry is intentional. */
 export interface AdamOptions {
   lr?: number
   betas?: [number, number]
@@ -410,7 +408,6 @@ export interface AdamOptions {
 }
 
 export class Adam extends Optimizer {
-  /** Public and mutable; see {@link SGD.lr}. */
   lr: number
   protected readonly beta1: number
   protected readonly beta2: number
@@ -604,7 +601,6 @@ export interface AdamWOptions {
   maxGradNorm?: number
 }
 
-/** Adam with decoupled weight decay ({@link adamUpdate}): the decay subtracts `lr * weightDecay * p` directly instead of riding through the moment estimates. */
 export class AdamW extends Adam {
   constructor(source: OptimizerSource, options: AdamWOptions = {}) {
     super(

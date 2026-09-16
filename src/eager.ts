@@ -17,7 +17,7 @@ function forEachStrided(
   for (let i = 0; i < n; i++) {
     fn(i, offs)
     for (let d = rank - 1; d >= 0; d--) {
-      idx[d]++
+      idx[d]!++
       for (let s = 0; s < strideSets.length; s++) {
         offs[s]! += strideSets[s]![d]!
       }
@@ -417,7 +417,6 @@ export function evalScatterAddEager(
   return makeRaw(out, outShape, a.dtype)
 }
 
-/** Rows x last-axis width, the layout every over-the-last-axis kernel uses. */
 function lastAxisLayout(shape: readonly number[]): {
   rows: number
   width: number
@@ -426,7 +425,6 @@ function lastAxisLayout(shape: readonly number[]): {
   return { rows: width === 0 ? 0 : prod(shape) / width, width }
 }
 
-/** `outer x dimSize x inner`, the layout a reduction over `d` walks. */
 function axisLayout(
   shape: readonly number[],
   d: number,
@@ -493,7 +491,6 @@ export function evalSiluGradEager(
   return mapGrad(g, a, siluGrad)
 }
 
-/** Max-shift, exp, normalize; under causal, masked entries are exp(-Infinity) = 0 exactly. */
 export function evalSoftmaxEager(
   a: AnyTensor,
   d: number,
@@ -502,8 +499,8 @@ export function evalSoftmaxEager(
   const { outer, dimSize, inner } = axisLayout(a.shape, d)
   const out = new (floatCtor(a.dtype))(a.numel)
   const ad = a.data
-  // Under causal, d is the last axis (dispatcher-checked): outer runs over query rows,
-  // and the query position bounds the key range.
+  // Under causal, d is the last axis (dispatcher-checked), so outer runs over query
+  // rows and the query position bounds the key range.
   const queries = causal ? a.shape[a.shape.length - 2]! : 0
   for (let i = 0; i < outer; i++) {
     for (let k = 0; k < inner; k++) {
@@ -531,7 +528,6 @@ export function evalSoftmaxEager(
   return makeRaw(out, a.shape, a.dtype)
 }
 
-/** `dx_j = y_j * (g_j - sum_k g_k*y_k)`, the closed form over `y`. */
 export function evalSoftmaxGradEager(
   g: AnyTensor,
   y: AnyTensor,
@@ -558,7 +554,6 @@ export function evalSoftmaxGradEager(
   return makeRaw(out, y.shape, y.dtype)
 }
 
-/** Returns (y, mean, rstd) flat-concatenated, normalized over the last axis. */
 export function evalLayerNormEager(
   x: AnyTensor,
   gamma: AnyTensor,
@@ -590,7 +585,6 @@ export function evalLayerNormEager(
   return makeRaw(out, [out.length], x.dtype)
 }
 
-/** Returns (dx, dgamma, dbeta) flat-concatenated. */
 export function evalLayerNormGradEager(
   g: AnyTensor,
   x: AnyTensor,
@@ -632,7 +626,6 @@ export function evalLayerNormGradEager(
   return makeRaw(out, [out.length], x.dtype)
 }
 
-/** `(y, rstd)` flat-concatenated: layerNorm without the mean subtraction. */
 export function evalRmsNormEager(
   x: AnyTensor,
   gamma: AnyTensor,
@@ -658,7 +651,6 @@ export function evalRmsNormEager(
   return makeRaw(out, [out.length], x.dtype)
 }
 
-/** Returns (dx, dgamma) flat-concatenated. */
 export function evalRmsNormGradEager(
   g: AnyTensor,
   x: AnyTensor,
@@ -690,7 +682,6 @@ export function evalRmsNormGradEager(
   return makeRaw(out, [out.length], x.dtype)
 }
 
-/** Returns (loss, dlogits) flat-concatenated; the [N, C] one-hot never exists. */
 export function evalCrossEntropyEager(
   logits: AnyTensor,
   target: AnyTensor,
@@ -725,7 +716,6 @@ export function evalCrossEntropyEager(
   return makeRaw(out, [out.length], logits.dtype)
 }
 
-/** `m + log(sum(exp(x - m), dim))` with `m = max(x, dim)`. */
 export function evalLogSumExpEager(
   a: AnyTensor,
   d: number,
@@ -754,7 +744,6 @@ export function evalLogSumExpEager(
   return makeRaw(out, outShape, a.dtype)
 }
 
-/** Rows of `table` addressed by an index of any rank (`Embedding`). */
 export function evalGatherRowsEager(
   table: AnyTensor,
   index: AnyTensor,
@@ -778,7 +767,6 @@ export function evalGatherRowsEager(
   )
 }
 
-/** The transpose of {@link evalGatherRowsEager}: accumulate into `rows` rows. */
 export function evalScatterAddRowsEager(
   src: AnyTensor,
   index: AnyTensor,
@@ -802,7 +790,6 @@ export function evalScatterAddRowsEager(
   )
 }
 
-/** Returns (y, mask) flat-concatenated; the mask carries the 1/(1-p) inverted-dropout scale. */
 export function evalDropoutEager(
   x: AnyTensor,
   p: number,
@@ -823,7 +810,6 @@ export function evalDropoutEager(
   return makeRaw(out, [out.length], x.dtype)
 }
 
-/** One output of a multi-output producer, sliced out of its flat buffer. */
 export function evalPickEager(
   flat: AnyTensor,
   offset: number,
@@ -837,15 +823,7 @@ export function evalPickEager(
   )
 }
 
-/** Explicit materialisation; a copy today, kept as a node for layout canonicalisation. */
-export function evalContiguousEager(a: AnyTensor): AnyTensor {
-  const out = new (arrayCtor(a.dtype))(a.numel)
-  const ad = a.data
-  for (let i = 0; i < out.length; i++) out[i] = ad[i]!
-  return makeRaw(out, a.shape, a.dtype)
-}
-
-/** One ascending single-axis reduction pass per axis, matching the wire chain lower-native.ts emits. */
+/** Reduces one axis at a time in ascending order, matching the wire chain lower-native.ts emits. */
 export function evalReduceDimsEager(
   a: AnyTensor,
   dims: readonly number[],

@@ -13,16 +13,14 @@ export function mseLoss<
     .mean() as any
 }
 
-/** Cross-entropy over the last axis of `logits`: `[B,C]` logits take a `[B]` target, `[B,T,V]` logits take a `[B,T]` target. */
+/** Cross-entropy over the last axis: `[B,C]` logits take a `[B]` target, `[B,T,V]` logits take a `[B,T]` target. */
 export function crossEntropy<
   S extends Shape,
 >(
   logits: Tensor<S>,
   targets: IndexTensor<Init<S>>,
-  o: {
-    /** Excluded from the loss and its gradient entirely, like PyTorch's `ignore_index`. */
+  options: {
     readonly ignoreIndex?: number
-    /** Blend the one-hot target with a uniform distribution over classes by this fraction. */
     readonly labelSmoothing?: number
   } = {},
 ): Tensor<[]> {
@@ -34,8 +32,7 @@ export function crossEntropy<
     )
   }
   const classes = l.shape[l.rank - 1]!
-  // Everything but the class axis collapses into one batch axis, so
-  // [B,T,V]/[B,T] reduces to [B,C]/[B].
+  // Everything but the class axis collapses into one batch axis, so [B,T,V]/[B,T] reduces to [B,C]/[B].
   const flatLogits = (l.rank > 2 ? l.flatten(0, l.rank - 2) : l) as AnyTensor
   const flatTargets = (t.rank > 1 ? t.flatten() : t) as AnyTensor
   const batch = flatLogits.shape[0]!
@@ -48,8 +45,8 @@ export function crossEntropy<
   let keep: AnyTensor | null = null
   let denom = batch
   let oneHotSource = flatTargets
-  if (o.ignoreIndex !== undefined) {
-    const ii = o.ignoreIndex
+  if (options.ignoreIndex !== undefined) {
+    const ii = options.ignoreIndex
     const raw = Array.from(flatTargets.data, v => Number(v))
     let kept = 0
     const keepData = new Array<number>(raw.length)
@@ -57,8 +54,7 @@ export function crossEntropy<
     for (let i = 0; i < raw.length; i++) {
       const isIgnored = raw[i] === ii
       keepData[i] = isIgnored ? 0 : 1
-      // A sentinel like PyTorch's -100 is not a valid class id; use
-      // class 0 here and zero its contribution below.
+      // A sentinel like PyTorch's -100 is not a valid class id, so use class 0 and zero its contribution below.
       safeIds[i] = isIgnored ? 0 : raw[i]!
       if (!isIgnored) kept++
     }
@@ -69,8 +65,8 @@ export function crossEntropy<
   }
 
   let mask = oneHotSource.oneHot(classes)
-  if (o.labelSmoothing) {
-    const eps = o.labelSmoothing
+  if (options.labelSmoothing) {
+    const eps = options.labelSmoothing
     mask = mask.mul(1 - eps).add(eps / classes)
   }
 
@@ -79,7 +75,7 @@ export function crossEntropy<
   return perRow.sum().div(denom) as any
 }
 
-/** Fraction of rows whose argmax over the last axis matches `targets`; reads `.data` directly and never joins the autograd tape. */
+/** Fraction of rows whose argmax over the last axis matches `targets`. Reads `.data` directly, so it never joins the autograd tape. */
 export function accuracy<
   S extends Shape,
 >(

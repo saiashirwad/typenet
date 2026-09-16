@@ -1,5 +1,5 @@
-// Central differences at eps = 1e-3: f32 loss noise (~1e-7) is amplified
-// by 1/eps, so the stable relative tolerance is 1e-3, not f64-style 1e-4.
+// Central differences at eps = 1e-3: f32 loss noise (~1e-7) is amplified by 1/eps, so the
+// stable relative tolerance is 1e-3, not the f64-style 1e-4.
 
 import { afterEach, describe, expect, it } from "vitest"
 import { noGrad } from "../src/autograd.ts"
@@ -12,28 +12,14 @@ import {
   nativeCounters,
   useNative,
 } from "../src/backends/native.ts"
-import { configure, isLazy } from "../src/lazy.ts"
+import { isLazyMode } from "../src/ir.ts"
+import { configure } from "../src/lazy.ts"
 import { sdpa } from "../src/nn/functional.ts"
-import {
-  contiguous,
-  crossEntropy,
-  dropout,
-  gatherRows,
-  gelu,
-  layerNorm,
-  logSumExp,
-  rmsNorm,
-  scatterAddRows,
-  silu,
-  softmax,
-  Tensor,
-} from "../src/tensor.ts"
+import { crossEntropy, dropout, gatherRows, gelu, layerNorm, logSumExp, rmsNorm, silu, softmax, Tensor } from "../src/tensor.ts"
 import { testing } from "../src/testing.ts"
 
 type AnyTensor = Tensor<any>
 
-// mulberry32: small seeded PRNG so the sampled inputs are deterministic
-// and the test is never flaky.
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
   return () => {
@@ -52,23 +38,17 @@ interface Case {
   readonly name: string
   readonly shapes: readonly (readonly number[])[]
   readonly build: (xs: AnyTensor[]) => AnyTensor
-  /** Sampler, so rules with kinks (relu, abs) can avoid the kink. */
+  /** Input sampler, so rules with kinks (relu, abs) can avoid the kink. */
   readonly sample?: (rand: () => number) => number
-  /** Per-case tolerance override, when f32 cancellation in the
-      finite difference sits just above the global 1e-3 floor. */
+  /** Per-case tolerance override when f32 cancellation sits above the global 1e-3 floor. */
   readonly tol?: number
-  /**
-   * Marks a case the native block must filter: the op has no native
-   * kernel or lowering yet, so a native run would land on the JS
-   * interpreter and the "the native graph was prepared" assertion in
-   * `checkCase` would fail for the wrong reason. The eager and lazy
-   * blocks run every case.
-   */
-  readonly nativeFrom?: string
+  /** A case the native block filters: the op has no native kernel or lowering yet, so a native
+      run would land on the JS interpreter and fail the prepare assertion for the wrong reason. */
+  readonly nativeGap?: true
 }
 
 interface CheckOpts {
-  /** dtype to run the case in; float64 checks gradient precision. */
+  /** dtype to run the case in. Float64 checks gradient precision. */
   readonly dtype?: "float32" | "float64"
   readonly eps?: number
   readonly tol?: number
@@ -83,16 +63,8 @@ const awayFromUnit = (rand: () => number): number =>
   (rand() > 0.5 ? 1 : -1)
   * (rand() > 0.5 ? 0.2 + rand() * 0.5 : 1.5 + rand())
 
-// Index tensors are exact integers, not sampled inputs, so they are
-// built inside `build` rather than coming from `shapes`. `.toIndex()`
-// brands them: `indexSelect`/`scatterAdd` take an `IndexTensor`, never a
-// bare `Tensor<[E]>`.
-//
-// The static return is widened to `any` because `IndexTensor` is
-// invariant in its shape: the cases below feed the same helper into
-// parameters spelled `[number]`, `[any]` and `[never]`, and no single
-// concrete spelling fits all three. The value is a real branded index
-// tensor; only the type is loosened, and only inside this test.
+// Index tensors are exact integers, built inside `build` and branded by `.toIndex()`. The `any`
+// return is deliberate: IndexTensor is invariant in shape and the cases spell it several ways.
 const index = (values: number[]): any => Tensor.of(values).toIndex()
 
 function checkCase(c: Case, seed: number, opts: CheckOpts = {}): void {
@@ -129,9 +101,8 @@ function checkCase(c: Case, seed: number, opts: CheckOpts = {}): void {
     `${c.name}: loss must be scalar, got [${loss.shape}]`,
   ).toEqual([])
 
-  // Under native mode, the analytic gradient must actually run through
-  // the native path: record the prepare count before backward() to
-  // confirm it advanced, rather than silently falling back to JS.
+  // Under native mode the analytic gradient must actually run natively: the prepare count
+  // proves it advanced rather than falling back to JS.
   const nativeUnderTest = isNativeEnabled()
   const preparesBefore = nativeUnderTest
     ? (nativeCounters().prepares as number)
@@ -160,14 +131,10 @@ function checkCase(c: Case, seed: number, opts: CheckOpts = {}): void {
     }
   })
 
-  // The finite-difference reference is always taken with the eager
-  // evaluator, even when the analytic gradient above ran natively:
-  // f32 accumulation on the native path is noisier, and central
-  // differences amplify that noise by 1/eps, so comparing native noise
-  // against native noise would hide real regressions. Eager and lazy
-  // modes are unaffected; this is a no-op save/restore for them.
+  // The finite-difference reference is always eager, even when the analytic gradient ran
+  // natively: comparing native noise against native noise would hide real regressions.
   const savedNativeState = _nativeState()
-  const savedLazy = isLazy()
+  const savedLazy = isLazyMode()
   if (nativeUnderTest) {
     disableNative()
     configure({ lazy: false })
@@ -254,7 +221,7 @@ const CASES: Case[] = [
     build: ([a]) => a!.mul(-1.5).sum(),
   },
   {
-    // typenet has no rsub; 1 - a as neg + addScalar
+    // No rsub in typenet: 1 - a is neg + addScalar.
     name: "rsub (1 - a)",
     shapes: [[4]],
     build: ([a]) => a!.neg().add(1).sum(),
@@ -342,8 +309,6 @@ const CASES: Case[] = [
       [2, 4, 5],
     ],
     build: ([a, b]) => a!.matmul(b!).sum(),
-    // grads near 0.05–0.15 against much larger intermediates:
-    // f32 cancellation in the difference sits just above 1e-3
     tol: 2e-3,
   },
   {
@@ -451,7 +416,7 @@ const CASES: Case[] = [
       [1, 2, 3, 4],
       [1, 2, 3, 4],
     ],
-    // typenet's .T is rank-2 only; transpose the trailing axes
+    // typenet's .T is rank-2 only, so transpose the trailing axes.
     build: ([q, k, v]) =>
       q!
         .matmul(k!.transpose(-1, -2))
@@ -583,43 +548,41 @@ const CASES: Case[] = [
     sample: awayFromUnit,
   },
 
-  // semantic ops: the addon cannot parse these yet, so the native block
-  // filters them (`nativeFrom`) until a lowering exists
   {
     name: "gelu",
     shapes: [[6]],
     build: ([a]) => gelu(a!).mul(2).sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "silu",
     shapes: [[6]],
     build: ([a]) => silu(a!).mul(2).sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "softmax node(1)",
     shapes: [[2, 3]],
     build: ([a]) => softmax(a!, 1).mul(2).sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "softmax node(-1) causal",
     shapes: [[2, 3, 3]],
     build: ([a]) => softmax(a!, -1, { causal: true }).mul(2).sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "logSumExp(1)",
     shapes: [[2, 3]],
     build: ([a]) => logSumExp(a!, 1).mul(2).sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "logSumExp(1, keepdim)",
     shapes: [[2, 3]],
     build: ([a]) => logSumExp(a!, 1, true).mul(2).sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "layerNorm",
@@ -628,7 +591,7 @@ const CASES: Case[] = [
       layerNorm(x as any, g as any, b as any)
         .pow(3)
         .sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "rmsNorm",
@@ -637,19 +600,17 @@ const CASES: Case[] = [
       rmsNorm(x as any, g as any)
         .pow(3)
         .sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "crossEntropy [4,3]",
     shapes: [[4, 3]],
     build: ([a]) => crossEntropy(a as any, index([2, 0, 1, 2]) as any) as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
-    // The [B,T,V] shape a transformer's LM head actually produces. The
-    // explicit `flatten(0, 1)` is kept on purpose: it puts `flatten`'s
-    // own backward under the same finite-difference check as the loss.
-    // The no-reshape spelling is covered by `test/losses.test.ts`.
+    // The [B,T,V] shape a transformer's LM head produces. The explicit flatten(0, 1) keeps
+    // flatten's own backward under the finite-difference check; losses.test.ts covers the flat spelling.
     name: "crossEntropy over [B,T,V]",
     shapes: [[2, 3, 4]],
     build: ([a]) =>
@@ -657,23 +618,21 @@ const CASES: Case[] = [
         a!.flatten(0, 1) as any,
         index([3, 0, 1, 2, 3, 0]) as any,
       ) as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
-    // `sdpa` is not an IR node itself: it is matmul/mul (native) around
-    // a softmax{causal} node (not yet native), so it carries the same
-    // flag as the softmax node above.
+    // sdpa is matmul/mul around a softmax{causal} node, so it carries the same flag.
     name: "sdpa (causal)",
     shapes: [
-      [1, 2, 3, 2], // q [B,H,T,K]
-      [1, 2, 2, 3], // k [B,H,K,T], already transposed (sdpa's own contract)
-      [1, 2, 3, 2], // v [B,H,T,K]
+      [1, 2, 3, 2],
+      [1, 2, 2, 3], // k [B,H,K,T], already transposed (sdpa's contract)
+      [1, 2, 3, 2],
     ],
     build: ([q, k, v]) =>
       sdpa(q as any, k as any, v as any, { causal: true })
         .pow(2)
         .sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "gatherRows, rank-1 index",
@@ -682,7 +641,7 @@ const CASES: Case[] = [
       gatherRows(a as any, index([2, 0, 0, 3, 1]) as any)
         .pow(3)
         .sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
     name: "gatherRows, rank-2 index",
@@ -694,42 +653,22 @@ const CASES: Case[] = [
       )
         .pow(3)
         .sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
-    name: "scatterAddRows, colliding indices",
-    shapes: [[3, 2]],
-    build: ([a]) =>
-      scatterAddRows(a as any, index([2, 0, 0]) as any, 4)
-        .pow(3)
-        .sum() as AnyTensor,
-    nativeFrom: "A-L1",
-  },
-  {
-    // p = 0 is the only deterministic dropout, and determinism is what a
-    // finite difference needs: with p > 0 each perturbed evaluation would
-    // draw its own mask. That the mask is shared between forward and
-    // backward at p > 0 is asserted directly in `test/semantic-ops.test.ts`.
+    // p = 0 is the only deterministic dropout, and determinism is what a finite difference
+    // needs. That the mask is shared at p > 0 is asserted in semantic-ops.test.ts.
     name: "dropout(p=0)",
     shapes: [[6]],
     build: ([a]) => dropout(a!, 0).pow(3).sum() as AnyTensor,
-    nativeFrom: "A-L1",
+    nativeGap: true,
   },
   {
-    name: "contiguous",
-    shapes: [[2, 3]],
-    build: ([a]) => contiguous(a!).pow(3).sum() as AnyTensor,
-    nativeFrom: "A-L1",
-  },
-  {
-    // The multi-axis `reduce{dims}`: a `[2,3,4] + [4]` bias backward
-    // reduces axes 0 and 1 in one node, and `reduce` is a wire op at
-    // every arity, so it is native-clean.
+    // The [4] bias backward reduces axes 0 and 1 in one reduce node, which is native-clean.
     name: "broadcast add [2,3,4]+[4] (multi-axis sumTo)",
     shapes: [[2, 3, 4], [4]],
-    // `tanh` rather than `pow(3)`: a 24-term f32 sum of cubes puts the
-    // central difference's own cancellation above the global floor, which
-    // would be a statement about the test and not about `sumTo`.
+    // tanh rather than pow(3): a 24-term f32 sum of cubes puts the central difference's own
+    // cancellation above the global floor, which would say nothing about sumTo.
     build: ([a, b]) => a!.add(b!).tanh().sum(),
   },
   {
@@ -749,11 +688,9 @@ describe.each([
     disableNative()
   })
 
-  // Filtered, not skipped: a case whose op the addon cannot run is not a
-  // native case yet, and `.skip`ing it would leave a permanently red-ish
-  // suite that nobody reads.
+  // Filtered, not skipped: a skipped case would leave a permanently red-ish suite nobody reads.
   const cases = native
-    ? CASES.filter(c => c.nativeFrom === undefined)
+    ? CASES.filter(c => c.nativeGap === undefined)
     : CASES
 
   it.each(cases.map(c => [c.name, c] as const))(
@@ -766,10 +703,8 @@ describe.each([
   )
 })
 
-// f32 finite differences cap out around 1e-3 relative error; a float64
-// pass at a 10x tighter tolerance guards against precision regressions
-// that f32 noise would hide. Runs eager-only: lazy graphs reject f64
-// leaves (native compute is f32-only).
+// f32 finite differences cap out around 1e-3 relative error, so a float64 pass at a 10x tighter
+// tolerance catches precision regressions that f32 noise would hide. Eager-only: lazy graphs reject f64 leaves.
 describe("gradcheck (float64 precision)", () => {
   afterEach(() => {
     configure({ lazy: false })

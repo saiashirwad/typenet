@@ -1,23 +1,5 @@
-// Whole hand-composed transformer block gradcheck: LayerNorm -> causal
-// multi-head self-attention (via `sdpa`) -> residual add -> LayerNorm ->
-// GELU MLP -> residual add, at B=2, T=4, D=8, H=2. Central differences
-// (eps=1e-3, tol=1e-3; the f32 rationale is `gradcheck.test.ts`'s,
-// unchanged) check every weight and the input, and the analytic gradient
-// is re-derived on every path typenet runs today:
-//
-//   - eager: the plain JS kernels
-//   - lazy: the JS graph interpreter
-//   - native: candle, with softmax/layerNorm/gelu falling back to the JS
-//     interpreter automatically (they have no native kernel yet); matmul/add
-//     still run through candle, so this path genuinely exercises the
-//     fallback rather than assuming it
-//   - compiled: `compile()`, forward + backward traced into one graph once,
-//     then replayed
-//
-// Hand-composed on purpose, out of the free functions (`layerNorm`, `sdpa`,
-// `gelu`) rather than `nn.TransformerBlock`: a sign error in a hand-derived
-// closed-form backward rule has nowhere to hide behind a layer's own tests,
-// and a finite difference is the only thing that catches it.
+// Hand-composed transformer block, gradchecked on eager, lazy, native and compiled paths against one
+// eager finite-difference reference. Built from free functions so a sign error in sdpa has nowhere to hide.
 
 import { describe, expect, it } from "vitest"
 import { noGrad } from "../src/autograd.ts"
@@ -31,9 +13,8 @@ const EPS = 1e-3
 const TOL = 1e-3
 const SEED = 4242
 
-// B, T, D and H are fixed; the MLP hidden width is picked small (2x, not
-// the usual 4x) purely to keep the ~600 element finite-difference sweep
-// fast. It changes nothing about what is being checked.
+// The MLP hidden width is 2x rather than the usual 4x, only to keep the ~600 element
+// finite-difference sweep fast. It changes nothing about what is checked.
 const B = 2
 const T = 4
 const D = 8
@@ -41,8 +22,6 @@ const H = 2
 const K = D / H
 const HID = 2 * D
 
-// mulberry32: small seeded PRNG so the sampled weights are deterministic
-// and the test is never flaky (same generator as `gradcheck.test.ts`).
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
   return () => {
@@ -73,11 +52,8 @@ const PARAM_SHAPES = {
 type Key = keyof typeof PARAM_SHAPES
 const KEYS = Object.keys(PARAM_SHAPES) as Key[]
 
-/** Deterministic starting values for every parameter, keyed the same
- * way `PARAM_SHAPES` is. LayerNorm gains start near 1 (their identity
- * value); everything else starts near 0. Both small, so GELU and softmax
- * stay away from the flat regions where a central difference would be
- * swamped by f32 noise rather than testing the block. */
+/** Deterministic starting values, keyed like PARAM_SHAPES. LayerNorm gains start near 1 and
+ *  everything else near 0, so GELU and softmax stay out of the flat regions where f32 noise swamps the check. */
 function sampleAll(seed: number): Record<Key, Float32Array> {
   const out = {} as Record<Key, Float32Array>
   KEYS.forEach((k, i) => {
@@ -104,13 +80,8 @@ function makeParams(
   return out
 }
 
-/**
- * The mutation check: negate every gradient a node's hand-derived
- * backward reports, leaving its forward value untouched. Applied to
- * `sdpa`'s own output, so a real closed-form rule (the final `matmul`'s
- * backward inside `sdpa`) is turned into the deliberate sign error a
- * finite difference is supposed to catch.
- */
+/** Negates every gradient sdpa's hand-derived backward reports, leaving its forward value
+ *  untouched, so the finite difference sees the deliberate sign error it is supposed to catch. */
 function flipBackward(t: AnyTensor): void {
   const node = _internal.gradNodeOf(t)
   if (!node) {
@@ -124,11 +95,6 @@ function flipBackward(t: AnyTensor): void {
   })
 }
 
-/**
- * LayerNorm -> causal MHA (via `sdpa`) -> residual -> LayerNorm -> GELU
- * MLP -> residual. `opts.bug` runs the mutation check; it is never set
- * outside that one test.
- */
 function block(
   p: Record<Key, AnyTensor>,
   opts: { bug?: boolean } = {},
@@ -137,8 +103,7 @@ function block(
   const q = normed1.matmul(p.wq!)
   const k = normed1.matmul(p.wk!)
   const v = normed1.matmul(p.wv!)
-  // [B,T,D] -> [B,H,T,K] (q, v) or [B,H,K,T] (k, as `sdpa` expects it
-  // pre-transposed; see `src/nn/functional.ts`'s `sdpa` doc comment).
+  // k is [B,H,K,T], the pre-transposed layout sdpa expects.
   const toHeads = (t: AnyTensor): AnyTensor => t.unflatten(2, [H, K]).permute(0, 2, 1, 3)
   const qh = toHeads(q)
   const vh = toHeads(v)
@@ -160,17 +125,11 @@ function lossOf(
   p: Record<Key, AnyTensor>,
   opts?: { bug?: boolean },
 ): AnyTensor {
-  // `tanh` before `sum`, not `pow(2)`/`pow(3)`: a several-hundred-element
-  // f32 sum over this many chained ops pushes the central difference's
-  // own cancellation error above TOL, which would be a statement about
-  // the test rather than about the block (same reasoning as
-  // `gradcheck.test.ts`'s multi-axis `sumTo` case).
+  // tanh before sum, not pow(2)/pow(3): a several-hundred-element f32 sum over this many chained
+  // ops pushes the central difference's own cancellation above TOL.
   return block(p, opts).tanh().sum() as AnyTensor
 }
 
-/** Central-difference reference gradient for every parameter, taken
- * eagerly and with grad disabled: the numeric spec every mode below is
- * checked against. */
 function numericGrads(): Record<Key, Float32Array> {
   const values = sampleAll(SEED)
   const numeric = {} as Record<Key, Float32Array>
@@ -205,7 +164,6 @@ function extractGrads(
   return out
 }
 
-/** Analytic gradient under eager or lazy semantics, optionally native. */
 function analyticDirect(
   mode: "eager" | "lazy" | "native",
   opts?: { bug?: boolean },
@@ -224,12 +182,8 @@ function analyticDirect(
   }
 }
 
-/** Analytic gradient through `compile()`: forward + backward traced once
- * and replayed. The gradients are returned as part of the compiled
- * function's own output tuple (`[loss, ...grads]`) rather than read back
- * off `params[k].grad` afterwards: a compiled graph's roots are exactly
- * its outputs plus its update targets, and a bare `.grad` read here would
- * be reading an unforced lazy expression from `trace()` time. */
+/** Analytic gradient through compile(). Gradients come back in the function's own output tuple;
+ *  a bare .grad read would be an unforced lazy expression from trace() time. */
 function analyticCompiled(
   opts?: { bug?: boolean },
 ): Record<Key, Float32Array> {
@@ -301,8 +255,7 @@ describe("transformer block gradcheck", () => {
     expectAgreesWithNumeric("lazy", analyticDirect("lazy"), numeric)
   })
 
-  // Filtered rather than `.skip`ped when the addon is not built, the
-  // same rule the gradcheck `describe.each` block follows.
+  // Filtered rather than .skip ped, same as gradcheck.test.ts's describe.each block.
   if (isNativeAvailable()) {
     it("native matches finite differences", () => {
       expectAgreesWithNumeric("native", analyticDirect("native"), numeric)
@@ -314,9 +267,8 @@ describe("transformer block gradcheck", () => {
   })
 
   it("a flipped sign in a hand-derived backward makes the check fail", () => {
-    // Same seed, same block; the only difference is `sdpa`'s backward
-    // negated after the fact, so a real regression in a closed-form rule
-    // cannot be silently accepted by this suite.
+    // Same seed and same block; only sdpa's backward is negated after the fact, so a real
+    // regression in a closed-form rule cannot be silently accepted.
     const buggy = analyticDirect("eager", { bug: true })
     expect(
       maxRelError(buggy, numeric),

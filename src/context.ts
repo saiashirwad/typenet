@@ -2,7 +2,7 @@ import { _nativeState, _setNativeState } from "./backends/native.ts"
 import { isLazyMode, setLazyMode } from "./ir.ts"
 import { rngState, setRngState } from "./kernels.ts"
 
-/** Runtime knobs with save/patch/restore scoping; configure() sets the same state as a script-level default. */
+/** configure() sets the same state as a script-level default. */
 export interface RuntimeContext {
   lazy: boolean
   native: boolean
@@ -13,7 +13,6 @@ export interface RuntimeContext {
 
 let tracing = false
 
-/** True while compile() replays fn to record the graph. */
 export function isTracing(): boolean {
   return tracing
 }
@@ -65,12 +64,11 @@ export function withContext<T>(
   }
 }
 
-/** Runs `fn` with lazy graph building on, restoring the flag even if `fn` throws; unlike configure(), it has a scope. */
+/** Scoped counterpart of configure({ lazy: true }); the flag is restored even if fn throws. */
 export function lazy<T>(fn: () => T): T {
   return withContext({ lazy: true }, fn)
 }
 
-/** The eager counterpart of {@link lazy}, for symmetry and clarity at a call site. */
 export function eager<T>(fn: () => T): T {
   return withContext({ lazy: false }, fn)
 }

@@ -3,17 +3,11 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { OP_DESC } from "../src/ir.ts"
 import { NON_WIRE_OPS, SUPPORT, WIRE_OPS } from "../src/lower-native.ts"
-import { BINARY_OPS, NODE_OPS, UNARY_OPS } from "../src/ops.ts"
+import { BINARY_OPS, NODE_OPS, RANDOM_KINDS, REDUCE_OPS, UNARY_OPS } from "../src/ops.ts"
 
 /**
- * The TS op tables and the Rust addon must list the same kinds. The Rust
- * side is handwritten (its lowering maps onto candle APIs, not a scalar
- * apply), so this test reads native/src/lib.rs and compares three ways so
- * a one-sided edit fails in both directions:
- *
- *   1. the Rust `Node` enum against `WIRE_OPS` (the addon's own op set);
- *   2. `NODE_OPS` against `["leaf", ...OP_DESC keys]`;
- *   3. every `NODE_OPS \ WIRE_OPS` member classified in `SUPPORT`.
+ * The TS op tables and the Rust addon must list the same kinds. The Rust side is handwritten,
+ * so this reads native/src/lib.rs and compares each table against its match arms, both ways.
  */
 
 const librs = readFileSync(
@@ -59,7 +53,7 @@ describe("op kind lists match the Rust addon", () => {
     for (const op of NON_WIRE_OPS) {
       expect(SUPPORT[op], `SUPPORT entry for ${op}`)
         .toBeDefined()
-      // every non-wire kind must carry a reason a user can read
+      // Every non-wire kind must carry a reason a user can read.
       expect(SUPPORT[op].kind).toBe("unsupported")
       if (SUPPORT[op].kind === "unsupported") {
         expect(SUPPORT[op].reason).toContain(op)
@@ -88,5 +82,21 @@ describe("op kind lists match the Rust addon", () => {
       m => m[1]!,
     )
     expect(arms.sort()).toEqual([...UNARY_OPS].sort())
+  })
+
+  it("Reduce::parse arms == REDUCE_OPS", () => {
+    const body = block("impl Reduce")
+    const arms = [...body.matchAll(/"(\w+)" => Reduce::/g)].map(
+      m => m[1]!,
+    )
+    expect(arms.sort()).toEqual([...REDUCE_OPS].sort())
+  })
+
+  it("random_data kinds == RANDOM_KINDS", () => {
+    const body = block("fn random_data")
+    const arms = [...body.matchAll(/"(\w+)" =>/g)].map(
+      m => m[1]!,
+    )
+    expect(arms.sort()).toEqual([...RANDOM_KINDS].sort())
   })
 })
